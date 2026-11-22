@@ -5,14 +5,17 @@ import 'package:suka_tea/features/kasir/kasir_page.dart';
 
 void main() {
   testWidgets('Kasir menampilkan menu seed', (tester) async {
+    // Viewport tinggi supaya GridView membangun semua 8 item seed.
+    // (scrollUntilVisible tidak bisa dipakai: ada 2 Scrollable di layar.)
+    tester.view.physicalSize = const Size(800, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
       const MaterialApp(home: Scaffold(body: KasirPage(role: AppRole.owner))),
     );
     await tester.pump();
     expect(find.text('Es Teh Manis'), findsOneWidget);
-    // GridView membangun item secara malas — scroll dulu ke item terakhir.
-    await tester.scrollUntilVisible(find.text('Es Teh Boba'), 200);
-    await tester.pump();
     expect(find.text('Es Teh Boba'), findsOneWidget);
   });
 
