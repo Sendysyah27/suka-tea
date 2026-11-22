@@ -81,10 +81,10 @@ PRD: v0.3 (22 hal A4) — semua keputusan MVP terkunci.
 
 ## Yang BELUM diverifikasi / belum ada
 
-- CI: `flutter analyze` + `flutter test` (13 test) LOLOS di run
-  45002502658 (commit `91e6be69`). `flutter build apk --debug` di run itu
-  gagal karena folder `android/` belum ada di repo — sudah ditambah di
-  push ini; run CI terbaru belum selesai saat catatan ini ditulis.
+- **CI HIJAU** — run 45004373511 (commit `d5f6699f`, 22 Nov 2026 ~09:05 WIB):
+  `pub get` ✓, `build_runner` ✓, `flutter analyze` ✓, `flutter test`
+  ✓ (13 test), `flutter build apk --debug` ✓.
+  https://github.com/Sendysyah27/sruput-pos/actions/runs/45004373511
 - Build iOS BELUM terverifikasi (butuh macOS + `flutter build ios`).
 - `flutter analyze`/`flutter test` lokal belum dijalankan (tidak ada
   Flutter di VM ini). Verifikasi resmi dari CI.
@@ -121,4 +121,21 @@ PRD: v0.3 (22 hal A4) — semua keputusan MVP terkunci.
   LOLOS, `flutter test` LOLOS (13 test), `flutter build apk --debug`
   GAGAL — `android/app/build.gradle` tidak ditemukan (folder `android/`
   belum pernah dibuat). Diperbaiki dengan menambah folder `android/`
-  + `ios/` di push ini.
+  + `ios/` di push `0cf35962`.
+- Push platform: `0cf35962fe0723b722248a39e718e6c168d93bc4`
+  (`feat: folder platform android + ios`). Run 45002991644: APK gagal
+  lagi — Gradle 8.11.1 tidak jalan di Java 25 default runner
+  ("Unsupported class file major version 69").
+- Push pin Java: `12636991e40aa63d30d987d09dbc8a6ce8ce6818`
+  (`fix: pin Java 17 di CI`). Run 45003481708: APK gagal lagi —
+  Flutter 3.47.8 menolak Gradle < 8.14.0 ("minimum supported version
+  of 8.14.0").
+- Push toolchain 3.47: `b998acc8fafcc559223e8e0663f10c168ad2b0c0`
+  (Gradle 9.3.1, AGP 9.1.0, KGP 2.4.0, Java 17, opt-out
+  `builtInKotlin=false` + `newDsl=false`, hapus Jetifier, blok
+  `kotlin { compilerOptions { jvmTarget } }`). Run 45003940353: APK
+  gagal di baris 35 app/build.gradle — `JvmTarget` tidak dikenal di
+  Groovy tanpa import.
+- Push fix JvmTarget: `d5f6699f5c8c0e071b50fadd3c761dc8d9bb97da`
+  (nama fully-qualified). **Run 45004373511: CI HIJAU — semua langkah
+  sukses termasuk `flutter build apk --debug`.**
