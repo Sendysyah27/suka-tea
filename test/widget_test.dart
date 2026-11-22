@@ -10,6 +10,9 @@ void main() {
     );
     await tester.pump();
     expect(find.text('Es Teh Manis'), findsOneWidget);
+    // GridView membangun item secara malas — scroll dulu ke item terakhir.
+    await tester.scrollUntilVisible(find.text('Es Teh Boba'), 200);
+    await tester.pump();
     expect(find.text('Es Teh Boba'), findsOneWidget);
   });
 
