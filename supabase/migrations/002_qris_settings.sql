@@ -23,7 +23,10 @@ alter table transactions drop constraint if exists transactions_payment_method_c
 alter table transactions add constraint transactions_payment_method_check
   check (payment_method in ('tunai', 'transfer', 'qris', 'qris_manual', 'ewallet'));
 
-create or replace view v_daily_summary as
+-- Catatan: CREATE OR REPLACE VIEW tidak bisa menyisipkan kolom baru di tengah
+-- (Postgres menolak sebagai rename kolom). Drop dulu, baru buat ulang.
+drop view if exists v_daily_summary;
+create view v_daily_summary as
 select
   t.outlet_id,
   date_trunc('day', t.created_at)::date as hari,
