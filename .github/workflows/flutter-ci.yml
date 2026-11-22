@@ -29,7 +29,9 @@ jobs:
       - run: flutter test
       # Live: Supabase URL + anon key disuntik dari GitHub Actions secrets
       # (SUPABASE_URL, SUPABASE_ANON_KEY) — jangan hardcode di repo.
-      - run: flutter build apk --debug --dart-define SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+      # arm64-only: POVA 5 (dan target install) pakai arm64 — APK fat
+      # 165 MB buang-buang waktu install, arm64 saja jauh lebih kecil.
+      - run: flutter build apk --debug --target-platform android-arm64 --dart-define SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
       # Biar APK-nya bisa diunduh dari halaman run (tanpa ini APK hilang
       # begitu job selesai).
       - uses: actions/upload-artifact@v4
