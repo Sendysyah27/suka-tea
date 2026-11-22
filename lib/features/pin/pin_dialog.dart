@@ -206,29 +206,29 @@ class _PinEntryDialogState extends State<PinEntryDialog> {
               ),
             ],
             const SizedBox(height: 20),
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-              ),
-              itemCount: 12,
-              itemBuilder: (context, i) {
-                if (i == 9) return const SizedBox.shrink();
-                if (i == 11) {
-                  return _keyButton(
-                    icon: Icons.backspace_outlined,
-                    onTap: _onBackspace,
-                  );
-                }
-                final digit = i == 10 ? '0' : '${i + 1}';
-                return _keyButton(
-                  label: digit,
-                  onTap: locked ? null : () => _onDigit(digit),
-                );
-              },
+            // Keypad sebagai Column + Row (BUKAN GridView): GridView adalah
+            // viewport shrink-wrapping yang tidak bisa diukur dimensi
+            // intrinsiknya oleh AlertDialog — dialog crash saat dibuka
+            // (CI run 45021550871, flutter test).
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _keyRow(['1', '2', '3'], locked),
+                const SizedBox(height: 8),
+                _keyRow(['4', '5', '6'], locked),
+                const SizedBox(height: 8),
+                _keyRow(['7', '8', '9'], locked),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Expanded(child: SizedBox.shrink()),
+                    const SizedBox(width: 8),
+                    Expanded(child: _keyButton(label: '0', onTap: locked ? null : () => _onDigit('0'))),
+                    const SizedBox(width: 8),
+                    Expanded(child: _keyButton(icon: Icons.backspace_outlined, onTap: _onBackspace)),
+                  ],
+                ),
+              ],
             ),
           ],
         ),
@@ -242,30 +242,49 @@ class _PinEntryDialogState extends State<PinEntryDialog> {
     );
   }
 
+  Widget _keyRow(List<String> digits, bool locked) {
+    return Row(
+      children: [
+        for (int i = 0; i < digits.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          Expanded(
+            child: _keyButton(
+              label: digits[i],
+              onTap: locked ? null : () => _onDigit(digits[i]),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   Widget _keyButton({
     String? label,
     IconData? icon,
     VoidCallback? onTap,
   }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: SukaTeaColors.leafBg,
-          border: Border.all(color: SukaTeaColors.border),
-        ),
-        child: Center(
-          child: label != null
-              ? Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                  ),
-                )
-              : Icon(icon, color: SukaTeaColors.ink),
+    return AspectRatio(
+      aspectRatio: 1,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: SukaTeaColors.leafBg,
+            border: Border.all(color: SukaTeaColors.border),
+          ),
+          child: Center(
+            child: label != null
+                ? Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                : Icon(icon, color: SukaTeaColors.ink),
+          ),
         ),
       ),
     );
