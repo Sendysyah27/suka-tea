@@ -55,6 +55,8 @@ lib/
   core/       theme (token Fresh Minimal), utils
   data/       model, seed menu, Supabase client, Drift/outbox, export Sheets
   features/   kasir, katalog, stok, keuangan, laporan, qris
+android/    applicationId `id.sukatea`, MainActivity Kotlin, ikon launcher
+ios/        bundle id `id.sukatea` (build iOS BELUM terverifikasi — butuh macOS)
 supabase/
   migrations/ skema + RLS (001_init.sql)
   functions/  export-sheets (Edge Function, skeleton)

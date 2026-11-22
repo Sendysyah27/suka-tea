@@ -22,3 +22,10 @@ key.properties
 
 # Supabase CLI local
 supabase/.temp/
+
+# Platform build artefacts
+android/local.properties
+ios/Pods/
+ios/Flutter/Flutter.podspec
+ios/Flutter/Flutter.framework
+ios/Flutter/Generated.xcconfig
