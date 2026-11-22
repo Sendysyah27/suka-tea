@@ -1,9 +1,9 @@
-# Sruput POS
+# SUKA TEA
 
 POS kasir + pencatatan keuangan untuk stand es teh.
 
-> **Nama sementara:** Sruput POS. Penggantian nama paling murah sebelum rilis
-> publik — bundle ID yang sudah terbit di store sulit diubah.
+> **Nama lama:** Sruput POS — diganti menjadi SUKA TEA pada 22 Nov 2026.
+> Repo GitHub masih `Sendysyah27/sruput-pos`; rename repo adalah follow-up.
 
 ## Status
 
@@ -49,7 +49,7 @@ seed (berlabel SEED/CONTOH di kode) dan outbox lokal.
 
 ```text
 lib/
-  app/        SruputApp + navigasi + shell responsif
+  app/        SukaTeaApp + navigasi + shell responsif
   core/       theme (token Fresh Minimal), utils
   data/       model, seed menu, Supabase client, Drift/outbox, export Sheets
   features/   kasir, katalog, stok, keuangan, laporan

@@ -1,7 +1,21 @@
-# Sruput POS — Scaffold Notes (v0.1.0, 22 Nov 2026)
+# SUKA TEA — Scaffold Notes (v0.1.0, 22 Nov 2026)
 
 Repo: https://github.com/Sendysyah27/sruput-pos (publik, baru dibuat 22 Nov 2026)
+Nama produk: SUKA TEA.
 PRD: v0.3 (22 hal A4) — semua keputusan MVP terkunci.
+
+## Rename 22 Nov 2026 (urgent, sebelum push final)
+
+- Nama produk diganti menjadi **SUKA TEA** (display name, pubspec, judul app,
+  struk digital, komentar). Package Dart: `sruput_pos` → `suka_tea`.
+- Repo GitHub TETAP `Sendysyah27/sruput-pos` (sudah dibuat + sudah ada
+  commit); rename repo ke `suka-tea` adalah follow-up yang butuh
+  keputusan user. Jangan buat dua repo.
+- CI run 1 (45000687422) & run 2 (45000727182) completed failure —
+  penyebab: `flutter analyze` error `CardTheme` vs `CardThemeData`
+  di `app_theme.dart` (+ 1 warning import, 4 info). Semua sudah
+  diperbaiki di push ini (CardThemeData, hapus import tak terpakai,
+  publishableKey, const, checkout@v5).
 
 ## Yang sudah ada di scaffold ini
 
@@ -42,7 +56,7 @@ PRD: v0.3 (22 hal A4) — semua keputusan MVP terkunci.
 
 ## Commit pertama
 
-`feat: scaffold awal Sruput POS (Flutter + Supabase, Fresh Minimal)` (main)
+`feat: scaffold awal SUKA TEA (Flutter + Supabase, Fresh Minimal)` (main)
 - SHA: `9e5cbb8cac002a74dc6ad28f17d2d2dc9f5571c6`
 - Commit awal (workaround repo kosong GitHub menolak git/blobs 409):
   `605329946cb2e1cbf7b7e6513befdcd35f2693ee` (`chore: initial commit`, README saja)

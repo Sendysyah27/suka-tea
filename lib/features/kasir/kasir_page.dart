@@ -115,7 +115,7 @@ class _KasirPageState extends State<KasirPage> {
           onBayar: _bayar,
         );
 
-        if (SruputBreakpoints.isWide(width)) {
+        if (SukaTeaBreakpoints.isWide(width)) {
           return Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -128,7 +128,7 @@ class _KasirPageState extends State<KasirPage> {
             ],
           );
         }
-        if (SruputBreakpoints.isTablet(width)) {
+        if (SukaTeaBreakpoints.isTablet(width)) {
           return Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [Expanded(child: menu), SizedBox(width: 320, child: cart)],
@@ -242,7 +242,7 @@ class _MenuSection extends StatelessWidget {
                           style: Theme.of(context)
                               .textTheme
                               .bodySmall
-                              ?.copyWith(color: SruputColors.muted)),
+                              ?.copyWith(color: SukaTeaColors.muted)),
                       const Spacer(),
                       Text(
                         '${formatRupiah(p.variants.first.price)} – '
@@ -301,8 +301,8 @@ class _CartPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        color: SruputColors.card,
-        border: Border(left: BorderSide(color: SruputColors.border)),
+        color: SukaTeaColors.card,
+        border: Border(left: BorderSide(color: SukaTeaColors.border)),
       ),
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -388,8 +388,8 @@ class _BottomBar extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: const BoxDecoration(
-        color: SruputColors.card,
-        border: Border(top: BorderSide(color: SruputColors.border)),
+        color: SukaTeaColors.card,
+        border: Border(top: BorderSide(color: SukaTeaColors.border)),
       ),
       child: Row(
         children: [

@@ -25,9 +25,9 @@ class StokPage extends StatelessWidget {
                     label: Text('Menipis'),
                     backgroundColor: Color(0xFFFDECEC),
                   )
-                : Chip(
-                    label: const Text('Aman'),
-                    backgroundColor: SruputColors.emeraldSoft,
+                : const Chip(
+                    label: Text('Aman'),
+                    backgroundColor: SukaTeaColors.emeraldSoft,
                   ),
           ),
         );

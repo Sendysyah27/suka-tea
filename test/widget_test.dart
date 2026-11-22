@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sruput_pos/core/utils/roles.dart';
-import 'package:sruput_pos/features/kasir/kasir_page.dart';
+import 'package:suka_tea/core/utils/roles.dart';
+import 'package:suka_tea/features/kasir/kasir_page.dart';
 
 void main() {
   testWidgets('Kasir menampilkan menu seed', (tester) async {

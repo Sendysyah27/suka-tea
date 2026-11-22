@@ -14,7 +14,7 @@ String buildReceiptText({
   String cashier = 'Kasir',
 }) {
   final buf = StringBuffer();
-  buf.writeln('      SRUPUT POS');
+  buf.writeln('      SUKA TEA');
   buf.writeln('  Stand Es Teh');
   buf.writeln('--------------------------------');
   buf.writeln('Kasir : $cashier');
@@ -29,7 +29,7 @@ String buildReceiptText({
   buf.writeln('Bayar (${method.label})  ${formatRupiah(paid)}');
   buf.writeln('Kembali      ${formatRupiah(paid - total)}');
   buf.writeln('--------------------------------');
-  buf.writeln('   Terima kasih sudah sruput!');
+  buf.writeln('   Terima kasih sudah mampir!');
   return buf.toString();
 }
 
@@ -64,7 +64,7 @@ class DigitalReceiptDialog extends StatelessWidget {
           width: double.maxFinite,
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: SruputColors.leafBg,
+            color: SukaTeaColors.leafBg,
             borderRadius: BorderRadius.circular(12),
           ),
           child: SelectableText(

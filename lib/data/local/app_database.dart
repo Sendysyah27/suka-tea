@@ -36,7 +36,7 @@ class LocalProducts extends Table {
 
 @DriftDatabase(tables: [OutboxEntries, LocalProducts])
 class AppDatabase extends _$AppDatabase {
-  AppDatabase() : super(driftDatabase(name: 'sruput-pos'));
+  AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
   int get schemaVersion => 1;

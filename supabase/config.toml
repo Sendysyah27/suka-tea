@@ -1,6 +1,6 @@
 # Supabase local config (placeholder — isi project_id saat `supabase link`).
 # JANGAN tulis URL/key asli di file ini.
-project_id = "sruput-pos"
+project_id = "suka-tea"
 [api]
 enabled = true
 port = 54321

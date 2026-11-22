@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sruput_pos/core/utils/money.dart';
+import 'package:suka_tea/core/utils/money.dart';
 
 void main() {
   test('formatRupiah', () {

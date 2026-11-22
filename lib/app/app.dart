@@ -10,30 +10,30 @@ import '../features/keuangan/keuangan_page.dart';
 import '../features/laporan/laporan_page.dart';
 import '../features/stok/stok_page.dart';
 
-class SruputApp extends StatelessWidget {
-  const SruputApp({super.key});
+class SukaTeaApp extends StatelessWidget {
+  const SukaTeaApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Sruput POS',
-      theme: SruputTheme.light,
+      title: 'SUKA TEA',
+      theme: SukaTeaTheme.light,
       debugShowCheckedModeBanner: false,
-      home: const SruputShell(),
+      home: const SukaTeaShell(),
     );
   }
 }
 
 /// Shell + navigasi bawah 5 tab. Peran demo bisa diganti dari AppBar
 /// (Owner/Kasir) — autentikasi nyata via Supabase Auth di M0.
-class SruputShell extends StatefulWidget {
-  const SruputShell({super.key});
+class SukaTeaShell extends StatefulWidget {
+  const SukaTeaShell({super.key});
 
   @override
-  State<SruputShell> createState() => _SruputShellState();
+  State<SukaTeaShell> createState() => _SukaTeaShellState();
 }
 
-class _SruputShellState extends State<SruputShell> {
+class _SukaTeaShellState extends State<SukaTeaShell> {
   int _index = 0;
   AppRole _role = AppRole.owner;
 
@@ -70,8 +70,8 @@ class _SruputShellState extends State<SruputShell> {
         currentIndex: _index,
         onTap: (i) => setState(() => _index = i),
         type: BottomNavigationBarType.fixed,
-        selectedItemColor: SruputColors.emerald,
-        unselectedItemColor: SruputColors.muted,
+        selectedItemColor: SukaTeaColors.emerald,
+        unselectedItemColor: SukaTeaColors.muted,
         items: [
           _item(AppIcons.kasir, 'Kasir'),
           _item(AppIcons.menu, 'Menu'),
@@ -90,7 +90,7 @@ class _SruputShellState extends State<SruputShell> {
         width: 24,
         height: 24,
         colorFilter: const ColorFilter.mode(
-          SruputColors.muted,
+          SukaTeaColors.muted,
           BlendMode.srcIn,
         ),
       ),
@@ -99,7 +99,7 @@ class _SruputShellState extends State<SruputShell> {
         width: 24,
         height: 24,
         colorFilter: const ColorFilter.mode(
-          SruputColors.emerald,
+          SukaTeaColors.emerald,
           BlendMode.srcIn,
         ),
       ),

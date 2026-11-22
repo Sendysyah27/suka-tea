@@ -1,4 +1,4 @@
-// Sruput POS — Edge Function `export-sheets` (SKELETON)
+// SUKA TEA — Edge Function `export-sheets` (SKELETON)
 // Tugas: setelah tutup kasir, kirim ringkasan + baris transaksi ke Google
 // Sheets (tab: Ringkasan Harian, Transaksi, Stok/Bahan, Pengeluaran).
 // Sheets HANYA untuk laporan/export — Supabase tetap sumber kebenaran.

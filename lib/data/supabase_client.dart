@@ -20,7 +20,7 @@ class SupabaseService {
       debugPrint('Supabase belum dikonfigurasi — mode offline (menu seed).');
       return;
     }
-    await Supabase.initialize(url: url, anonKey: anonKey);
+    await Supabase.initialize(url: url, publishableKey: anonKey);
     _initialized = true;
   }
 

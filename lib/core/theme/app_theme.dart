@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
 /// Token desain Opsi B — Fresh Minimal (DIKUNCI 22 Nov 2026, revisi dari
-/// Opsi A Sruput Pop). Emerald sebagai warna aksi tunggal, lime aksen.
-class SruputColors {
-  SruputColors._();
+/// Opsi A (pop oranye/toska)). Emerald sebagai warna aksi tunggal, lime aksen.
+class SukaTeaColors {
+  SukaTeaColors._();
 
   static const Color emerald = Color(0xFF0A9B6C);
   static const Color emeraldDark = Color(0xFF0A7A55);
@@ -21,8 +21,8 @@ class SruputColors {
 
 /// Breakpoint responsif (PRD §12):
 /// <600dp HP satu kolom, 600–840dp dua panel, >840dp tiga zona.
-class SruputBreakpoints {
-  SruputBreakpoints._();
+class SukaTeaBreakpoints {
+  SukaTeaBreakpoints._();
 
   static const double tablet = 600;
   static const double wide = 840;
@@ -31,41 +31,41 @@ class SruputBreakpoints {
   static bool isTablet(double width) => width >= tablet && width < wide;
 }
 
-class SruputTheme {
-  SruputTheme._();
+class SukaTeaTheme {
+  SukaTeaTheme._();
 
   static ThemeData get light {
     const base = ColorScheme.light(
-      primary: SruputColors.emerald,
+      primary: SukaTeaColors.emerald,
       onPrimary: Colors.white,
-      secondary: SruputColors.lime,
-      surface: SruputColors.card,
-      error: SruputColors.danger,
+      secondary: SukaTeaColors.lime,
+      surface: SukaTeaColors.card,
+      error: SukaTeaColors.danger,
     );
     return ThemeData(
       colorScheme: base,
-      scaffoldBackgroundColor: SruputColors.leafBg,
+      scaffoldBackgroundColor: SukaTeaColors.leafBg,
       // PlusJakartaSans: tambahkan file TTF ke assets/fonts/ lalu daftarkan
       // di pubspec.yaml. Sampai saat itu Flutter memakai font default.
       fontFamily: 'PlusJakartaSans',
       useMaterial3: true,
       appBarTheme: const AppBarTheme(
-        backgroundColor: SruputColors.card,
-        foregroundColor: SruputColors.ink,
+        backgroundColor: SukaTeaColors.card,
+        foregroundColor: SukaTeaColors.ink,
         elevation: 0,
         centerTitle: false,
       ),
-      cardTheme: CardTheme(
-        color: SruputColors.card,
+      cardTheme: CardThemeData(
+        color: SukaTeaColors.card,
         elevation: 2,
-        shadowColor: SruputColors.ink.withValues(alpha: 0.08),
+        shadowColor: SukaTeaColors.ink.withValues(alpha: 0.08),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
         ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: SruputColors.emerald,
+          backgroundColor: SukaTeaColors.emerald,
           foregroundColor: Colors.white,
           minimumSize: const Size(48, 48), // target sentuh min 48dp
           shape: RoundedRectangleBorder(
@@ -82,14 +82,14 @@ class SruputTheme {
         ),
       ),
       chipTheme: ChipThemeData(
-        backgroundColor: SruputColors.emeraldSoft,
-        selectedColor: SruputColors.emerald,
-        labelStyle: const TextStyle(color: SruputColors.ink),
+        backgroundColor: SukaTeaColors.emeraldSoft,
+        selectedColor: SukaTeaColors.emerald,
+        labelStyle: const TextStyle(color: SukaTeaColors.ink),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(999),
         ),
       ),
-      dividerColor: SruputColors.border,
+      dividerColor: SukaTeaColors.border,
     );
   }
 }

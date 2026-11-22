@@ -7,5 +7,5 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Tanpa SUPABASE_URL/ANON_KEY app tetap jalan offline (menu seed).
   await SupabaseService.instance.init();
-  runApp(const SruputApp());
+  runApp(const SukaTeaApp());
 }

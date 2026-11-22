@@ -1,4 +1,4 @@
-/// Model domain Sruput POS. Uang = integer rupiah.
+// Model domain SUKA TEA. Uang = integer rupiah.
 
 enum PaymentMethod { tunai, transfer, qrisManual, ewallet }
 

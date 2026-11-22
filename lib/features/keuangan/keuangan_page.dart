@@ -32,8 +32,8 @@ class KeuanganPage extends StatelessWidget {
         ),
       );
     }
-    final omzet = tunai + transfer + qrisManual + ewallet;
-    final laba = omzet - hpp - pengeluaran;
+    const omzet = tunai + transfer + qrisManual + ewallet;
+    const laba = omzet - hpp - pengeluaran;
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
@@ -49,13 +49,13 @@ class KeuanganPage extends StatelessWidget {
         const SizedBox(height: 8),
         const Text('Cash s.d. cashless', style: TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        _row('Tunai', tunai, SruputColors.cash),
-        _row('Transfer', transfer, SruputColors.cashless),
-        _row('QRIS (manual)', qrisManual, SruputColors.cashless),
-        _row('E-Wallet', ewallet, SruputColors.cashless),
+        _row('Tunai', tunai, SukaTeaColors.cash),
+        _row('Transfer', transfer, SukaTeaColors.cashless),
+        _row('QRIS (manual)', qrisManual, SukaTeaColors.cashless),
+        _row('E-Wallet', ewallet, SukaTeaColors.cashless),
         const SizedBox(height: 8),
-        _row('HPP (contoh)', -hpp, SruputColors.danger),
-        _row('Pengeluaran (contoh)', -pengeluaran, SruputColors.danger),
+        _row('HPP (contoh)', -hpp, SukaTeaColors.danger),
+        _row('Pengeluaran (contoh)', -pengeluaran, SukaTeaColors.danger),
         const Divider(),
         ListTile(
           title: const Text('Laba bersih (contoh)',
@@ -65,7 +65,7 @@ class KeuanganPage extends StatelessWidget {
             style: const TextStyle(
               fontWeight: FontWeight.bold,
               fontSize: 18,
-              color: SruputColors.emeraldDark,
+              color: SukaTeaColors.emeraldDark,
             ),
           ),
         ),

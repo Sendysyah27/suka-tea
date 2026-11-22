@@ -1,4 +1,4 @@
--- Sruput POS — 001_init.sql
+-- SUKA TEA — 001_init.sql
 -- Skema awal. Uang disimpan sebagai integer rupiah (bukan sen).
 -- Semua tabel membawa outlet_id. RLS aktif di semua tabel.
 -- Aturan peran: Owner bisa semua; Kasir jualan saja dan TIDAK bisa baca
