@@ -6,7 +6,9 @@ import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../data/local/outbox_service.dart';
 import '../../data/models.dart';
+import '../../data/recipe_logic.dart';
 import '../../data/seed_menu.dart';
+import '../../data/stock_service.dart';
 import '../qris/qris_pay_page.dart';
 import 'receipt.dart';
 
@@ -78,6 +80,51 @@ class _KasirPageState extends State<KasirPage> {
     });
   }
 
+  /// Jumlah bahan gaya Indonesia: pcs bulat, kg max 3 desimal koma.
+  String _fmtQty(double v, String unit) {
+    if (unit == 'pcs') return v.toStringAsFixed(0);
+    var s = v.toStringAsFixed(3);
+    s = s.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+    return s.replaceAll('.', ',');
+  }
+
+  /// Dialog konfirmasi saat ada bahan yang tidak cukup. true = tetap jual
+  /// (stok dipotong sampai 0), false = batal (cart utuh).
+  Future<bool> _confirmShortage(List<Shortage> shortages) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Stok bahan kurang'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Bahan berikut tidak cukup untuk pesanan ini:'),
+            const SizedBox(height: 8),
+            for (final s in shortages)
+              Text(
+                '• ${s.stockName}: butuh ${_fmtQty(s.needed, s.unit)} '
+                '${s.unit}, sisa ${_fmtQty(s.available, s.unit)} ${s.unit}',
+              ),
+            const SizedBox(height: 8),
+            const Text('Tetap jual akan memotong stok sampai 0.'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Tetap jual'),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
   Future<void> _bayar() async {
     // Anti double-tap: tanpa guard ini, dua ketukan cepat meng-enqueue
     // dua transaksi yang sama (laporan Sendy: "tombol bayar kurang
@@ -85,6 +132,14 @@ class _KasirPageState extends State<KasirPage> {
     if (_cart.isEmpty || _isProcessing) return;
     setState(() => _isProcessing = true);
     try {
+      // Cek stok bahan dulu — SEBELUM layar QRIS dibuka. Kalau ada yang
+      // kurang, kasir memilih: batal (cart utuh, _isProcessing direset
+      // oleh finally) atau tetap jual.
+      final shortages = StockService.instance.checkCart(_cart);
+      if (shortages.isNotEmpty) {
+        final lanjut = await _confirmShortage(shortages);
+        if (!lanjut || !mounted) return;
+      }
       if (_method == PaymentMethod.qris) {
         // QRIS dinamis: nominal bisa di-custom di layar QRIS, konfirmasi
         // bayar manual oleh kasir (cek mutasi dulu).
@@ -132,6 +187,8 @@ class _KasirPageState extends State<KasirPage> {
           .map((i) => {'name': i.label, 'qty': i.qty, 'price': i.unitPrice})
           .toList(),
     });
+    // Potong stok bahan sesuai resep item yang terjual (clamp di 0).
+    final newlyLow = await StockService.instance.deductForSale(items);
     if (!mounted) return;
     setState(_cart.clear);
     await showDialog<void>(
@@ -143,6 +200,17 @@ class _KasirPageState extends State<KasirPage> {
         paid: paid,
       ),
     );
+    // Peringatan menipis tampil SESUDAH struk ditutup (SnackBar di bawah
+    // dialog tidak kelihatan).
+    if (newlyLow.isNotEmpty && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Stok menipis: ${newlyLow.join(', ')} — cek tab Stok',
+          ),
+        ),
+      );
+    }
   }
 
   @override

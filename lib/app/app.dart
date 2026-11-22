@@ -47,7 +47,7 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
   List<Widget> get _pages => [
         KasirPage(role: _role),
         KatalogPage(role: _role),
-        const StokPage(),
+        StokPage(role: _role),
         KeuanganPage(role: _role),
         const LaporanPage(),
       ];

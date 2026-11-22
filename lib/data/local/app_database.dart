@@ -34,12 +34,47 @@ class LocalProducts extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-@DriftDatabase(tables: [OutboxEntries, LocalProducts])
+/// Stok bahan baku lokal (cermin seedStock + editan Owner).
+/// Satu baris per nama bahan — nama adalah kunci.
+class StockLevels extends Table {
+  TextColumn get name => text()();
+  TextColumn get unit => text()();
+  RealColumn get qty => real()();
+  RealColumn get lowThreshold => real()();
+
+  @override
+  Set<Column> get primaryKey => {name};
+}
+
+/// Resep lokal: tiap varian memakai sejumlah bahan per cup.
+/// Kunci gabungan (variantId, stockName) — satu bahan max 1x per varian.
+class ProductRecipes extends Table {
+  TextColumn get variantId => text()();
+  TextColumn get stockName => text()();
+  RealColumn get qty => real()();
+
+  @override
+  Set<Column> get primaryKey => {variantId, stockName};
+}
+
+@DriftDatabase(tables: [OutboxEntries, LocalProducts, StockLevels, ProductRecipes])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onUpgrade: (m, from, to) async {
+          // v1 -> v2 (22 Nov 2026): tambah tabel stok + resep.
+          // Tabel lama (OutboxEntries, LocalProducts) TIDAK dihapus.
+          if (from < 2) {
+            await m.createTable(stockLevels);
+            await m.createTable(productRecipes);
+          }
+        },
+      );
 
   Future<List<OutboxEntry>> pendingEntries() {
     return (select(outboxEntries)

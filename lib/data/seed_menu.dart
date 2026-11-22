@@ -130,4 +130,10 @@ List<StockItem> seedStock() => const [
       StockItem(name: 'Cup 22oz', unit: 'pcs', qty: 80, lowThreshold: 50),
       StockItem(name: 'Es batu', unit: 'kg', qty: 10, lowThreshold: 5),
       StockItem(name: 'Sedotan', unit: 'pcs', qty: 200, lowThreshold: 100),
+      // Bahan resep (22 Nov 2026): dipakai seedRecipes(). Jangan ubah
+      // 6 bahan di atas — angka awalnya sudah disetujui.
+      StockItem(name: 'Susu bubuk', unit: 'kg', qty: 3, lowThreshold: 1),
+      StockItem(name: 'Bubuk perasa', unit: 'kg', qty: 2, lowThreshold: 0.5),
+      StockItem(name: 'Yakult', unit: 'pcs', qty: 24, lowThreshold: 12),
+      StockItem(name: 'Lemon', unit: 'pcs', qty: 20, lowThreshold: 10),
     ];

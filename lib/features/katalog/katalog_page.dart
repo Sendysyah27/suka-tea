@@ -6,6 +6,7 @@ import '../../core/utils/roles.dart';
 import '../../core/widgets/product_photo.dart';
 import '../../data/models.dart';
 import '../../data/seed_menu.dart';
+import '../resep/resep_page.dart';
 
 /// Kelola Menu — HANYA Owner. Menu, harga, dan foto produk di-custom di
 /// dalam app (bukan hardcode). Kasir read-only. Desain v2: thumb 56px
@@ -126,6 +127,15 @@ class _KatalogPageState extends State<KatalogPage> {
         content: Text('$newName diperbarui (lokal — sinkron Supabase di M1).'),
       ),
     );
+  }
+
+  /// Buka editor resep produk. Setelah kembali, refresh (resep tidak
+  /// mengubah tampilan kartu, tapi setState menjaga konsistensi).
+  Future<void> _openResep(Product product) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => ResepPage(product: product)),
+    );
+    if (mounted) setState(() {});
   }
 
   Future<void> _changePhoto(Product product) async {
@@ -284,6 +294,11 @@ class _KatalogPageState extends State<KatalogPage> {
                       ),
                     ],
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Resep bahan per cup',
+                  icon: const Icon(Icons.menu_book),
+                  onPressed: _canEdit ? () => _openResep(p) : null,
                 ),
                 IconButton(
                   tooltip: 'Ganti foto produk',

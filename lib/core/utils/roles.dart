@@ -8,6 +8,7 @@ extension AppRoleX on AppRole {
   /// Hanya Owner yang boleh baca laba/HPP, kelola menu, dan export Sheets.
   bool get canViewProfit => this == AppRole.owner;
   bool get canManageMenu => this == AppRole.owner;
+  bool get canManageStock => this == AppRole.owner;
   bool get canExportSheets => this == AppRole.owner;
   bool get canCloseShift => this == AppRole.owner;
 }

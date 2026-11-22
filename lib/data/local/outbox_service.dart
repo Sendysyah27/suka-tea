@@ -16,14 +16,18 @@ class OutboxService {
   AppDatabase get _database => _db ??= AppDatabase();
 
   /// Simpan satu transaksi ke outbox. Mengembalikan id antrean.
-  Future<String> enqueueSale(Map<String, Object?> payload) async {
+  /// [kind] default 'transaction'; mutasi stok memakai 'stock_movement'.
+  Future<String> enqueueSale(
+    Map<String, Object?> payload, {
+    String kind = 'transaction',
+  }) async {
     final id =
         '${DateTime.now().microsecondsSinceEpoch}-${payload.hashCode}';
     try {
       await _database.into(_database.outboxEntries).insert(
             OutboxEntriesCompanion.insert(
               id: id,
-              kind: 'transaction',
+              kind: kind,
               payload: jsonEncode(payload),
             ),
           );
