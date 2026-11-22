@@ -6,6 +6,7 @@ import '../../core/utils/roles.dart';
 import '../../data/local/outbox_service.dart';
 import '../../data/models.dart';
 import '../../data/seed_menu.dart';
+import '../qris/qris_pay_page.dart';
 import 'receipt.dart';
 
 /// Layar Kasir — layar utama. Responsif:
@@ -69,11 +70,42 @@ class _KasirPageState extends State<KasirPage> {
 
   Future<void> _bayar() async {
     if (_cart.isEmpty) return;
+    if (_method == PaymentMethod.qris) {
+      // QRIS dinamis: nominal bisa di-custom di layar QRIS, konfirmasi
+      // bayar manual oleh kasir (cek mutasi dulu).
+      final items = List<CartItem>.from(_cart);
+      final paidNominal = await Navigator.of(context).push<int>(
+        MaterialPageRoute(
+          builder: (_) => QrisPayPage(total: _total, role: widget.role),
+        ),
+      );
+      if (paidNominal == null || !mounted) return;
+      await _selesaikanBayar(
+        items: items,
+        total: paidNominal,
+        method: PaymentMethod.qris,
+        paid: paidNominal,
+      );
+      return;
+    }
     final items = List<CartItem>.from(_cart);
     final total = _total;
-    final method = _method;
-    // MVP: bayar pas (input nominal dibayar di M2).
-    final paid = total;
+    // Tunai/transfer/QRIS manual/e-wallet: bayar pas.
+    await _selesaikanBayar(
+      items: items,
+      total: total,
+      method: _method,
+      paid: total,
+    );
+  }
+
+  /// Catat transaksi ke outbox + tampilkan struk digital.
+  Future<void> _selesaikanBayar({
+    required List<CartItem> items,
+    required int total,
+    required PaymentMethod method,
+    required int paid,
+  }) async {
     await OutboxService.instance.enqueueSale({
       'client_uuid': DateTime.now().microsecondsSinceEpoch.toString(),
       'payment_method': method.name,

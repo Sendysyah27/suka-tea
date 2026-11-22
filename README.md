@@ -17,7 +17,9 @@ Scaffold awal (v0.1.0). MVP yang dikunci di PRD v0.3:
   lime sebagai aksen, latar putih daun, kartu putih soft-shadow,
   tipografi Plus Jakarta Sans. Semua ikon berupa SVG (style Gen Z),
   tanpa emoji sebagai ikon UI.
-- **Pembayaran MVP:** tunai + transfer/QRIS manual. QRIS dinamis = Fase 2.
+- **Pembayaran:** tunai + transfer/QRIS manual + **QRIS dinamis dalam app**
+  (generate QR dari QRIS statis merchant, nominal bisa di-custom,
+  konfirmasi bayar manual oleh kasir setelah cek mutasi).
   Laporan wajib memisahkan cash sampai cashless (tunai, transfer, QRIS,
   e-wallet) + rekonsiliasi kas tunai di tutup kasir.
 - **Printer:** tanpa printer dulu — struk digital (tampil di app, share
@@ -52,7 +54,7 @@ lib/
   app/        SukaTeaApp + navigasi + shell responsif
   core/       theme (token Fresh Minimal), utils
   data/       model, seed menu, Supabase client, Drift/outbox, export Sheets
-  features/   kasir, katalog, stok, keuangan, laporan
+  features/   kasir, katalog, stok, keuangan, laporan, qris
 supabase/
   migrations/ skema + RLS (001_init.sql)
   functions/  export-sheets (Edge Function, skeleton)
@@ -68,4 +70,4 @@ Status CI pertama belum tentu hijau — lihat badge/Actions di GitHub.
 ## Keputusan terbuka
 
 - Menu/harga awal (seed di `lib/data/seed_menu.dart` hanya usulan).
-- Detail printer Fase 2 (ESC/POS 58mm) dan QRIS dinamis Fase 2.
+- Detail printer Fase 2 (ESC/POS 58mm).

@@ -13,6 +13,7 @@ class KeuanganPage extends StatelessWidget {
 
   static const int tunai = 125000;
   static const int transfer = 45000;
+  static const int qris = 15000;
   static const int qrisManual = 30000;
   static const int ewallet = 20000;
   static const int hpp = 70000;
@@ -32,7 +33,7 @@ class KeuanganPage extends StatelessWidget {
         ),
       );
     }
-    const omzet = tunai + transfer + qrisManual + ewallet;
+    const omzet = tunai + transfer + qris + qrisManual + ewallet;
     const laba = omzet - hpp - pengeluaran;
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -51,6 +52,7 @@ class KeuanganPage extends StatelessWidget {
         const SizedBox(height: 8),
         _row('Tunai', tunai, SukaTeaColors.cash),
         _row('Transfer', transfer, SukaTeaColors.cashless),
+        _row('QRIS', qris, SukaTeaColors.cashless),
         _row('QRIS (manual)', qrisManual, SukaTeaColors.cashless),
         _row('E-Wallet', ewallet, SukaTeaColors.cashless),
         const SizedBox(height: 8),

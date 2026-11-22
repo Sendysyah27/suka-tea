@@ -1,11 +1,12 @@
 // Model domain SUKA TEA. Uang = integer rupiah.
 
-enum PaymentMethod { tunai, transfer, qrisManual, ewallet }
+enum PaymentMethod { tunai, transfer, qris, qrisManual, ewallet }
 
 extension PaymentMethodX on PaymentMethod {
   String get label => switch (this) {
         PaymentMethod.tunai => 'Tunai',
         PaymentMethod.transfer => 'Transfer',
+        PaymentMethod.qris => 'QRIS',
         PaymentMethod.qrisManual => 'QRIS (manual)',
         PaymentMethod.ewallet => 'E-Wallet',
       };

@@ -7,6 +7,7 @@ import '../core/utils/roles.dart';
 import '../features/kasir/kasir_page.dart';
 import '../features/katalog/katalog_page.dart';
 import '../features/keuangan/keuangan_page.dart';
+import '../features/qris/qris_settings_page.dart';
 import '../features/laporan/laporan_page.dart';
 import '../features/stok/stok_page.dart';
 
@@ -53,6 +54,19 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
       appBar: AppBar(
         title: Text(_titles[_index]),
         actions: [
+          IconButton(
+            tooltip: 'Pengaturan QRIS',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => QrisSettingsPage(role: _role),
+              ),
+            ),
+            icon: SvgPicture.asset(
+              AppIcons.pengaturan,
+              width: 24,
+              height: 24,
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: ChoiceChip(

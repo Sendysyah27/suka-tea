@@ -4,6 +4,30 @@ Repo: https://github.com/Sendysyah27/sruput-pos (publik, baru dibuat 22 Nov 2026
 Nama produk: SUKA TEA.
 PRD: v0.3 (22 hal A4) — semua keputusan MVP terkunci.
 
+## QRIS dinamis (22 Nov 2026 — GAS QRIS, scope aktif)
+
+- QRIS dinamis pindah dari Fase 2 ke scope aktif (PRD diupdate terpisah).
+- Modul baru `lib/features/qris/`:
+  - `qris_service.dart` — Dart murni, tanpa secret: parse TLV EMVCo,
+    sisip/ganti tag 54 (nominal), tag 01 11→12, hitung ulang CRC16-CCITT
+    tag 63. Validasi dasar sebelum simpan/generate.
+  - `qris_pay_page.dart` — nominal default = total keranjang, bisa diedit
+    manual + preset Total/Bulatkan, Generate QR (qr_flutter), timer 5 menit,
+    Batal / Sudah Dibayar. Konfirmasi bayar MANUAL (cek mutasi dulu).
+    Transaksi dicatat `payment_method=qris`.
+  - `qris_settings_page.dart` + `qris_settings_service.dart` — Owner
+    tempel/simpan kode QRIS statis (validasi format dulu). Nilai asli
+    TIDAK PERNAH di-hardcode di repo; disimpan ke Supabase `app_settings`
+    (Owner-only) bila outlet + Supabase aktif, jika tidak hanya di memori.
+    Kasir tidak bisa ubah. Scan QR = M5.
+  - `test/qris_service_test.dart` — CRC vektor baku 29B1, parse tag,
+    ganti nominal, CRC valid, nominal 0/negatif/lebih batas ditolak,
+    payload rusak ditolak.
+- Migrasi `002_qris_settings.sql`: tabel `app_settings` (Owner-only),
+  tambah `qris` ke check `payment_method`, view ringkasan ikut merekap QRIS.
+- TIDAK ADA nilai mentah payload QRIS asli di repo ini — hanya payload
+  CONTOH (merchant fiktif "TOKO CONTOH") di kode/test.
+
 ## Rename 22 Nov 2026 (urgent, sebelum push final)
 
 - Nama produk diganti menjadi **SUKA TEA** (display name, pubspec, judul app,
