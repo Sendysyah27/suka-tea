@@ -492,10 +492,12 @@ class _MenuSection extends StatelessWidget {
                     crossAxisSpacing: 12,
                     // Tinggi sel tetap (bukan rasio): isi kartu mockup
                     // frame 01 — foto 80 + nama 15 + kategori 12 +
-                    // harga 14 + tombol "+" 36 + padding ≈ 186dp.
-                    // Rasio 0.72 dulu bikin tombol overflow 34px
-                    // (ketangkep screenshot 22 Nov 21:49).
-                    mainAxisExtent: 186,
+                    // harga 14 + tombol "+" 36 + padding ≈ 166dp isi,
+                    // + margin Card 4+4 = 174; sel 196 kasih slack 2dp
+                    // (186 ternyata overflow 8px — ketangkep flutter
+                    // test 23 Nov 00:44). Rasio 0.72 dulu bikin tombol
+                    // overflow 34px (ketangkep screenshot 22 Nov 21:49).
+                    mainAxisExtent: 196,
                   ),
                   itemCount: visible.length,
                   itemBuilder: (context, i) {
