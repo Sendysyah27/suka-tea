@@ -43,3 +43,8 @@ PRD: v0.3 (22 hal A4) — semua keputusan MVP terkunci.
 ## Commit pertama
 
 `feat: scaffold awal Sruput POS (Flutter + Supabase, Fresh Minimal)` (main)
+- SHA: `9e5cbb8cac002a74dc6ad28f17d2d2dc9f5571c6`
+- Commit awal (workaround repo kosong GitHub menolak git/blobs 409):
+  `605329946cb2e1cbf7b7e6513befdcd35f2693ee` (`chore: initial commit`, README saja)
+- CI run pertama: https://github.com/Sendysyah27/sruput-pos/actions/runs/45000687422
+  — status saat push: `in_progress` (belum hijau, masih jalan).
