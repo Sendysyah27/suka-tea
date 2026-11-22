@@ -3,11 +3,11 @@
 POS kasir + pencatatan keuangan untuk stand es teh.
 
 > **Nama lama:** Sruput POS — diganti menjadi SUKA TEA pada 22 Nov 2026.
-> Repo GitHub masih `Sendysyah27/sruput-pos`; rename repo adalah follow-up.
+> Repo GitHub `Sendysyah27/suka-tea` (diganti dari `sruput-pos` pada 22 Nov 2026).
 
 ## Status
 
-Scaffold awal (v0.1.0). MVP yang dikunci di PRD v0.3:
+Scaffold awal (v0.1.0). MVP yang dikunci di PRD v0.4:
 
 - **Framework:** Flutter + Dart, Android + iOS dulu dari satu codebase.
   Web = Fase 2 di atas backend/skema yang sama (`apps/web/` masih penanda).
@@ -45,7 +45,7 @@ flutter run
 ```
 
 Untuk pengembangan tanpa Supabase, app tetap jalan offline dengan menu
-seed (berlabel SEED/CONTOH di kode) dan outbox lokal.
+awal (di `lib/data/seed_menu.dart`) dan outbox lokal.
 
 ## Struktur
 
@@ -71,5 +71,7 @@ Status CI pertama belum tentu hijau — lihat badge/Actions di GitHub.
 
 ## Keputusan terbuka
 
-- Menu/harga awal (seed di `lib/data/seed_menu.dart` hanya usulan).
 - Detail printer Fase 2 (ESC/POS 58mm).
+
+Menu/harga awal DIKUNCI 22 Nov 2026 (8 item di `lib/data/seed_menu.dart`,
+Reguler 16oz / Jumbo 22oz) — bisa diubah Owner di dalam app.

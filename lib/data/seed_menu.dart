@@ -1,9 +1,9 @@
 import 'models.dart';
 
-/// SEED / CONTOH — BUKAN data final.
-/// Menu, harga, dan foto produk WAJIB bisa di-custom Owner di dalam app
-/// (Kelola Menu). Seed ini hanya supaya layar Kasir bisa dites sebelum
-/// proyek Supabase + data outlet dibuat.
+/// MENU AWAL — data awal final 22 Nov 2026 (disetujui Sendy).
+/// Menu, harga, dan foto produk tetap bisa di-custom Owner di dalam app
+/// (Kelola Menu). Seed ini dipakai supaya layar Kasir bisa dites sebelum
+/// proyek Supabase + data outlet dibuat, dan jadi isi awal saat outlet dibuat.
 const List<Modifier> gulaOptions = [
   Modifier(name: 'Normal', kind: 'gula'),
   Modifier(name: 'Kurang Manis', kind: 'gula'),
