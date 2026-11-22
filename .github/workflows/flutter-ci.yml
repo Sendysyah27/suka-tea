@@ -31,10 +31,15 @@ jobs:
       # (SUPABASE_URL, SUPABASE_ANON_KEY) — jangan hardcode di repo.
       # arm64-only: POVA 5 (dan target install) pakai arm64 — APK fat
       # 165 MB buang-buang waktu install, arm64 saja jauh lebih kecil.
-      - run: flutter build apk --debug --target-platform android-arm64 --dart-define SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+      # --target-platform saja tidak cukup: .so plugin (dartjni, sqlite3,
+      # datastore) tetap ikut ter-packaging untuk armeabi-v7a/x86_64.
+      # --split-per-abi membuat APK per ABI yang benar-benar hanya berisi
+      # lib ABI itu; dengan --target-platform android-arm64 hasilnya
+      # hanya app-arm64-v8a-debug.apk.
+      - run: flutter build apk --debug --target-platform android-arm64 --split-per-abi --dart-define SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
       # Biar APK-nya bisa diunduh dari halaman run (tanpa ini APK hilang
       # begitu job selesai).
       - uses: actions/upload-artifact@v4
         with:
           name: suka-tea-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
