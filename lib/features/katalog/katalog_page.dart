@@ -68,7 +68,7 @@ class _KatalogPageState extends State<KatalogPage> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: menuCategories.contains(category) ? category : null,
+                initialValue: menuCategories.contains(category) ? category : null,
                 decoration: const InputDecoration(labelText: 'Kategori'),
                 items: [
                   for (final c in menuCategories)
@@ -129,7 +129,7 @@ class _KatalogPageState extends State<KatalogPage> {
   }
 
   Future<void> _changePhoto(Product product) async {
-    var selected = product.photoUrl;
+    final selected = product.photoUrl;
     final picked = await showDialog<String?>(
       context: context,
       builder: (context) => AlertDialog(
