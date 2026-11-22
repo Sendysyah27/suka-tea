@@ -4,10 +4,10 @@ import 'package:suka_tea/core/utils/roles.dart';
 import 'package:suka_tea/features/kasir/kasir_page.dart';
 
 void main() {
-  testWidgets('Kasir menampilkan menu seed', (tester) async {
-    // Viewport tinggi supaya GridView membangun semua 8 item seed.
+  testWidgets('Kasir menampilkan menu seed poster (20 produk)', (tester) async {
+    // Viewport tinggi supaya GridView membangun semua 20 item seed.
     // (scrollUntilVisible tidak bisa dipakai: ada 2 Scrollable di layar.)
-    tester.view.physicalSize = const Size(800, 2000);
+    tester.view.physicalSize = const Size(800, 3200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -15,8 +15,9 @@ void main() {
       const MaterialApp(home: Scaffold(body: KasirPage(role: AppRole.owner))),
     );
     await tester.pump();
-    expect(find.text('Es Teh Manis'), findsOneWidget);
-    expect(find.text('Es Teh Boba'), findsOneWidget);
+    expect(find.text('Manggo Milktea'), findsOneWidget);
+    expect(find.text('Es Teh Green Tea'), findsOneWidget);
+    expect(find.text('Es Teh Jumbo'), findsOneWidget);
   });
 
   testWidgets('Tap Reguler menambah keranjang dan total', (tester) async {
@@ -26,7 +27,8 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('Reguler').first);
     await tester.pump();
-    // Total keranjang berubah dari Rp0 menjadi Rp3.000.
-    expect(find.text('Rp3.000'), findsWidgets);
+    // Total keranjang berubah dari Rp0 menjadi Rp8.000
+    // (Reguler pertama = Manggo Milktea, harga poster 8K).
+    expect(find.text('Rp8.000'), findsWidgets);
   });
 }

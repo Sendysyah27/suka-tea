@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/product_photo.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../data/local/outbox_service.dart';
@@ -239,7 +240,7 @@ class _KasirPageState extends State<KasirPage> {
   }
 }
 
-const _categories = ['Semua', 'Teh Klasik', 'Teh Buah', 'Teh Susu'];
+const _categories = ['Semua', 'Best Seller', 'Milktea', 'Mixtea'];
 
 class _CategoryRail extends StatelessWidget {
   const _CategoryRail({required this.category, required this.onCategory});
@@ -342,21 +343,13 @@ class _MenuSection extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Blok foto produk (placeholder sampai foto
-                            // di-upload Owner via Kelola Menu, M1).
-                            Container(
-                              height: 72,
-                              decoration: BoxDecoration(
-                                color: SukaTeaColors.emeraldSoft,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: const Center(
-                                child: Icon(
-                                  Icons.local_drink,
-                                  size: 32,
-                                  color: SukaTeaColors.emerald,
-                                ),
-                              ),
+                            // Foto produk — default crop poster, Owner
+                            // bisa ganti di Kelola Menu.
+                            ProductPhoto(
+                              photoUrl: p.photoUrl,
+                              width: double.infinity,
+                              height: 110,
+                              iconSize: 32,
                             ),
                             const SizedBox(height: 10),
                             Text(
@@ -491,6 +484,14 @@ class _CartPanel extends StatelessWidget {
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            ProductPhoto(
+                              photoUrl: item.product.photoUrl,
+                              width: 40,
+                              height: 40,
+                              borderRadius: 10,
+                              iconSize: 20,
+                            ),
+                            const SizedBox(width: 10),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,

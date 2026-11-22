@@ -29,6 +29,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/icons/
+    - assets/products/
   fonts:
     - family: PlusJakartaSans
       fonts:
