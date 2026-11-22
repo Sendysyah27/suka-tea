@@ -332,7 +332,12 @@ class _MenuSection extends StatelessWidget {
                     maxCrossAxisExtent: 230,
                     mainAxisSpacing: 12,
                     crossAxisSpacing: 12,
-                    childAspectRatio: 0.72,
+                    // Tinggi sel tetap (bukan rasio): isi kartu butuh ~281dp
+                    // di POVA 5 (foto 110 + nama + kategori + harga + tombol
+                    // 48). Rasio 0.72 dulu bikin sel cuma ~247dp -> tombol
+                    // Reguler/Jumbo overflow 34px (ketangkep screenshot
+                    // 22 Nov 21:49).
+                    mainAxisExtent: 300,
                   ),
                   itemCount: visible.length,
                   itemBuilder: (context, i) {
