@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
+import '../../core/theme/app_icons.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/product_photo.dart';
+import '../../data/menu_service.dart';
 import '../../data/models.dart';
 import '../../data/seed_menu.dart';
 import '../resep/resep_page.dart';
@@ -12,13 +15,17 @@ import '../resep/resep_page.dart';
 /// dalam app (bukan hardcode). Kasir read-only. Desain v2: thumb 56px
 /// + kartu radius 20.
 ///
-/// Default: 20 produk poster (foto crop poster di assets/products/).
-/// Owner bisa, per produk:
+/// Menu dibaca dari MenuService (SATU sumber dengan Kasir): edit di sini
+/// langsung tampil di Kasir dan TERSIMPAN di LocalProducts (restart
+/// tidak hilang). Owner bisa, per produk:
+/// - tambah produk baru (form nyata: nama, kategori, harga R/J, foto)
 /// - ubah nama, kategori, harga Reguler, harga Jumbo (_editProduct)
 /// - ganti foto dari 20 foto poster bawaan (_changePhoto)
 /// - hapus foto → kembali ke ikon placeholder
-/// Perubahan di sini lokal dulu (sinkron Supabase di M1); upload foto
-/// sendiri dari kamera/galeri juga M1.
+/// - hapus produk (dengan konfirmasi)
+/// - toggle Aktif/Habis (produk habis tidak bisa ditambah ke keranjang)
+/// - cari produk lewat TextField
+/// Upload foto sendiri dari kamera/galeri masih M1.
 class KatalogPage extends StatefulWidget {
   const KatalogPage({super.key, required this.role});
 
@@ -29,104 +36,177 @@ class KatalogPage extends StatefulWidget {
 }
 
 class _KatalogPageState extends State<KatalogPage> {
-  late List<Product> _products;
-
-  @override
-  void initState() {
-    super.initState();
-    _products = seedMenu();
-  }
+  String _query = '';
 
   bool get _canEdit => widget.role.canManageMenu;
 
-  void _replaceProduct(Product updated) {
-    setState(() {
-      final i = _products.indexWhere((p) => p.id == updated.id);
-      if (i >= 0) _products[i] = updated;
-    });
+  List<Product> get _visible {
+    final products = MenuService.instance.products;
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return products;
+    return products.where((p) => p.name.toLowerCase().contains(q)).toList();
+  }
+
+  /// Form produk — dipakai tambah (product null) dan ubah (product ada).
+  /// Mengembalikan Product baru / yang sudah diubah, atau null bila batal.
+  Future<Product?> _productForm({Product? product}) async {
+    final name = TextEditingController(text: product?.name ?? '');
+    final reguler = TextEditingController(
+      text: product?.variants.first.price.toString() ?? '',
+    );
+    final jumbo = TextEditingController(
+      text: product?.variants.last.price.toString() ?? '',
+    );
+    var category = product?.category ?? menuCategories.first;
+    var photoUrl = product?.photoUrl;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(
+            product == null ? 'Tambah produk' : 'Ubah produk — ${product.name}',
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  controller: name,
+                  decoration: const InputDecoration(labelText: 'Nama produk'),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue:
+                      menuCategories.contains(category) ? category : null,
+                  decoration: const InputDecoration(labelText: 'Kategori'),
+                  items: [
+                    for (final c in menuCategories)
+                      DropdownMenuItem(value: c, child: Text(c)),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) category = v;
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: reguler,
+                  keyboardType: TextInputType.number,
+                  decoration:
+                      const InputDecoration(labelText: 'Reguler (Rp)'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: jumbo,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Jumbo (Rp)'),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Foto produk',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                InkWell(
+                  onTap: () async {
+                    final picked = await _pickPhoto(photoUrl);
+                    if (picked != null) {
+                      setDialogState(() => photoUrl = picked);
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(14),
+                  child: ProductPhoto(
+                    photoUrl: photoUrl,
+                    width: double.infinity,
+                    height: 80,
+                    borderRadius: 12,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  photoUrl == null
+                      ? 'Ketuk foto untuk memilih dari 20 foto bawaan.'
+                      : 'Ketuk foto untuk mengganti.',
+                  style: const TextStyle(color: SukaTeaColors.muted),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Batal'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Simpan'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved != true || !mounted) return null;
+    final newName = name.text.trim();
+    if (newName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nama produk harus diisi.')),
+      );
+      return null;
+    }
+    final r = int.tryParse(reguler.text) ?? product?.variants.first.price ?? 0;
+    final j = int.tryParse(jumbo.text) ?? product?.variants.last.price ?? 0;
+    if (r <= 0 || j <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Harga Reguler dan Jumbo harus > 0.')),
+      );
+      return null;
+    }
+    final id = product?.id ?? _newProductId(newName);
+    return Product(
+      id: id,
+      name: newName,
+      category: category,
+      photoUrl: photoUrl,
+      isActive: product?.isActive ?? true,
+      variants: [
+        ProductVariant(id: '${id}_r', name: 'Reguler', sizeOz: 16, price: r),
+        ProductVariant(id: '${id}_j', name: 'Jumbo', sizeOz: 22, price: j),
+      ],
+    );
+  }
+
+  /// Id unik dari nama: slug + stempel waktu (supaya dua produk
+  /// bernama sama tidak bentrok). Resep produk baru masih kosong —
+  /// Owner menambahkannya lewat tombol Resep.
+  String _newProductId(String name) {
+    final slug = name
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+    final base = slug.isEmpty ? 'produk' : slug;
+    return '$base-${DateTime.now().microsecondsSinceEpoch}';
+  }
+
+  Future<void> _addProduct() async {
+    final product = await _productForm();
+    if (product == null || !mounted) return;
+    await MenuService.instance.addProduct(product);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${product.name} ditambahkan ke menu.')),
+      );
+    }
   }
 
   Future<void> _editProduct(Product product) async {
-    final name = TextEditingController(text: product.name);
-    final reguler = TextEditingController(
-      text: product.variants.first.price.toString(),
-    );
-    final jumbo = TextEditingController(
-      text: product.variants.last.price.toString(),
-    );
-    var category = product.category;
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Ubah produk — ${product.name}'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: name,
-                decoration: const InputDecoration(labelText: 'Nama produk'),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: menuCategories.contains(category) ? category : null,
-                decoration: const InputDecoration(labelText: 'Kategori'),
-                items: [
-                  for (final c in menuCategories)
-                    DropdownMenuItem(value: c, child: Text(c)),
-                ],
-                onChanged: (v) {
-                  if (v != null) category = v;
-                },
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: reguler,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Reguler (Rp)'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: jumbo,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Jumbo (Rp)'),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Batal'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Simpan'),
-          ),
-        ],
-      ),
-    );
-    if (saved != true || !mounted) return;
-    final newName = name.text.trim().isEmpty ? product.name : name.text.trim();
-    final r = int.tryParse(reguler.text) ?? product.variants.first.price;
-    final j = int.tryParse(jumbo.text) ?? product.variants.last.price;
-    _replaceProduct(
-      Product(
-        id: product.id,
-        name: newName,
-        category: category,
-        photoUrl: product.photoUrl,
-        variants: [
-          ProductVariant(id: '${product.id}_r', name: 'Reguler', sizeOz: 16, price: r),
-          ProductVariant(id: '${product.id}_j', name: 'Jumbo', sizeOz: 22, price: j),
-        ],
-      ),
-    );
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$newName diperbarui (lokal — sinkron Supabase di M1).'),
-      ),
-    );
+    final updated = await _productForm(product: product);
+    if (updated == null || !mounted) return;
+    await MenuService.instance.updateProduct(updated);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${updated.name} diperbarui.')),
+      );
+    }
   }
 
   /// Buka editor resep produk. Setelah kembali, refresh (resep tidak
@@ -138,9 +218,10 @@ class _KatalogPageState extends State<KatalogPage> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _changePhoto(Product product) async {
-    final selected = product.photoUrl;
-    final picked = await showDialog<String?>(
+  /// Pemilih foto dari 20 foto poster bawaan. '' = hapus foto,
+  /// null = batal.
+  Future<String?> _pickPhoto(String? selected) async {
+    return showDialog<String?>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Ganti foto produk'),
@@ -191,128 +272,230 @@ class _KatalogPageState extends State<KatalogPage> {
         ],
       ),
     );
+  }
+
+  Future<void> _changePhoto(Product product) async {
+    final picked = await _pickPhoto(product.photoUrl);
     if (picked == null || !mounted) return;
-    _replaceProduct(
+    await MenuService.instance.updateProduct(
       Product(
         id: product.id,
         name: product.name,
         category: product.category,
         photoUrl: picked.isEmpty ? null : picked,
         variants: product.variants,
+        isActive: product.isActive,
       ),
     );
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          picked.isEmpty
-              ? 'Foto ${product.name} dihapus (lokal — sinkron Supabase di M1).'
-              : 'Foto ${product.name} diganti (lokal — sinkron Supabase di M1).',
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            picked.isEmpty
+                ? 'Foto ${product.name} dihapus.'
+                : 'Foto ${product.name} diganti.',
+          ),
         ),
+      );
+    }
+  }
+
+  Future<void> _deleteProduct(Product product) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Hapus ${product.name}?'),
+        content: const Text(
+          'Produk hilang dari Kasir dan Kelola Menu. '
+          'Riwayat penjualan yang sudah ada tidak ikut terhapus.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: SukaTeaColors.danger,
+            ),
+            child: const Text('Hapus'),
+          ),
+        ],
       ),
     );
+    if (ok != true || !mounted) return;
+    await MenuService.instance.removeProduct(product.id);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${product.name} dihapus dari menu.')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(12),
-      itemCount: _products.length + 1,
-      itemBuilder: (context, index) {
-        if (index == 0) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+    return ListenableBuilder(
+      listenable: MenuService.instance,
+      builder: (context, _) {
+        final products = _visible;
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+              child: TextField(
+                onChanged: (q) => setState(() => _query = q),
+                decoration: const InputDecoration(
+                  hintText: 'Cari produk…',
+                  prefixIcon: Icon(Icons.search),
+                ),
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.all(12),
+                itemCount: products.length + 1,
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Row(
+                            children: [
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Kelola Menu',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 18,
+                                      ),
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'Nama, kategori, harga, dan foto di-custom di sini. '
+                                      'Perubahan langsung tampil di Kasir dan tersimpan.',
+                                      style: TextStyle(
+                                        color: SukaTeaColors.muted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (_canEdit)
+                                FilledButton.icon(
+                                  onPressed: _addProduct,
+                                  icon: SvgPicture.asset(
+                                    AppIcons.tambah,
+                                    width: 20,
+                                    height: 20,
+                                    colorFilter: const ColorFilter.mode(
+                                      Colors.white,
+                                      BlendMode.srcIn,
+                                    ),
+                                  ),
+                                  label: const Text('Tambah'),
+                                )
+                              else
+                                const Chip(label: Text('Kasir: lihat saja')),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                  final p = products[index - 1];
+                  return Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
                         children: [
-                          Text(
-                            'Kelola Menu',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w800,
-                              fontSize: 18,
+                          InkWell(
+                            onTap: _canEdit ? () => _changePhoto(p) : null,
+                            borderRadius: BorderRadius.circular(14),
+                            child: ProductPhoto(
+                              photoUrl: p.photoUrl,
+                              width: 56,
+                              height: 56,
                             ),
                           ),
-                          SizedBox(height: 4),
-                          Text(
-                            'Nama, kategori, harga, dan foto di-custom di sini. '
-                            'Foto bawaan dari poster — upload foto sendiri ke Supabase Storage (M1).',
-                            style: TextStyle(color: SukaTeaColors.muted),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  p.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '${p.category} • ${formatRupiah(p.variants.first.price)} / '
+                                  '${formatRupiah(p.variants.last.price)}'
+                                  '${p.isActive ? '' : ' • Habis'}',
+                                  style: TextStyle(
+                                    color: p.isActive
+                                        ? SukaTeaColors.muted
+                                        : SukaTeaColors.danger,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: p.isActive
+                                ? 'Tandai habis'
+                                : 'Tandai aktif lagi',
+                            icon: Icon(
+                              p.isActive
+                                  ? Icons.visibility
+                                  : Icons.visibility_off,
+                            ),
+                            onPressed: _canEdit
+                                ? () => MenuService.instance.setActive(
+                                      p.id,
+                                      !p.isActive,
+                                    )
+                                : null,
+                          ),
+                          IconButton(
+                            tooltip: 'Resep bahan per cup',
+                            icon: const Icon(Icons.menu_book),
+                            onPressed:
+                                _canEdit ? () => _openResep(p) : null,
+                          ),
+                          IconButton(
+                            tooltip: 'Ganti foto produk',
+                            icon: const Icon(Icons.photo_camera),
+                            onPressed:
+                                _canEdit ? () => _changePhoto(p) : null,
+                          ),
+                          IconButton(
+                            tooltip: 'Ubah nama / kategori / harga',
+                            icon: const Icon(Icons.edit),
+                            onPressed:
+                                _canEdit ? () => _editProduct(p) : null,
+                          ),
+                          IconButton(
+                            tooltip: 'Hapus produk',
+                            icon: const Icon(Icons.delete),
+                            onPressed:
+                                _canEdit ? () => _deleteProduct(p) : null,
                           ),
                         ],
                       ),
                     ),
-                    if (_canEdit)
-                      FilledButton.icon(
-                        onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Tambah menu — M1')),
-                        ),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Tambah'),
-                      )
-                    else
-                      const Chip(label: Text('Kasir: lihat saja')),
-                  ],
-                ),
+                  );
+                },
               ),
             ),
-          );
-        }
-        final p = _products[index - 1];
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                InkWell(
-                  onTap: _canEdit ? () => _changePhoto(p) : null,
-                  borderRadius: BorderRadius.circular(14),
-                  child: ProductPhoto(
-                    photoUrl: p.photoUrl,
-                    width: 56,
-                    height: 56,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        p.name,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${p.category} • ${formatRupiah(p.variants.first.price)} / '
-                        '${formatRupiah(p.variants.last.price)}',
-                        style: const TextStyle(color: SukaTeaColors.muted),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Resep bahan per cup',
-                  icon: const Icon(Icons.menu_book),
-                  onPressed: _canEdit ? () => _openResep(p) : null,
-                ),
-                IconButton(
-                  tooltip: 'Ganti foto produk',
-                  icon: const Icon(Icons.photo_camera),
-                  onPressed: _canEdit ? () => _changePhoto(p) : null,
-                ),
-                IconButton(
-                  tooltip: 'Ubah nama / kategori / harga',
-                  icon: const Icon(Icons.edit),
-                  onPressed: _canEdit ? () => _editProduct(p) : null,
-                ),
-              ],
-            ),
-          ),
+          ],
         );
       },
     );

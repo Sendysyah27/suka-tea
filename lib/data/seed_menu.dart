@@ -137,3 +137,20 @@ List<StockItem> seedStock() => const [
       StockItem(name: 'Yakult', unit: 'pcs', qty: 24, lowThreshold: 12),
       StockItem(name: 'Lemon', unit: 'pcs', qty: 20, lowThreshold: 10),
     ];
+
+/// Estimasi biaya bahan per satuan (rupiah) — HANYA untuk HPP estimasi
+/// di Keuangan/Laporan. Angka perkiraan pasar 2026, BUKAN harga beli
+/// aktual; UI wajib menulis "estimasi". Bahan yang tidak ada di peta
+/// ini dihitung Rp0.
+const Map<String, double> seedStockCostPerUnit = {
+  'Teh': 120000,
+  'Gula': 18000,
+  'Cup 16oz': 500,
+  'Cup 22oz': 600,
+  'Es batu': 5000,
+  'Sedotan': 100,
+  'Susu bubuk': 60000,
+  'Bubuk perasa': 80000,
+  'Yakult': 3500,
+  'Lemon': 2000,
+};

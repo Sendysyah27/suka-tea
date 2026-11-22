@@ -49,7 +49,7 @@ class SukaTeaTheme {
       fontFamily: 'PlusJakartaSans',
       useMaterial3: true,
       textTheme: const TextTheme(
-        titleLarge: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+        titleLarge: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
         titleMedium: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
         bodyMedium: TextStyle(fontSize: 14),
         bodySmall: TextStyle(fontSize: 12),
@@ -99,7 +99,7 @@ class SukaTeaTheme {
       chipTheme: ChipThemeData(
         backgroundColor: SukaTeaColors.emeraldSoft,
         selectedColor: SukaTeaColors.emerald,
-        labelStyle: const TextStyle(color: SukaTeaColors.ink),
+        labelStyle: const TextStyle(color: SukaTeaColors.ink, fontSize: 13),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(999),
         ),
@@ -112,15 +112,15 @@ class SukaTeaTheme {
           vertical: 14,
         ),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: SukaTeaColors.border),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: SukaTeaColors.border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(
             color: SukaTeaColors.emerald,
             width: 1.5,

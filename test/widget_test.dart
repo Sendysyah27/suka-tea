@@ -20,15 +20,17 @@ void main() {
     expect(find.text('Es Teh Jumbo'), findsOneWidget);
   });
 
-  testWidgets('Tap Reguler menambah keranjang dan total', (tester) async {
+  testWidgets('Tap + menambah keranjang dan total', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(home: Scaffold(body: KasirPage(role: AppRole.owner))),
     );
     await tester.pump();
-    await tester.tap(find.text('Reguler').first);
+    // Tombol "+" lingkaran di kartu pertama (mockup frame 01):
+    // quick-add Reguler pertama = Manggo Milktea, harga poster 8K.
+    await tester.tap(find.byIcon(Icons.add).first);
     await tester.pump();
     // Total keranjang berubah dari Rp0 menjadi Rp8.000
-    // (Reguler pertama = Manggo Milktea, harga poster 8K).
+    // (baris Total di panel keranjang, layout tablet 800x600).
     expect(find.text('Rp8.000'), findsWidgets);
   });
 

@@ -57,12 +57,34 @@ class ProductRecipes extends Table {
   Set<Column> get primaryKey => {variantId, stockName};
 }
 
-@DriftDatabase(tables: [OutboxEntries, LocalProducts, StockLevels, ProductRecipes])
+/// Riwayat penjualan selesai (lokal, append-only). Satu baris per
+/// transaksi yang sudah dibayar. itemsJson = daftar SaleItem (JSON).
+/// Dipakai tab Keuangan + Laporan (data nyata) dan halaman Riwayat.
+class SaleHistory extends Table {
+  TextColumn get id => text()();
+  DateTimeColumn get createdAt => dateTime()();
+  TextColumn get itemsJson => text()();
+  IntColumn get total => integer()();
+  TextColumn get method => text()();
+  IntColumn get paid => integer()();
+  IntColumn get change => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DriftDatabase(tables: [
+  OutboxEntries,
+  LocalProducts,
+  StockLevels,
+  ProductRecipes,
+  SaleHistory,
+])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -72,6 +94,11 @@ class AppDatabase extends _$AppDatabase {
           if (from < 2) {
             await m.createTable(stockLevels);
             await m.createTable(productRecipes);
+          }
+          // v2 -> v3 (22 Nov 2026): tambah tabel riwayat penjualan.
+          // Tabel lama TIDAK dihapus.
+          if (from < 3) {
+            await m.createTable(saleHistory);
           }
         },
       );

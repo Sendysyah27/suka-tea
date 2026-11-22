@@ -80,12 +80,21 @@ class CartItem {
       variant.price + modifiers.fold(0, (s, m) => s + m.priceDelta);
   int get total => unitPrice * qty;
 
-  String get label {
-    final mods = modifiers.isEmpty
-        ? ''
-        : ' (${modifiers.map((m) => m.name).join(', ')})';
-    return '${product.name} ${variant.name}$mods';
+  /// "Es Teh Lemon Reguler" (tanpa modifier).
+  String get nameText => '${product.name} ${variant.name}';
+
+  /// "(Normal, Es Normal)" — topping ditulis "+Nama"
+  /// ("(Normal, Es Normal, +Boba)"). Kosong bila tanpa modifier.
+  String get modifierText {
+    if (modifiers.isEmpty) return '';
+    final parts = modifiers.map(
+      (m) => m.kind == 'topping' ? '+${m.name}' : m.name,
+    );
+    return '(${parts.join(', ')})';
   }
+
+  String get label =>
+      modifiers.isEmpty ? nameText : '$nameText $modifierText';
 }
 
 class StockItem {
@@ -102,4 +111,29 @@ class StockItem {
   final double lowThreshold;
 
   bool get isLow => qty <= lowThreshold;
+}
+
+/// Satu baris struk — dipakai halaman struk, share teks, dan PDF.
+/// Dibuat dari CartItem (kasir) atau langsung dari SaleItem (riwayat).
+class ReceiptLine {
+  const ReceiptLine({
+    required this.name,
+    required this.modifierText,
+    required this.qty,
+    required this.unitPrice,
+  });
+
+  final String name; // "Es Teh Lemon Reguler"
+  final String modifierText; // "(Normal, Es Normal)" atau ''
+  final int qty;
+  final int unitPrice;
+
+  int get total => qty * unitPrice;
+
+  factory ReceiptLine.fromCartItem(CartItem item) => ReceiptLine(
+        name: item.nameText,
+        modifierText: item.modifierText,
+        qty: item.qty,
+        unitPrice: item.unitPrice,
+      );
 }

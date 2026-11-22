@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/cash.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import 'qris_service.dart';
@@ -45,8 +46,9 @@ class _QrisPayPageState extends State<QrisPayPage> {
     super.initState();
     _nominal = widget.total;
     _nominalController = TextEditingController(text: _nominal.toString());
-    final rounded = ((widget.total + 999) ~/ 1000) * 1000;
-    _roundedUp = rounded == widget.total ? rounded + 1000 : rounded;
+    // Pembulatan ke Rp500 (dulu Rp1.000).
+    final rounded = roundUpTo500(widget.total);
+    _roundedUp = rounded;
     _merchantName = QrisSettingsService.instance.merchantName;
   }
 
@@ -228,6 +230,18 @@ class _QrisPayPageState extends State<QrisPayPage> {
                   selected: _nominal == _roundedUp,
                   onSelected: (_) => _setNominal(_roundedUp),
                 ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final preset in [5000, 10000, 20000, 50000, 100000])
+                  ChoiceChip(
+                    label: Text(formatRupiah(preset)),
+                    selected: _nominal == preset,
+                    onSelected: (_) => _setNominal(preset),
+                  ),
               ],
             ),
             const SizedBox(height: 12),

@@ -20,6 +20,8 @@ class StokPage extends StatefulWidget {
 }
 
 class _StokPageState extends State<StokPage> {
+  String _filter = 'Semua';
+
   bool get _canEdit => widget.role.canManageStock;
 
   /// Format jumlah: 120 -> "120", 2.5 -> "2,5" (koma Indonesia).
@@ -197,8 +199,8 @@ class _StokPageState extends State<StokPage> {
       body: ListenableBuilder(
         listenable: StockService.instance,
         builder: (context, _) {
-          final items = StockService.instance.levels;
-          if (items.isEmpty) {
+          final allItems = StockService.instance.levels;
+          if (allItems.isEmpty) {
             return const Center(
               child: Text(
                 'Stok belum siap.\nTutup lalu buka lagi tab ini.',
@@ -207,10 +209,46 @@ class _StokPageState extends State<StokPage> {
               ),
             );
           }
-          return ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: items.length,
-            itemBuilder: (context, i) {
+          final items = _filter == 'Menipis'
+              ? allItems.where((s) => s.isLow).toList()
+              : allItems;
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                child: Row(
+                  children: [
+                    for (final f in const ['Semua', 'Menipis'])
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: ChoiceChip(
+                          label: Text(
+                            f == 'Menipis'
+                                ? 'Menipis (${allItems.where((s) => s.isLow).length})'
+                                : f,
+                          ),
+                          selected: _filter == f,
+                          onSelected: (_) => setState(() => _filter = f),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (items.isEmpty)
+                const Expanded(
+                  child: Center(
+                    child: Text(
+                      'Tidak ada bahan yang menipis.',
+                      style: TextStyle(color: SukaTeaColors.muted),
+                    ),
+                  ),
+                )
+              else
+                Expanded(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(12),
+                    itemCount: items.length,
+                    itemBuilder: (context, i) {
               final StockItem item = items[i];
               final fraction =
                   (item.qty / (item.lowThreshold * 3)).clamp(0.0, 1.0);
@@ -282,7 +320,10 @@ class _StokPageState extends State<StokPage> {
                   ),
                 ),
               );
-            },
+                    },
+                  ),
+                ),
+            ],
           );
         },
       ),

@@ -3,23 +3,22 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
+import '../../data/models.dart';
+import '../../data/sale_history.dart';
+import '../../data/seed_menu.dart';
+import '../../data/stock_service.dart';
 
 /// Keuangan — HANYA Owner. Desain v2: hero card emerald gelap untuk
-/// omzet + laba, lalu rincian per cara bayar. Angka di bawah adalah
-/// CONTOH tampilan; data nyata berasal dari v_daily_summary (RLS
-/// Owner-only) di M3/M4.
+/// omzet + laba, lalu rincian per cara bayar.
+///
+/// DATA NYATA dari riwayat penjualan hari ini (bukan lagi angka contoh):
+/// omzet, jumlah transaksi, jumlah cup, rata-rata per transaksi, dan
+/// HPP + laba ESTIMASI (resep x biaya bahan — lihat seedStockCostPerUnit).
+/// Pengeluaran harian belum dicatat di app, jadi belum dikurangi dari laba.
 class KeuanganPage extends StatelessWidget {
   const KeuanganPage({super.key, required this.role});
 
   final AppRole role;
-
-  static const int tunai = 125000;
-  static const int transfer = 45000;
-  static const int qris = 15000;
-  static const int qrisManual = 30000;
-  static const int ewallet = 20000;
-  static const int hpp = 70000;
-  static const int pengeluaran = 60000;
 
   @override
   Widget build(BuildContext context) {
@@ -35,97 +34,144 @@ class KeuanganPage extends StatelessWidget {
         ),
       );
     }
-    const omzet = tunai + transfer + qris + qrisManual + ewallet;
-    const laba = omzet - hpp - pengeluaran;
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: SukaTeaColors.emeraldDark,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Omzet hari ini (contoh)',
-                style: TextStyle(color: Colors.white70),
+    return ListenableBuilder(
+      listenable: SaleHistoryService.instance,
+      builder: (context, _) {
+        final today = SaleHistoryService.instance.salesOn(DateTime.now());
+        if (today.isEmpty) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Belum ada transaksi hari ini.\n'
+                'Omzet, laba, dan rincian muncul setelah ada penjualan.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: SukaTeaColors.muted),
               ),
-              const SizedBox(height: 6),
-              Text(
-                formatRupiah(omzet),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 32,
-                ),
+            ),
+          );
+        }
+        final stats = computeDailyStats(
+          today,
+          StockService.instance.recipes,
+          seedStockCostPerUnit,
+        );
+        return ListView(
+          padding: const EdgeInsets.all(12),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: SukaTeaColors.emeraldDark,
+                borderRadius: BorderRadius.circular(20),
               ),
-              const SizedBox(height: 12),
-              const Divider(color: Colors.white24, height: 1),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Laba bersih (contoh)',
+                    'Omzet hari ini',
                     style: TextStyle(color: Colors.white70),
                   ),
+                  const SizedBox(height: 6),
                   Text(
-                    formatRupiah(laba),
+                    formatRupiah(stats.omzet),
                     style: const TextStyle(
                       color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 32,
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Divider(color: Colors.white24, height: 1),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Laba (estimasi)',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                      Text(
+                        formatRupiah(stats.labaEstimate),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'Per cara bayar',
-          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-        ),
-        const SizedBox(height: 8),
-        _row('Tunai', tunai, SukaTeaColors.cash),
-        _row('Transfer', transfer, SukaTeaColors.cashless),
-        _row('QRIS', qris, SukaTeaColors.cashless),
-        _row('QRIS (manual)', qrisManual, SukaTeaColors.cashless),
-        _row('E-Wallet', ewallet, SukaTeaColors.cashless),
-        const SizedBox(height: 16),
-        const Text(
-          'Biaya',
-          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-        ),
-        const SizedBox(height: 8),
-        _row('HPP (contoh)', -hpp, SukaTeaColors.danger),
-        _row('Pengeluaran (contoh)', -pengeluaran, SukaTeaColors.danger),
-      ],
+            ),
+            const SizedBox(height: 16),
+            _row(
+              'Transaksi hari ini',
+              '${stats.txnCount} transaksi • ${stats.cups} cup',
+            ),
+            _row(
+              'Rata-rata per transaksi',
+              formatRupiah(stats.avgPerTxn),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Per cara bayar',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            for (final m in PaymentMethod.values)
+              if ((stats.byMethod[m] ?? 0) > 0)
+                _row(
+                  m.label,
+                  formatRupiah(stats.byMethod[m]!),
+                  dotColor:
+                      m.isCashless ? SukaTeaColors.cashless : SukaTeaColors.cash,
+                ),
+            const SizedBox(height: 16),
+            const Text(
+              'Biaya',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            _row(
+              'HPP (estimasi)',
+              '-${formatRupiah(stats.hppEstimate)}',
+              dotColor: SukaTeaColors.danger,
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text(
+                'HPP dihitung dari resep x biaya bahan (estimasi pasar). '
+                'Pengeluaran harian belum dicatat, jadi belum dikurangi dari laba.',
+                style: TextStyle(color: SukaTeaColors.muted),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
-  Widget _row(String label, int amount, Color color) {
+  Widget _row(String label, String value, {Color? dotColor}) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
-            Container(
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
+            if (dotColor != null) ...[
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: dotColor,
+                  shape: BoxShape.circle,
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
+              const SizedBox(width: 12),
+            ],
             Expanded(child: Text(label)),
             Text(
-              formatRupiah(amount),
+              value,
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ],
