@@ -37,14 +37,14 @@ class ProductPhoto extends StatelessWidget {
             width: width,
             height: height,
             fit: BoxFit.cover,
-            errorBuilder: (_, _, __) => _placeholder(),
+            errorBuilder: (context, error, stackTrace) => _placeholder(),
           )
         : Image.network(
             url,
             width: width,
             height: height,
             fit: BoxFit.cover,
-            errorBuilder: (_, _, __) => _placeholder(),
+            errorBuilder: (context, error, stackTrace) => _placeholder(),
           );
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
