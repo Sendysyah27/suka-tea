@@ -528,9 +528,16 @@ class _CartPanel extends StatelessWidget {
         border: Border(left: BorderSide(color: SukaTeaColors.border)),
       ),
       padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Layar pendek (landscape POVA, tinggi konten < 430dp): kolom
+          // panel tanpa scroll overflow 61px (ketangkep 22 Nov 22:19).
+          // Mode pendek: chip 1 baris scroll horizontal + teks kosong
+          // 1 baris, supaya Total + Bayar tetap muat.
+          final short = constraints.maxHeight < 430;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
           Text(
             'Keranjang',
             style: Theme.of(context)
@@ -541,11 +548,13 @@ class _CartPanel extends StatelessWidget {
           const SizedBox(height: 12),
           Expanded(
             child: cart.isEmpty
-                ? const Center(
+                ? Center(
                     child: Text(
-                      'Belum ada item.\nTap ukuran di menu.',
+                      short
+                          ? 'Belum ada item.'
+                          : 'Belum ada item.\nTap ukuran di menu.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: SukaTeaColors.muted),
+                      style: const TextStyle(color: SukaTeaColors.muted),
                     ),
                   )
                 : ListView.builder(
@@ -628,18 +637,35 @@ class _CartPanel extends StatelessWidget {
           ),
           const Divider(height: 1),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final m in PaymentMethod.values)
-                ChoiceChip(
-                  label: Text(m.label),
-                  selected: method == m,
-                  onSelected: (_) => onMethod(m),
+          short
+              ? SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final m in PaymentMethod.values)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            label: Text(m.label),
+                            selected: method == m,
+                            onSelected: (_) => onMethod(m),
+                          ),
+                        ),
+                    ],
+                  ),
+                )
+              : Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final m in PaymentMethod.values)
+                      ChoiceChip(
+                        label: Text(m.label),
+                        selected: method == m,
+                        onSelected: (_) => onMethod(m),
+                      ),
+                  ],
                 ),
-            ],
-          ),
           const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -668,7 +694,9 @@ class _CartPanel extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
           ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
