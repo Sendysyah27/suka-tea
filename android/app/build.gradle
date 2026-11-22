@@ -15,6 +15,14 @@ if (flutterVersionCode == null) {
     flutterVersionCode = '1'
 }
 
+// Keystore tetap (CI): android/keystore.properties dibuat workflow dari
+// GitHub secrets. Tanpa file ini, build memakai debug keystore biasa.
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withReader('UTF-8') { reader -> keystoreProperties.load(reader) }
+}
+
 def flutterVersionName = localProperties.getProperty('flutter.versionName')
 if (flutterVersionName == null) {
     flutterVersionName = '0.1.0'
@@ -48,9 +56,33 @@ android {
         versionName = flutterVersionName
     }
 
+    // Keystore tetap: bila keystore.properties ada, build ditandatangani
+    // keystore SUKA TEA — signature konsisten antar build, update APK
+    // tanpa uninstall. Tanpa file itu, fallback ke debug keystore biasa.
+    if (keystorePropertiesFile.exists()) {
+        signingConfigs {
+            sukaTea {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                storeType 'PKCS12'
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.sukaTea
+            }
+        }
         release {
-            signingConfig = signingConfigs.debug
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.sukaTea
+            } else {
+                signingConfig signingConfigs.debug
+            }
         }
     }
 }

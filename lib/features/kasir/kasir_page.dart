@@ -9,7 +9,9 @@ import '../../data/seed_menu.dart';
 import '../qris/qris_pay_page.dart';
 import 'receipt.dart';
 
-/// Layar Kasir — layar utama. Responsif:
+/// Layar Kasir — layar utama. Desain v2 "SUKA TEA Minimal Stylish":
+/// kartu putih radius 20, foto produk blok mint, tombol Bayar 56px dengan
+/// status "Memproses…" + anti double-tap. Responsif:
 /// <600dp satu kolom + bar bawah, 600–840dp dua panel,
 /// >840dp tiga zona (kategori | grid menu | keranjang permanen).
 class KasirPage extends StatefulWidget {
@@ -25,6 +27,8 @@ class _KasirPageState extends State<KasirPage> {
   final List<CartItem> _cart = [];
   PaymentMethod _method = PaymentMethod.tunai;
   String _category = 'Semua';
+  String _query = '';
+  bool _isProcessing = false;
   late final List<Product> _menu;
 
   @override
@@ -33,9 +37,14 @@ class _KasirPageState extends State<KasirPage> {
     _menu = seedMenu();
   }
 
-  List<Product> get _visible => _category == 'Semua'
-      ? _menu
-      : _menu.where((p) => p.category == _category).toList();
+  List<Product> get _visible {
+    final byCategory = _category == 'Semua'
+        ? _menu
+        : _menu.where((p) => p.category == _category).toList();
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return byCategory;
+    return byCategory.where((p) => p.name.toLowerCase().contains(q)).toList();
+  }
 
   int get _total => _cart.fold(0, (sum, item) => sum + item.total);
 
@@ -69,34 +78,42 @@ class _KasirPageState extends State<KasirPage> {
   }
 
   Future<void> _bayar() async {
-    if (_cart.isEmpty) return;
-    if (_method == PaymentMethod.qris) {
-      // QRIS dinamis: nominal bisa di-custom di layar QRIS, konfirmasi
-      // bayar manual oleh kasir (cek mutasi dulu).
+    // Anti double-tap: tanpa guard ini, dua ketukan cepat meng-enqueue
+    // dua transaksi yang sama (laporan Sendy: "tombol bayar kurang
+    // responsif" — tidak ada feedback bahwa ketukan pertama diproses).
+    if (_cart.isEmpty || _isProcessing) return;
+    setState(() => _isProcessing = true);
+    try {
+      if (_method == PaymentMethod.qris) {
+        // QRIS dinamis: nominal bisa di-custom di layar QRIS, konfirmasi
+        // bayar manual oleh kasir (cek mutasi dulu).
+        final items = List<CartItem>.from(_cart);
+        final paidNominal = await Navigator.of(context).push<int>(
+          MaterialPageRoute(
+            builder: (_) => QrisPayPage(total: _total, role: widget.role),
+          ),
+        );
+        if (paidNominal == null || !mounted) return;
+        await _selesaikanBayar(
+          items: items,
+          total: paidNominal,
+          method: PaymentMethod.qris,
+          paid: paidNominal,
+        );
+        return;
+      }
       final items = List<CartItem>.from(_cart);
-      final paidNominal = await Navigator.of(context).push<int>(
-        MaterialPageRoute(
-          builder: (_) => QrisPayPage(total: _total, role: widget.role),
-        ),
-      );
-      if (paidNominal == null || !mounted) return;
+      final total = _total;
+      // Tunai/transfer/QRIS manual/e-wallet: bayar pas.
       await _selesaikanBayar(
         items: items,
-        total: paidNominal,
-        method: PaymentMethod.qris,
-        paid: paidNominal,
+        total: total,
+        method: _method,
+        paid: total,
       );
-      return;
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
     }
-    final items = List<CartItem>.from(_cart);
-    final total = _total;
-    // Tunai/transfer/QRIS manual/e-wallet: bayar pas.
-    await _selesaikanBayar(
-      items: items,
-      total: total,
-      method: _method,
-      paid: total,
-    );
   }
 
   /// Catat transaksi ke outbox + tampilkan struk digital.
@@ -135,6 +152,8 @@ class _KasirPageState extends State<KasirPage> {
         final menu = _MenuSection(
           visible: _visible,
           category: _category,
+          query: _query,
+          onQuery: (q) => setState(() => _query = q),
           onCategory: (c) => setState(() => _category = c),
           onAdd: _add,
         );
@@ -142,6 +161,7 @@ class _KasirPageState extends State<KasirPage> {
           cart: _cart,
           total: _total,
           method: _method,
+          isProcessing: _isProcessing,
           onMethod: (m) => setState(() => _method = m),
           onQty: _changeQty,
           onBayar: _bayar,
@@ -172,12 +192,42 @@ class _KasirPageState extends State<KasirPage> {
             _BottomBar(
               total: _total,
               count: _count,
+              isProcessing: _isProcessing,
+              // Sheet keranjang harus ikut ke-refresh tiap ada perubahan:
+              // showModalBottomSheet itu route terpisah, jadi setState di
+              // halaman Kasir TIDAK me-rebuild isi sheet (qty +/-, pilihan
+              // cara bayar, dan isi setelah bayar jadi basi). StatefulBuilder
+              // bikin sheet me-rebuild bareng setiap perubahan state.
               onCart: () => showModalBottomSheet<void>(
                 context: context,
                 isScrollControlled: true,
-                builder: (_) => SizedBox(
-                  height: MediaQuery.of(context).size.height * 0.75,
-                  child: cart,
+                builder: (sheetContext) => StatefulBuilder(
+                  builder: (context, setSheetState) {
+                    void refreshSheet() => setSheetState(() {});
+                    return SizedBox(
+                      height: MediaQuery.of(context).size.height * 0.75,
+                      child: _CartPanel(
+                        cart: _cart,
+                        total: _total,
+                        method: _method,
+                        isProcessing: _isProcessing,
+                        onMethod: (m) {
+                          setState(() => _method = m);
+                          refreshSheet();
+                        },
+                        onQty: (i, d) {
+                          _changeQty(i, d);
+                          refreshSheet();
+                        },
+                        // Tutup sheet dulu baru proses bayar, supaya struk
+                        // tidak ketumpuk di atas sheet berisi item lama.
+                        onBayar: () {
+                          Navigator.of(sheetContext).pop();
+                          _bayar();
+                        },
+                      ),
+                    );
+                  },
                 ),
               ),
               onBayar: _bayar,
@@ -220,12 +270,16 @@ class _MenuSection extends StatelessWidget {
   const _MenuSection({
     required this.visible,
     required this.category,
+    required this.query,
+    required this.onQuery,
     required this.onCategory,
     required this.onAdd,
   });
 
   final List<Product> visible;
   final String category;
+  final String query;
+  final ValueChanged<String> onQuery;
   final ValueChanged<String> onCategory;
   final void Function(Product, ProductVariant) onAdd;
 
@@ -233,6 +287,22 @@ class _MenuSection extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+          child: TextField(
+            onChanged: onQuery,
+            decoration: InputDecoration(
+              hintText: 'Cari es teh…',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: query.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => onQuery(''),
+                    ),
+            ),
+          ),
+        ),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -251,61 +321,97 @@ class _MenuSection extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: GridView.builder(
-            padding: const EdgeInsets.all(12),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 230,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 0.78,
-            ),
-            itemCount: visible.length,
-            itemBuilder: (context, i) {
-              final p = visible[i];
-              return Card(
-                child: Padding(
+          child: visible.isEmpty
+              ? const Center(
+                  child: Text('Tidak ada menu yang cocok.\nCoba kata lain.'),
+                )
+              : GridView.builder(
                   padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(p.name,
-                          style: Theme.of(context).textTheme.titleMedium),
-                      Text(p.category,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(color: SukaTeaColors.muted)),
-                      const Spacer(),
-                      Text(
-                        '${formatRupiah(p.variants.first.price)} – '
-                        '${formatRupiah(p.variants.last.price)}',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          for (final v in p.variants)
-                            Expanded(
-                              child: Padding(
-                                padding: const EdgeInsets.only(right: 6),
-                                child: OutlinedButton(
-                                  style: OutlinedButton.styleFrom(
-                                    minimumSize: const Size(0, 48),
-                                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                                  ),
-                                  onPressed: () => onAdd(p, v),
-                                  child: Text(v.name, overflow: TextOverflow.ellipsis),
+                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 230,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 0.72,
+                  ),
+                  itemCount: visible.length,
+                  itemBuilder: (context, i) {
+                    final p = visible[i];
+                    return Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Blok foto produk (placeholder sampai foto
+                            // di-upload Owner via Kelola Menu, M1).
+                            Container(
+                              height: 72,
+                              decoration: BoxDecoration(
+                                color: SukaTeaColors.emeraldSoft,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.local_drink,
+                                  size: 32,
+                                  color: SukaTeaColors.emerald,
                                 ),
                               ),
                             ),
-                        ],
+                            const SizedBox(height: 10),
+                            Text(
+                              p.name,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              p.category,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(color: SukaTeaColors.muted),
+                            ),
+                            const Spacer(),
+                            Text(
+                              '${formatRupiah(p.variants.first.price)} – '
+                              '${formatRupiah(p.variants.last.price)}',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                for (final v in p.variants)
+                                  Expanded(
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(right: 6),
+                                      child: OutlinedButton(
+                                        style: OutlinedButton.styleFrom(
+                                          minimumSize: const Size(0, 48),
+                                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                        ),
+                                        onPressed: () => onAdd(p, v),
+                                        child: Text(
+                                          v.name,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
-              );
-            },
-          ),
         ),
       ],
     );
@@ -317,6 +423,7 @@ class _CartPanel extends StatelessWidget {
     required this.cart,
     required this.total,
     required this.method,
+    required this.isProcessing,
     required this.onMethod,
     required this.onQty,
     required this.onBayar,
@@ -325,9 +432,27 @@ class _CartPanel extends StatelessWidget {
   final List<CartItem> cart;
   final int total;
   final PaymentMethod method;
+  final bool isProcessing;
   final ValueChanged<PaymentMethod> onMethod;
   final void Function(int, int) onQty;
   final VoidCallback onBayar;
+
+  Widget _stepperButton(IconData icon, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: SukaTeaColors.leafBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: SukaTeaColors.border),
+        ),
+        child: Icon(icon, size: 18, color: SukaTeaColors.ink),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -336,34 +461,90 @@ class _CartPanel extends StatelessWidget {
         color: SukaTeaColors.card,
         border: Border(left: BorderSide(color: SukaTeaColors.border)),
       ),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Keranjang', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
+          Text(
+            'Keranjang',
+            style: Theme.of(context)
+                .textTheme
+                .titleMedium
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 12),
           Expanded(
             child: cart.isEmpty
-                ? const Center(child: Text('Belum ada item.\nTap ukuran di menu.'))
+                ? const Center(
+                    child: Text(
+                      'Belum ada item.\nTap ukuran di menu.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: SukaTeaColors.muted),
+                    ),
+                  )
                 : ListView.builder(
                     itemCount: cart.length,
                     itemBuilder: (context, i) {
                       final item = cart[i];
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(item.label),
-                        subtitle: Text(formatRupiah(item.unitPrice)),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            IconButton(
-                              icon: const Icon(Icons.remove),
-                              onPressed: () => onQty(i, -1),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    item.label,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    formatRupiah(item.unitPrice),
+                                    style: const TextStyle(
+                                      color: SukaTeaColors.muted,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                            Text('${item.qty}'),
-                            IconButton(
-                              icon: const Icon(Icons.add),
-                              onPressed: () => onQty(i, 1),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _stepperButton(
+                                  Icons.remove,
+                                  () => onQty(i, -1),
+                                ),
+                                SizedBox(
+                                  width: 32,
+                                  child: Center(
+                                    child: Text(
+                                      '${item.qty}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                _stepperButton(
+                                  Icons.add,
+                                  () => onQty(i, 1),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 64,
+                              child: Text(
+                                formatRupiah(item.total),
+                                textAlign: TextAlign.right,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                             ),
                           ],
                         ),
@@ -371,8 +552,11 @@ class _CartPanel extends StatelessWidget {
                     },
                   ),
           ),
+          const Divider(height: 1),
+          const SizedBox(height: 12),
           Wrap(
             spacing: 8,
+            runSpacing: 8,
             children: [
               for (final m in PaymentMethod.values)
                 ChoiceChip(
@@ -382,19 +566,33 @@ class _CartPanel extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Total', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text(formatRupiah(total),
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+              const Text(
+                'Total',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              Text(
+                formatRupiah(total),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           FilledButton(
-            onPressed: cart.isEmpty ? null : onBayar,
-            child: const Text('Bayar'),
+            onPressed: (cart.isEmpty || isProcessing) ? null : onBayar,
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 56)),
+            child: Text(
+              isProcessing
+                  ? 'Memproses…'
+                  : 'Bayar • ${formatRupiah(total)}',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
           ),
         ],
       ),
@@ -406,34 +604,70 @@ class _BottomBar extends StatelessWidget {
   const _BottomBar({
     required this.total,
     required this.count,
+    required this.isProcessing,
     required this.onCart,
     required this.onBayar,
   });
 
   final int total;
   final int count;
+  final bool isProcessing;
   final VoidCallback onCart;
   final VoidCallback onBayar;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       decoration: const BoxDecoration(
         color: SukaTeaColors.card,
         border: Border(top: BorderSide(color: SukaTeaColors.border)),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextButton(
-              onPressed: onCart,
-              child: Text('Keranjang ($count) • ${formatRupiah(total)}'),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            Expanded(
+              child: TextButton(
+                onPressed: onCart,
+                style: TextButton.styleFrom(
+                  alignment: Alignment.centerLeft,
+                  padding: EdgeInsets.zero,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Keranjang ($count item)',
+                      style: const TextStyle(
+                        color: SukaTeaColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                    Text(
+                      formatRupiah(total),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                        color: SukaTeaColors.ink,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          FilledButton(onPressed: count == 0 ? null : onBayar, child: const Text('Bayar')),
-        ],
+            const SizedBox(width: 12),
+            FilledButton(
+              onPressed: (count == 0 || isProcessing) ? null : onBayar,
+              style: FilledButton.styleFrom(minimumSize: const Size(0, 56)),
+              child: Text(
+                isProcessing ? 'Memproses…' : 'Bayar',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

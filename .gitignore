@@ -12,7 +12,9 @@ build/
 .env
 *.keystore
 *.jks
+*.p12
 key.properties
+keystore.properties
 
 # IDE
 .idea/

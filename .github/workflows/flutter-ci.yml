@@ -36,6 +36,18 @@ jobs:
       # --split-per-abi membuat APK per ABI yang benar-benar hanya berisi
       # lib ABI itu; dengan --target-platform android-arm64 hasilnya
       # hanya app-arm64-v8a-debug.apk.
+      # Keystore tetap: signature konsisten antar build — tanpa ini tiap
+      # runner CI bikin debug keystore baru sehingga APK baru tidak bisa
+      # update APK lama (INSTALL_FAILED_UPDATE_INCOMPATIBLE).
+      - name: Siapkan keystore tetap
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/suka-tea.p12
+          printf 'storeFile=../suka-tea.p12\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > android/keystore.properties
       - run: flutter build apk --debug --target-platform android-arm64 --split-per-abi --dart-define SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
       # Biar APK-nya bisa diunduh dari halaman run (tanpa ini APK hilang
       # begitu job selesai).
@@ -43,3 +55,4 @@ jobs:
         with:
           name: suka-tea-debug-apk
           path: build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
+

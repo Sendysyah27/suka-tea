@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../data/models.dart';
 import '../../data/seed_menu.dart';
 
 /// Kelola Menu — HANYA Owner. Menu, harga, dan foto produk di-custom di
-/// dalam app (bukan hardcode). Kasir read-only.
+/// dalam app (bukan hardcode). Kasir read-only. Desain v2: thumb 56px
+/// blok mint + kartu radius 20.
 class KatalogPage extends StatefulWidget {
   const KatalogPage({super.key, required this.role});
 
@@ -46,6 +48,7 @@ class _KatalogPageState extends State<KatalogPage> {
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: 'Reguler (Rp)'),
             ),
+            const SizedBox(height: 12),
             TextField(
               controller: jumbo,
               keyboardType: TextInputType.number,
@@ -96,38 +99,82 @@ class _KatalogPageState extends State<KatalogPage> {
           return Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Card(
-              child: ListTile(
-                title: Text(_canEdit
-                    ? 'Kelola Menu (Owner)'
-                    : 'Katalog — Kasir hanya bisa melihat'),
-                subtitle: const Text(
-                  'Harga dan foto di-custom di sini. Foto di-upload ke Supabase Storage (M1).',
-                ),
-                trailing: _canEdit
-                    ? FilledButton.icon(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Kelola Menu',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 18,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'Harga dan foto di-custom di sini. Foto di-upload ke Supabase Storage (M1).',
+                            style: TextStyle(color: SukaTeaColors.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (_canEdit)
+                      FilledButton.icon(
                         onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Tambah menu — M1')),
                         ),
                         icon: const Icon(Icons.add),
                         label: const Text('Tambah'),
                       )
-                    : null,
+                    else
+                      const Chip(label: Text('Kasir: lihat saja')),
+                  ],
+                ),
               ),
             ),
           );
         }
         final p = _products[index - 1];
         return Card(
-          child: ListTile(
-            leading: const CircleAvatar(child: Icon(Icons.local_drink)),
-            title: Text(p.name),
-            subtitle: Text(
-              '${p.category} • ${formatRupiah(p.variants.first.price)} / '
-              '${formatRupiah(p.variants.last.price)}',
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
               children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: SukaTeaColors.emeraldSoft,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(
+                    Icons.local_drink,
+                    color: SukaTeaColors.emerald,
+                    size: 28,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        p.name,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${p.category} • ${formatRupiah(p.variants.first.price)} / '
+                        '${formatRupiah(p.variants.last.price)}',
+                        style: const TextStyle(color: SukaTeaColors.muted),
+                      ),
+                    ],
+                  ),
+                ),
                 IconButton(
                   tooltip: 'Foto produk',
                   icon: const Icon(Icons.photo_camera),
