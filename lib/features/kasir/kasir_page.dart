@@ -677,7 +677,14 @@ class _CartPanel extends StatelessWidget {
   Widget _bayarButton() {
     return FilledButton(
       onPressed: (cart.isEmpty || isProcessing) ? null : onBayar,
-      style: FilledButton.styleFrom(minimumSize: const Size(0, 56)),
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(0, 56),
+        // Padding horizontal M3 default (24) + ikon + label panjang
+        // ("Bayar • Rp8.000") overflow 0,5px di panel 320dp (test 23 Nov
+        // 01:31 — font test Ahem lebih lebar dari Plus Jakarta Sans).
+        // Padding 16 + label Flexible/ellipsis: total besar tetap muat.
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
@@ -707,9 +714,13 @@ class _CartPanel extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Text(
-              'Bayar • ${formatRupiah(total)}',
-              style: const TextStyle(fontWeight: FontWeight.w700),
+            Flexible(
+              child: Text(
+                'Bayar • ${formatRupiah(total)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
             ),
           ],
         ],
