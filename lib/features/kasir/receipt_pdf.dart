@@ -43,7 +43,7 @@ Future<Uint8List> buildReceiptPdfBytes({
           pw.Text(
             'SUKA TEA',
             textAlign: pw.TextAlign.center,
-            style: pw.TextStyle(
+            style: const pw.TextStyle(
               fontWeight: pw.FontWeight.bold,
               fontSize: 16,
             ),
@@ -72,7 +72,9 @@ Future<Uint8List> buildReceiptPdfBytes({
                     children: [
                       pw.Text(
                         '${line.qty}x ${line.name}',
-                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                        style: const pw.TextStyle(
+                          fontWeight: pw.FontWeight.bold,
+                        ),
                       ),
                       if (line.modifierText.isNotEmpty)
                         pw.Text(
@@ -88,7 +90,7 @@ Future<Uint8List> buildReceiptPdfBytes({
                 ),
                 pw.Text(
                   formatRupiah(line.total),
-                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                  style: const pw.TextStyle(fontWeight: pw.FontWeight.bold),
                 ),
               ],
             ),

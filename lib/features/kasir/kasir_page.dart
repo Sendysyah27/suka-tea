@@ -5,6 +5,7 @@ import '../../core/theme/app_icons.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
+import '../../core/widgets/product_photo.dart';
 import '../../data/local/outbox_service.dart';
 import '../../data/menu_service.dart';
 import '../../data/models.dart';
@@ -717,7 +718,7 @@ class _CartPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final list = cart.isEmpty
-        ? Center(
+        ? const Center(
             child: Text(
               'Belum ada item.\nTap + di menu untuk menambah.',
               textAlign: TextAlign.center,

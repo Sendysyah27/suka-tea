@@ -10,7 +10,7 @@ SaleRecord sale({
   int paid = 0,
 }) =>
     SaleRecord(
-      id: 'test-${total}-${items.length}',
+      id: 'test-$total-${items.length}',
       createdAt: DateTime(2026, 11, 22, 10, 0),
       items: items,
       total: total,

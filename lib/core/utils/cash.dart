@@ -2,6 +2,7 @@
 ///
 /// Dipakai sheet "Uang diterima" di Kasir: nominal cepat, kembalian,
 /// dan pembulatan QRIS ke Rp500.
+library;
 
 /// Bulatkan ke atas ke kelipatan Rp500 terdekat (bila sudah pas,
 /// naik satu langkah Rp500 — supaya "Bulatkan" selalu berubah).

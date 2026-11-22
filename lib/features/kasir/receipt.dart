@@ -94,7 +94,7 @@ class DigitalReceiptPage extends StatelessWidget {
       time: time,
     );
     try {
-      await SharePlus.instance.share(ShareParams(text: text));
+      await Share.share(text);
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

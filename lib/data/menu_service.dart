@@ -148,7 +148,7 @@ class MenuService extends ChangeNotifier {
               priceReguler: p.variants.first.price,
               priceJumbo: p.variants.last.price,
               photoUrl: Value(p.photoUrl),
-              isActive: p.isActive,
+              isActive: Value(p.isActive),
             ),
             mode: InsertMode.insertOrReplace,
           );

@@ -33,7 +33,7 @@ Future<ProductSelection?> showProductOptionsSheet(
     builder: (context) => StatefulBuilder(
       builder: (context, setSheetState) {
         final unitPrice = variant.price +
-            toppings.fold(0, (s, m) => s + m.priceDelta);
+            toppings.fold<int>(0, (s, m) => s + m.priceDelta);
         return Padding(
           padding: EdgeInsets.only(
             left: 16,
