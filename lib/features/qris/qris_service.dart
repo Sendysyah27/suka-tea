@@ -106,7 +106,7 @@ class QrisService {
     if (crcTag == null || crcTag.value.length != 4) {
       return 'CRC (tag 63) tidak ditemukan di akhir payload.';
     }
-    final withoutCrc = payload.substring(0, payload.length - 8) + '6304';
+    final withoutCrc = '${payload.substring(0, payload.length - 8)}6304';
     if (crc16(withoutCrc).toUpperCase() != crcTag.value.toUpperCase()) {
       return 'CRC tidak valid — kode QRIS mungkin rusak atau salah salin.';
     }
@@ -134,7 +134,7 @@ class QrisService {
     final error = validationError(staticPayload);
     if (error != null) throw FormatException(error);
 
-    var tags = parse(staticPayload)
+    final tags = parse(staticPayload)
         .where((t) => t.id != '63') // buang CRC lama
         .toList();
 

@@ -192,7 +192,7 @@ class _QrisPayPageState extends State<QrisPayPage> {
               style: const TextStyle(
                 fontSize: 32,
                 fontWeight: FontWeight.bold,
-                color: SruputColors.emeraldDark,
+                color: SukaTeaColors.emeraldDark,
               ),
             ),
             const SizedBox(height: 12),
@@ -244,7 +244,7 @@ class _QrisPayPageState extends State<QrisPayPage> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: SruputColors.border),
+                    border: Border.all(color: SukaTeaColors.border),
                   ),
                   child: QrImageView(
                     data: _payload!,

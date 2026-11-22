@@ -164,10 +164,11 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
             const SizedBox(height: 8),
             TextButton(
               onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
                 await QrisSettingsService.instance.clear();
                 if (!mounted) return;
                 setState(() => _savedMerchant = null);
-                ScaffoldMessenger.of(context).showSnackBar(
+                messenger.showSnackBar(
                   const SnackBar(content: Text('QRIS merchant dihapus.')),
                 );
               },
