@@ -1,0 +1,87 @@
+// SUKA TEA — Edge Function `verify-owner-pin`
+// Verifikasi PIN Owner: bandingkan PIN (6 digit) dengan hash bcrypt di
+// app_settings (key owner_pin_hash). Hash TIDAK PERNAH keluar dari server.
+//
+// Secret yang dibutuhkan (otomatis tersedia di Edge Functions):
+//   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+//
+// POST { outlet_id, pin } -> { ok, reason? }
+//   ok:true                  PIN cocok
+//   ok:false reason:'wrong'  PIN salah
+//   ok:false reason:'not_set'  PIN belum pernah diatur (setup pertama)
+//   ok:false reason:'locked' terlalu banyak percobaan gagal (server)
+//   ok:false error:...       input tidak valid / server error
+
+import { createClient } from "jsr:@supabase/supabase-js@2";
+import * as bcrypt from "npm:bcryptjs@2.4.3";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+const MAX_FAILURES = 10;
+const WINDOW_MINUTES = 10;
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    if (!supabaseUrl || !serviceKey) {
+      return json({ ok: false, error: "Edge Function belum dikonfigurasi" }, 501);
+    }
+    const body = await req.json().catch(() => ({}));
+    const outletId = String(body.outlet_id ?? "");
+    const pin = String(body.pin ?? "");
+    if (!outletId || !/^\d{6}$/.test(pin)) {
+      return json({ ok: false, error: "outlet_id + PIN 6 digit wajib" }, 400);
+    }
+
+    const supabase = createClient(supabaseUrl, serviceKey);
+
+    // Rate limit server: >=10 gagal dalam 10 menit -> kunci.
+    const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000).toISOString();
+    const { count } = await supabase
+      .from("pin_attempts")
+      .select("id", { count: "exact", head: true })
+      .eq("outlet_id", outletId)
+      .eq("success", false)
+      .gte("created_at", since);
+    if ((count ?? 0) >= MAX_FAILURES) {
+      return json({ ok: false, reason: "locked" });
+    }
+
+    const { data: row } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("outlet_id", outletId)
+      .eq("key", "owner_pin_hash")
+      .maybeSingle();
+    const hash = (row as { value?: string } | null)?.value;
+    if (!hash) {
+      return json({ ok: false, reason: "not_set" });
+    }
+
+    const match = await bcrypt.compare(pin, hash);
+    await supabase.from("pin_attempts").insert({
+      outlet_id: outletId,
+      success: match,
+    });
+    if (!match) {
+      return json({ ok: false, reason: "wrong" });
+    }
+    return json({ ok: true });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});

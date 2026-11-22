@@ -1,4 +1,6 @@
-/// Peran di satu outlet. RLS di Supabase adalah penegak utamanya;
+/// Peran di satu outlet. Mode Owner di app HANYA terbuka lewat PIN Owner
+/// (hash bcrypt di Supabase, verifikasi via Edge Function — lihat
+/// features/pin). RLS di Supabase adalah penegak utamanya di server;
 /// helper ini hanya untuk menyembunyikan/menampilkan menu di UI.
 enum AppRole { owner, kasir }
 
