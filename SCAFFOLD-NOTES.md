@@ -85,4 +85,13 @@ PRD: v0.3 (22 hal A4) — semua keputusan MVP terkunci.
 - Commit awal (workaround repo kosong GitHub menolak git/blobs 409):
   `605329946cb2e1cbf7b7e6513befdcd35f2693ee` (`chore: initial commit`, README saja)
 - CI run pertama: https://github.com/Sendysyah27/sruput-pos/actions/runs/45000687422
-  — status saat push: `in_progress` (belum hijau, masih jalan).
+  — completed failure (flutter analyze: CardTheme, diperbaiki di push rename).
+- CI run rename (45001131257): analyze LOLOS, `flutter test` gagal 1 test —
+  `Es Teh Boba` tidak ketemu karena GridView malas membangun item di luar
+  layar. Diperbaiki dengan `scrollUntilVisible` di widget test.
+- Push final QRIS: `c20c5c85345df2ae7d2cb07b4e03228c42ba5921`
+  (`feat: QRIS dinamis dalam app (generate QR nominal custom, konfirmasi manual)`).
+- Push perbaikan test: `c025c985a9b6a6668c9ee20f08724ac8b2e4af89`
+  (`fix: widget test scroll ke item terakhir grid (Es Teh Boba)`).
+  CI run untuk commit ini masih jalan saat catatan ini ditulis — lihat tab
+  Actions; belum boleh diklaim hijau sebelum run itu selesai.
