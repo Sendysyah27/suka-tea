@@ -722,7 +722,7 @@ class _CartPanel extends StatelessWidget {
             child: Text(
               'Belum ada item.\nTap + di menu untuk menambah.',
               textAlign: TextAlign.center,
-              style: const TextStyle(color: SukaTeaColors.muted),
+              style: TextStyle(color: SukaTeaColors.muted),
             ),
           )
         : ListView.builder(
