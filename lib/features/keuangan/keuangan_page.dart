@@ -5,7 +5,6 @@ import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../data/models.dart';
 import '../../data/sale_history.dart';
-import '../../data/seed_menu.dart';
 import '../../data/stock_service.dart';
 
 /// Keuangan — HANYA Owner. Desain v2: hero card emerald gelap untuk
@@ -13,8 +12,9 @@ import '../../data/stock_service.dart';
 ///
 /// DATA NYATA dari riwayat penjualan hari ini (bukan lagi angka contoh):
 /// omzet, jumlah transaksi, jumlah cup, rata-rata per transaksi, dan
-/// HPP + laba ESTIMASI (resep x biaya bahan — lihat seedStockCostPerUnit).
-/// Pengeluaran harian belum dicatat di app, jadi belum dikurangi dari laba.
+/// HPP + laba ESTIMASI (resep x harga bahan yang diatur Owner di tab
+/// Stok — bukan lagi estimasi pasar). Pengeluaran harian belum dicatat
+/// di app, jadi belum dikurangi dari laba.
 class KeuanganPage extends StatelessWidget {
   const KeuanganPage({super.key, required this.role});
 
@@ -35,7 +35,12 @@ class KeuanganPage extends StatelessWidget {
       );
     }
     return ListenableBuilder(
-      listenable: SaleHistoryService.instance,
+      // Dengarkan juga StockService: harga bahan yang diubah Owner di
+      // tab Stok langsung mengubah HPP/laba di halaman ini.
+      listenable: Listenable.merge([
+        SaleHistoryService.instance,
+        StockService.instance,
+      ]),
       builder: (context, _) {
         // Transaksi void DIKECUALIKAN (Batch C1): omzet, laba, dan
         // rincian tidak menghitung transaksi yang sudah di-void.
@@ -54,10 +59,12 @@ class KeuanganPage extends StatelessWidget {
             ),
           );
         }
+        // HPP dari harga bahan yang diatur Owner di tab Stok
+        // (Batch C1b) — bukan lagi const estimasi di seed_menu.
         final stats = computeDailyStats(
           today,
           StockService.instance.recipes,
-          seedStockCostPerUnit,
+          StockService.instance.costsByName,
         );
         return ListView(
           padding: const EdgeInsets.all(12),
@@ -144,8 +151,9 @@ class KeuanganPage extends StatelessWidget {
             const Padding(
               padding: EdgeInsets.only(top: 8),
               child: Text(
-                'HPP dihitung dari resep x biaya bahan (estimasi pasar). '
-                'Pengeluaran harian belum dicatat, jadi belum dikurangi dari laba.',
+                'HPP dihitung dari resep x harga bahan yang diatur Owner '
+                'di tab Stok. Pengeluaran harian belum dicatat, jadi belum '
+                'dikurangi dari laba.',
                 style: TextStyle(color: SukaTeaColors.muted),
               ),
             ),

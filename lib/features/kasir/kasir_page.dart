@@ -431,7 +431,7 @@ class _KasirPageState extends State<KasirPage> {
       });
     }
     final items = await HeldOrderService.instance.restore(order.id);
-    if (items == null || !mounted) return;
+    if (items == null || !mounted || !sheetContext.mounted) return;
     Navigator.of(sheetContext).pop();
     setState(() {
       _cart.addAll(items);

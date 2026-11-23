@@ -36,11 +36,15 @@ class LocalProducts extends Table {
 
 /// Stok bahan baku lokal (cermin seedStock + editan Owner).
 /// Satu baris per nama bahan — nama adalah kunci.
+/// [costPerUnit] = harga bahan per satuan (rupiah) — DITENTUKAN Owner
+/// di tab Stok (Batch C1b). -1 = belum diatur (HPP bahan itu Rp0);
+/// 0 = gratis (sengaja).
 class StockLevels extends Table {
   TextColumn get name => text()();
   TextColumn get unit => text()();
   RealColumn get qty => real()();
   RealColumn get lowThreshold => real()();
+  RealColumn get costPerUnit => real().withDefault(const Constant(-1))();
 
   @override
   Set<Column> get primaryKey => {name};
@@ -118,7 +122,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -142,6 +146,14 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(saleHistory, saleHistory.isVoid);
             await m.createTable(heldOrders);
             await m.createTable(toppings);
+          }
+          // v4 -> v5 (23 Nov 2026, Batch C1b): tambah kolom harga bahan
+          // per satuan di StockLevels (Owner yang menentukan, bukan
+          // estimasi). Default 0 — backfill nilai awal dari
+          // seedStockCostPerUnit jalan di StockService.init().
+          // Tabel lama TIDAK dihapus.
+          if (from < 5) {
+            await m.addColumn(stockLevels, stockLevels.costPerUnit);
           }
         },
       );

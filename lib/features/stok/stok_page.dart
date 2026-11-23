@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/tap_feedback.dart';
 import '../../data/models.dart';
@@ -95,6 +97,74 @@ class _StokPageState extends State<StokPage> {
         SnackBar(content: Text('Stok ${item.name} diperbarui.')),
       );
     }
+  }
+
+  /// Ubah harga per satuan satu bahan (HANYA Owner — Batch C1b).
+  /// Harga ini yang dipakai menghitung HPP di Keuangan/Laporan.
+  /// Input angka bulat rupiah (digits only); -1 = belum diatur
+  /// (tidak bisa diinput — kosongkan field untuk Rp0 = gratis).
+  Future<void> _editCost(StockItem item) async {
+    final cost = TextEditingController(
+      text: item.costPerUnit >= 0 ? item.costPerUnit.round().toString() : '',
+    );
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Harga bahan — ${item.name}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: cost,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: InputDecoration(
+                labelText: 'Harga per ${item.unit} (Rp)',
+                hintText: 'Contoh: 120000',
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Harga ini dipakai menghitung HPP di Keuangan/Laporan. '
+              'Kosongkan untuk Rp0 (bahan gratis).',
+              style: TextStyle(color: SukaTeaColors.muted, fontSize: 12),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+    if (saved != true || !mounted) return;
+    final raw = cost.text.trim();
+    final newCost = raw.isEmpty ? 0.0 : double.tryParse(raw);
+    if (newCost == null || !StockService.isValidCost(newCost)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Harga harus angka ≥ 0.')),
+      );
+      return;
+    }
+    final ok = await StockService.instance.updateCost(item.name, newCost);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Harga ${item.name} diperbarui: '
+                  '${formatRupiah(newCost.round())} / ${item.unit}.'
+              : 'Harga ${item.name} gagal disimpan.',
+        ),
+      ),
+    );
   }
 
   Future<void> _addStock() async {
@@ -239,6 +309,22 @@ class _StokPageState extends State<StokPage> {
                   ],
                 ),
               ),
+              // Petunjuk singkat (HANYA Owner): harga bahan dipakai HPP.
+              if (_canEdit)
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(12, 0, 12, 4),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Harga bahan dipakai menghitung HPP di Keuangan — '
+                      'ketuk harga di tiap kartu untuk mengubahnya.',
+                      style: TextStyle(
+                        color: SukaTeaColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ),
               if (items.isEmpty)
                 const Expanded(
                   child: Center(
@@ -307,6 +393,36 @@ class _StokPageState extends State<StokPage> {
                             fontSize: 12,
                           ),
                         ),
+                        // Harga bahan (Batch C1b): HANYA Owner — Kasir
+                        // tidak melihat/mengubahnya (preseden
+                        // ProductVariant.cost). Ketuk barisnya untuk ubah.
+                        if (_canEdit) ...[
+                          const SizedBox(height: 4),
+                          InkWell(
+                            onTap: () => _editCost(item),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    item.costPerUnit >= 0
+                                        ? 'Harga: ${formatRupiah(item.costPerUnit.round())} / ${item.unit}'
+                                        : 'Harga: belum diatur',
+                                    style: const TextStyle(
+                                      color: SukaTeaColors.muted,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                                const Icon(
+                                  Icons.edit_outlined,
+                                  size: 16,
+                                  color: SukaTeaColors.muted,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 10),
                         ClipRRect(
                           borderRadius: BorderRadius.circular(999),

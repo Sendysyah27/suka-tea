@@ -167,6 +167,7 @@ class StockItem {
     required this.unit,
     required this.qty,
     required this.lowThreshold,
+    this.costPerUnit = -1,
   });
 
   final String name;
@@ -174,7 +175,28 @@ class StockItem {
   final double qty;
   final double lowThreshold;
 
+  /// Harga bahan per satuan (rupiah) — DITENTUKAN Owner di tab Stok
+  /// (Batch C1b). -1 = belum diatur (HPP bahan itu dihitung Rp0);
+  /// 0 = Owner sengaja mengeset gratis — backfill tidak menimpanya.
+  /// Nilai awal dari seedStockCostPerUnit (backfill saat init).
+  final double costPerUnit;
+
   bool get isLow => qty <= lowThreshold;
+
+  StockItem copyWith({
+    String? name,
+    String? unit,
+    double? qty,
+    double? lowThreshold,
+    double? costPerUnit,
+  }) =>
+      StockItem(
+        name: name ?? this.name,
+        unit: unit ?? this.unit,
+        qty: qty ?? this.qty,
+        lowThreshold: lowThreshold ?? this.lowThreshold,
+        costPerUnit: costPerUnit ?? this.costPerUnit,
+      );
 }
 
 /// Satu baris struk — dipakai halaman struk, share teks, dan PDF.

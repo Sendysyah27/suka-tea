@@ -59,6 +59,7 @@ class StockService extends ChangeNotifier {
                   unit: r.unit,
                   qty: r.qty,
                   lowThreshold: r.lowThreshold,
+                  costPerUnit: r.costPerUnit,
                 ))
             .toList();
         // Seed baru yang belum ada di DB -> tambahkan (jangan timpa).
@@ -91,8 +92,64 @@ class StockService extends ChangeNotifier {
       if (_levels.isEmpty) _levels = seedStock();
       if (_recipes.isEmpty) _recipes = seedRecipes();
     }
+    // Backfill biaya bahan (Batch C1b): bahan yang biayanya masih -1
+    // (belum diatur) dan seed punya nilai > 0 mendapat biaya seed
+    // sebagai default awal — install lama yang upgrade ke schema v5
+    // ikut dapat. Topping (seed 0) tetap -1 sampai Owner mengisinya
+    // di tab Stok; biaya yang Owner sudah isi (>= 0, termasuk 0 =
+    // gratis) tidak disentuh.
+    final filled = backfillCosts(_levels, seedStockCostPerUnit);
+    var backfilled = false;
+    for (var i = 0; i < filled.length; i++) {
+      if (filled[i].costPerUnit != _levels[i].costPerUnit) {
+        backfilled = true;
+      }
+    }
+    _levels = filled;
+    if (backfilled) await _saveAllLevels();
     _initialized = true;
     notifyListeners();
+  }
+
+  /// Peta biaya (nama bahan -> Rp per satuan) untuk HPP di
+  /// Keuangan/Laporan. Sebelum init: kosong (HPP dihitung Rp0).
+  Map<String, double> get costsByName => costsFromLevels(_levels);
+
+  /// Peta biaya murni dari daftar level (dipakai costsByName + test).
+  /// -1 (belum diatur) dihitung Rp0 untuk HPP — biaya tidak boleh
+  /// negatif di perhitungan.
+  static Map<String, double> costsFromLevels(List<StockItem> levels) =>
+      {for (final s in levels) s.name: (s.costPerUnit < 0 ? 0.0 : s.costPerUnit)};
+
+  /// true = biaya sah (>= 0). Negatif ditolak — biaya tidak boleh minus.
+  static bool isValidCost(double cost) => cost >= 0;
+
+  /// Backfill biaya awal dari [seedCosts]: tiap bahan yang biayanya
+  /// masih -1 (belum diatur) dan seed punya nilai > 0 mendapat biaya
+  /// seed. Bahan yang Owner sudah isi (>= 0 — termasuk 0 = gratis),
+  /// bahan tanpa seed, dan topping (seed 0) tidak disentuh.
+  /// Daftar asli tidak diubah (daftar baru dikembalikan).
+  static List<StockItem> backfillCosts(
+    List<StockItem> levels,
+    Map<String, double> seedCosts,
+  ) =>
+      levels.map((s) {
+        if (s.costPerUnit >= 0) return s;
+        final seed = seedCosts[s.name];
+        if (seed == null || seed <= 0) return s;
+        return s.copyWith(costPerUnit: seed);
+      }).toList();
+
+  /// Ubah harga per satuan satu bahan (HANYA Owner — dicek di UI).
+  /// false = bahan tidak ada atau biaya negatif.
+  Future<bool> updateCost(String name, double cost) async {
+    if (!isValidCost(cost)) return false;
+    final i = _levels.indexWhere((s) => s.name == name);
+    if (i < 0) return false;
+    _levels[i] = _levels[i].copyWith(costPerUnit: cost);
+    notifyListeners();
+    await _saveOneLevel(_levels[i]);
+    return true;
   }
 
   /// Ganti satu resep varian (dipakai editor Resep). [lines] disalin.
@@ -118,7 +175,8 @@ class StockService extends ChangeNotifier {
     }
   }
 
-  /// Ubah jumlah + ambang satu bahan.
+  /// Ubah jumlah + ambang satu bahan. Harga per satuan ikut
+  /// dipertahankan (copyWith) supaya tidak ke-reset ke 0.
   Future<void> updateStock(
     String name,
     double qty,
@@ -126,12 +184,7 @@ class StockService extends ChangeNotifier {
   ) async {
     final i = _levels.indexWhere((s) => s.name == name);
     if (i < 0) return;
-    _levels[i] = StockItem(
-      name: name,
-      unit: _levels[i].unit,
-      qty: qty,
-      lowThreshold: lowThreshold,
-    );
+    _levels[i] = _levels[i].copyWith(qty: qty, lowThreshold: lowThreshold);
     notifyListeners();
     await _saveOneLevel(_levels[i]);
   }
@@ -186,12 +239,7 @@ class StockService extends ChangeNotifier {
       final before = _levels[i];
       final afterQty = (before.qty - entry.value).clamp(0.0, double.infinity);
       final wasLow = before.isLow;
-      _levels[i] = StockItem(
-        name: before.name,
-        unit: before.unit,
-        qty: afterQty,
-        lowThreshold: before.lowThreshold,
-      );
+      _levels[i] = before.copyWith(qty: afterQty);
       if (!wasLow && _levels[i].isLow) newlyLow.add(before.name);
     }
     notifyListeners();
@@ -222,12 +270,7 @@ class StockService extends ChangeNotifier {
       final i = _levels.indexWhere((s) => s.name == entry.key);
       if (i < 0) continue;
       final before = _levels[i];
-      _levels[i] = StockItem(
-        name: before.name,
-        unit: before.unit,
-        qty: before.qty + entry.value,
-        lowThreshold: before.lowThreshold,
-      );
+      _levels[i] = before.copyWith(qty: before.qty + entry.value);
     }
     notifyListeners();
     await _saveAllLevels();
@@ -254,12 +297,7 @@ class StockService extends ChangeNotifier {
     final i = _levels.indexWhere((s) => s.name == oldName);
     if (i < 0) return false;
     final before = _levels[i];
-    _levels[i] = StockItem(
-      name: newName,
-      unit: before.unit,
-      qty: before.qty,
-      lowThreshold: before.lowThreshold,
-    );
+    _levels[i] = before.copyWith(name: newName);
     // Resep memakai nama bahan sebagai kunci — ganti juga di memori.
     final newRecipes = <String, List<RecipeLine>>{};
     for (final entry in _recipes.entries) {
@@ -297,6 +335,7 @@ class StockService extends ChangeNotifier {
               unit: item.unit,
               qty: item.qty,
               lowThreshold: item.lowThreshold,
+              costPerUnit: Value(item.costPerUnit),
             ),
             mode: InsertMode.insertOrReplace,
           );
@@ -314,6 +353,7 @@ class StockService extends ChangeNotifier {
                 unit: item.unit,
                 qty: item.qty,
                 lowThreshold: item.lowThreshold,
+                costPerUnit: Value(item.costPerUnit),
               ),
               mode: InsertMode.insertOrReplace,
             );
