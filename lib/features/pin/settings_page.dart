@@ -126,7 +126,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       final outlet =
                           OutletService.instance.currentOutlet;
                       return Text(
-                        outlet?.name ?? 'Gerai 1 — Stand Utama',
+                        outlet.name,
                       );
                     },
                   ),

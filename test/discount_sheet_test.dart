@@ -62,8 +62,8 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     expect(result, isNotNull);
-    expect(result!.amount, 2000);
-    expect(result!.percent, 0);
+    expect(result.amount, 2000);
+    expect(result.percent, 0);
   });
 
   testWidgets('Regresi crash: mode persen 10% dari Rp21.000 = Rp2.100',
@@ -76,8 +76,8 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     expect(result, isNotNull);
-    expect(result!.amount, 2100);
-    expect(result!.percent, 10);
+    expect(result.amount, 2100);
+    expect(result.percent, 10);
   });
 
   testWidgets('Sheet dibuka dengan persen tersimpan: mode % aktif',

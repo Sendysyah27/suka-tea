@@ -145,8 +145,7 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
               listenable: OutletService.instance,
               builder: (context, _) {
                 return Text(
-                  OutletService.instance.currentOutlet?.name ??
-                      'Gerai 1 — Stand Utama',
+                  OutletService.instance.currentOutlet.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
