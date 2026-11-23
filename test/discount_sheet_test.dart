@@ -62,7 +62,7 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     expect(result, isNotNull);
-    expect(result.amount, 2000);
+    expect(result!.amount, 2000);
     expect(result.percent, 0);
   });
 
@@ -76,7 +76,7 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     expect(result, isNotNull);
-    expect(result.amount, 2100);
+    expect(result!.amount, 2100);
     expect(result.percent, 10);
   });
 
