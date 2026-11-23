@@ -1197,9 +1197,12 @@ class _CartPanel extends StatelessWidget {
 
   /// Payment sheet ala FigCraft frame 02 (Stripe pattern): satu kartu
   /// putih berisi 6 baris metode (Batch C2 menambah Split) — tile ikon
-  /// mint 36x36 r10 + nama 14 SemiBold + sublabel 12 muted + radio 22
+  /// mint 32x32 r10 + nama 14 SemiBold + sublabel 12 muted + radio 22
   /// di kanan; baris terpilih tint #EAF6EF + centang emerald; divider
   /// inset antar baris.
+  /// Baris dibuat ramping (tile 32, padding vertikal 2, tinggi teks
+  /// 1.2): baris ke-6 Split bikin panel overflow 26px di viewport
+  /// tes 800x600 (ketangkep CI v27.2) — hemat ~6px/baris x 6.
   /// Mode pendek (<430dp) TIDAK pakai kartu ini (230px tidak muat) —
   /// tetap chip 1 baris scroll (perbaikan overflow 22 Nov 22:19).
   Widget _methodCard() {
@@ -1237,12 +1240,12 @@ class _CartPanel extends StatelessWidget {
           color: selected ? SukaTeaColors.tint : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
         child: Row(
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: 32,
+              height: 32,
               decoration: BoxDecoration(
                 color: SukaTeaColors.mint,
                 borderRadius: BorderRadius.circular(10),
@@ -1269,6 +1272,7 @@ class _CartPanel extends StatelessWidget {
                     style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
+                      height: 1.2,
                     ),
                   ),
                   Text(
@@ -1276,6 +1280,7 @@ class _CartPanel extends StatelessWidget {
                     style: const TextStyle(
                       fontSize: 12,
                       color: SukaTeaColors.muted,
+                      height: 1.2,
                     ),
                   ),
                 ],

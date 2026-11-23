@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:suka_tea/core/utils/roles.dart';
 import 'package:suka_tea/data/outlet_service.dart';
@@ -18,6 +21,26 @@ import 'package:suka_tea/features/login/login_result.dart';
 /// dibuka di test env, ditangkap try/catch di init()).
 void main() {
   setUpAll(() async {
+    // Drift butuh path_provider (getTemporaryDirectory) yang TIDAK
+    // ada di test env — tanpa mock, OutletService.init() jatuh ke
+    // seed memori TAPI error async-nya lolos dan setUpAll gagal
+    // (ketangkep CI v27.2). Mock ke folder temp sungguhan supaya DB
+    // SQLite benar-benar terbuka di CI.
+    final dir = Directory.systemTemp.createTempSync('suka-tea-test');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (call) async {
+        switch (call.method) {
+          case 'getTemporaryDirectory':
+          case 'getApplicationDocumentsDirectory':
+          case 'getApplicationSupportDirectory':
+            return dir.path;
+          default:
+            return null;
+        }
+      },
+    );
     await OutletService.instance.init();
   });
 

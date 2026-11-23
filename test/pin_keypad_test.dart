@@ -35,9 +35,16 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: PinKeypad(
-            onDigit: (_) {},
-            onBackspace: () {},
+          // Keypad normal ukurannya ikut lebar layar (Expanded +
+          // AspectRatio): tanpa batas lebar, di permukaan tes 800px
+          // tombol jadi ~260px dan keypad overflow 469px (CI v27.2).
+          // Batas 320px = lebar dialog PIN di app sebenarnya.
+          body: SizedBox(
+            width: 320,
+            child: PinKeypad(
+              onDigit: (_) {},
+              onBackspace: () {},
+            ),
           ),
         ),
       ),
