@@ -1,4 +1,10 @@
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/theme/app_theme.dart';
@@ -21,7 +27,7 @@ String buildReceiptText({
   final now = time ?? DateTime.now();
   final buf = StringBuffer();
   buf.writeln('      SUKA TEA');
-  buf.writeln('  Stand Es Teh');
+  buf.writeln('  Es Teh Kekinian');
   buf.writeln('--------------------------------');
   buf.writeln('Kasir : $cashier');
   buf.writeln('Waktu : ${now.toString().substring(0, 16)}');
@@ -46,7 +52,11 @@ String buildReceiptText({
 /// header tengah, baris Kasir + Waktu + Cara bayar, item + modifier,
 /// Total, Bayar, Kembali, tombol Bagikan (share sheet — user pilih
 /// WhatsApp) + Simpan PDF + Selesai 56px.
-class DigitalReceiptPage extends StatelessWidget {
+///
+/// Bagikan = FILE JPG hasil render preview struk di halaman ini
+/// (RepaintBoundary + encode JPG), BUKAN teks — supaya yang diterima
+/// di WhatsApp tampil sama persis dengan preview di app.
+class DigitalReceiptPage extends StatefulWidget {
   const DigitalReceiptPage({
     super.key,
     required this.lines,
@@ -68,6 +78,14 @@ class DigitalReceiptPage extends StatelessWidget {
   /// Waktu transaksi (riwayat memakai waktu aslinya; kasir = sekarang).
   final DateTime? time;
 
+  @override
+  State<DigitalReceiptPage> createState() => _DigitalReceiptPageState();
+}
+
+class _DigitalReceiptPageState extends State<DigitalReceiptPage> {
+  /// Kunci RepaintBoundary isi struk — untuk render JPG yang di-share.
+  final _receiptKey = GlobalKey();
+
   Widget _hairline() {
     return const Divider(height: 1, color: SukaTeaColors.border);
   }
@@ -86,17 +104,37 @@ class DigitalReceiptPage extends StatelessWidget {
     );
   }
 
+  /// Render isi struk (yang di dalam RepaintBoundary) jadi file JPG,
+  /// lalu bagikan lewat share sheet. Tombol-tombol di bawah struk TIDAK
+  /// ikut ke gambar — yang di-share hanya struknya, sama persis dengan
+  /// preview di halaman ini.
   Future<void> _share(BuildContext context) async {
-    final text = buildReceiptText(
-      lines: lines,
-      method: method,
-      total: total,
-      paid: paid,
-      cashier: cashier,
-      time: time,
-    );
     try {
-      await Share.share(text);
+      final boundary =
+          _receiptKey.currentContext?.findRenderObject()
+              as RenderRepaintBoundary?;
+      if (boundary == null) throw StateError('Struk belum tampil.');
+      final ui.Image image = await boundary.toImage(pixelRatio: 3.0);
+      final ByteData? byteData = await image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      if (byteData == null) throw StateError('Gagal merender struk.');
+      final decoded = img.decodePng(byteData.buffer.asUint8List());
+      if (decoded == null) throw StateError('Gagal membaca gambar struk.');
+      final jpg = img.encodeJpg(decoded, quality: 92);
+      final now = widget.time ?? DateTime.now();
+      final stamp = '${now.year}${now.month.toString().padLeft(2, '0')}'
+          '${now.day.toString().padLeft(2, '0')}-'
+          '${now.hour.toString().padLeft(2, '0')}'
+          '${now.minute.toString().padLeft(2, '0')}'
+          '${now.second.toString().padLeft(2, '0')}';
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/struk-suka-tea-$stamp.jpg');
+      await file.writeAsBytes(jpg);
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'image/jpeg')],
+        text: 'Struk SUKA TEA',
+      );
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -108,12 +146,12 @@ class DigitalReceiptPage extends StatelessWidget {
 
   Future<void> _savePdf(BuildContext context) async {
     final path = await saveReceiptPdf(
-      lines: lines,
-      method: method,
-      total: total,
-      paid: paid,
-      cashier: cashier,
-      time: time,
+      lines: widget.lines,
+      method: widget.method,
+      total: widget.total,
+      paid: widget.paid,
+      cashier: widget.cashier,
+      time: widget.time,
     );
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -129,7 +167,7 @@ class DigitalReceiptPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final now = time ?? DateTime.now();
+    final now = widget.time ?? DateTime.now();
     final timeText =
         '${now.day}/${now.month}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     return Scaffold(
@@ -142,144 +180,169 @@ class DigitalReceiptPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Ikon 44x44 di tengah — Column stretch, jadi harus
-                // dibungkus Center supaya tidak melebar se-kartu.
-                Center(
+                // Isi struk — dibungkus RepaintBoundary supaya tombol
+                // Bagikan bisa me-render-nya jadi JPG. Container putih
+                // di dalam boundary: JPG tidak punya transparansi, jadi
+                // latar harus dicat putih eksplisit (kalau tidak, sudut
+                // transparan jadi hitam di JPG).
+                RepaintBoundary(
+                  key: _receiptKey,
                   child: Container(
-                    width: 44,
-                    height: 44,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: SukaTeaColors.emeraldSoft,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.local_drink,
-                      color: SukaTeaColors.emerald,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'SUKA TEA',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
-                ),
-                const Text(
-                  'Stand Es Teh',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: SukaTeaColors.muted,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _hairline(),
-                const SizedBox(height: 12),
-                _row('Kasir', cashier),
-                const SizedBox(height: 4),
-                _row('Waktu', timeText),
-                const SizedBox(height: 4),
-                _row('Cara bayar', method.label),
-                const SizedBox(height: 12),
-                _hairline(),
-                const SizedBox(height: 12),
-                for (final line in lines)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    color: Colors.white,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${line.qty}x ${line.name}',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              if (line.modifierText.isNotEmpty)
-                                Text(
-                                  line.modifierText,
-                                  style: const TextStyle(
-                                    color: SukaTeaColors.muted,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              Text(
-                                formatRupiah(line.unitPrice),
-                                style: const TextStyle(
-                                  color: SukaTeaColors.muted,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ],
+                        // Ikon 44x44 di tengah — Column stretch, jadi harus
+                        // dibungkus Center supaya tidak melebar se-kartu.
+                        Center(
+                          child: Container(
+                            width: 44,
+                            height: 44,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: SukaTeaColors.emeraldSoft,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.local_drink,
+                              color: SukaTeaColors.emerald,
+                            ),
                           ),
                         ),
-                        Text(
-                          formatRupiah(line.total),
-                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'SUKA TEA',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 18,
+                          ),
+                        ),
+                        const Text(
+                          'Es Teh Kekinian',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: SukaTeaColors.muted,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        _hairline(),
+                        const SizedBox(height: 12),
+                        _row('Kasir', widget.cashier),
+                        const SizedBox(height: 4),
+                        _row('Waktu', timeText),
+                        const SizedBox(height: 4),
+                        _row('Cara bayar', widget.method.label),
+                        const SizedBox(height: 12),
+                        _hairline(),
+                        const SizedBox(height: 12),
+                        for (final line in widget.lines)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '${line.qty}x ${line.name}',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      if (line.modifierText.isNotEmpty)
+                                        Text(
+                                          line.modifierText,
+                                          style: const TextStyle(
+                                            color: SukaTeaColors.muted,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      Text(
+                                        formatRupiah(line.unitPrice),
+                                        style: const TextStyle(
+                                          color: SukaTeaColors.muted,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Text(
+                                  formatRupiah(line.total),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        const SizedBox(height: 2),
+                        _hairline(),
+                        const SizedBox(height: 12),
+                        // TOTAL 17 Bold + pill "LUNAS" emerald di samping label
+                        // (FigCraft frame 03, v23): pill solid 56x22, teks
+                        // putih 11 Bold; nominal emerald (bukan ink).
+                        Row(
+                          children: [
+                            const Text(
+                              'TOTAL',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 17,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              width: 56,
+                              height: 22,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: SukaTeaColors.emerald,
+                                borderRadius: BorderRadius.circular(11),
+                              ),
+                              child: const Text(
+                                'LUNAS',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                            const Spacer(),
+                            Text(
+                              formatRupiah(widget.total),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 17,
+                                color: SukaTeaColors.emerald,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        _row(
+                          'Bayar (${widget.method.label})',
+                          formatRupiah(widget.paid),
+                        ),
+                        const SizedBox(height: 6),
+                        _row('Kembali', formatRupiah(widget.paid - widget.total)),
+                        const SizedBox(height: 12),
+                        _hairline(),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Terima kasih sudah mampir!',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: SukaTeaColors.muted),
                         ),
                       ],
                     ),
                   ),
-                const SizedBox(height: 2),
-                _hairline(),
-                const SizedBox(height: 12),
-                // TOTAL 17 Bold + pill "LUNAS" emerald di samping label
-                // (FigCraft frame 03, v23): pill solid 56x22, teks
-                // putih 11 Bold; nominal emerald (bukan ink).
-                Row(
-                  children: [
-                    const Text(
-                      'TOTAL',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 17,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      width: 56,
-                      height: 22,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: SukaTeaColors.emerald,
-                        borderRadius: BorderRadius.circular(11),
-                      ),
-                      child: const Text(
-                        'LUNAS',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      formatRupiah(total),
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 17,
-                        color: SukaTeaColors.emerald,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                _row('Bayar (${method.label})', formatRupiah(paid)),
-                const SizedBox(height: 6),
-                _row('Kembali', formatRupiah(paid - total)),
-                const SizedBox(height: 12),
-                _hairline(),
-                const SizedBox(height: 12),
-                const Text(
-                  'Terima kasih sudah mampir!',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: SukaTeaColors.muted),
                 ),
                 const SizedBox(height: 20),
                 Row(

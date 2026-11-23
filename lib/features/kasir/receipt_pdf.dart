@@ -49,7 +49,7 @@ Future<Uint8List> buildReceiptPdfBytes({
             ),
           ),
           pw.Text(
-            'Stand Es Teh',
+            'Es Teh Kekinian',
             textAlign: pw.TextAlign.center,
             style: const pw.TextStyle(fontSize: 11),
           ),
