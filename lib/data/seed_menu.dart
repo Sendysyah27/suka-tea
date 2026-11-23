@@ -136,6 +136,12 @@ List<StockItem> seedStock() => const [
       StockItem(name: 'Bubuk perasa', unit: 'kg', qty: 2, lowThreshold: 0.5),
       StockItem(name: 'Yakult', unit: 'pcs', qty: 24, lowThreshold: 12),
       StockItem(name: 'Lemon', unit: 'pcs', qty: 20, lowThreshold: 10),
+      // Topping (Batch C1): 1 porsi per topping per cup. Satuan
+      // "porsi", stok awal 50 (pola bahan pcs: Lemon 20, Yakult 24 —
+      // topping dipakai di hampir tiap cup, jadi stok awal lebih besar).
+      StockItem(name: 'Boba', unit: 'porsi', qty: 50, lowThreshold: 10),
+      StockItem(name: 'Jelly', unit: 'porsi', qty: 50, lowThreshold: 10),
+      StockItem(name: 'Selasih', unit: 'porsi', qty: 50, lowThreshold: 10),
     ];
 
 /// Estimasi biaya bahan per satuan (rupiah) — HANYA untuk HPP estimasi
@@ -153,4 +159,10 @@ const Map<String, double> seedStockCostPerUnit = {
   'Bubuk perasa': 80000,
   'Yakult': 3500,
   'Lemon': 2000,
+  // Topping (Batch C1): biaya awal 0 — harga bahan DITENTUKAN Owner
+  // di halaman Stok (belum ada editor biaya di app; HPP topping
+  // tetap 0 sampai fitur itu dibangun — JANGAN isi estimasi sendiri).
+  'Boba': 0,
+  'Jelly': 0,
+  'Selasih': 0,
 };

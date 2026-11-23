@@ -62,6 +62,31 @@ void main() {
     expect(estimateHppForItems(items, recipes, costs), 0);
   });
 
+  test('estimateHppForItems: topping menambah HPP (Batch C1)', () {
+    // Biaya topping: Boba 1500/porsi, Selasih 500/porsi.
+    // Modifier gula/es tidak ada di costs -> dilewati.
+    const toppingCosts = <String, double>{
+      'Teh': 120000,
+      'Gula': 18000,
+      'Cup 16oz': 500,
+      'Boba': 1500,
+      'Selasih': 500,
+    };
+    final items = [
+      const SaleItem(
+        productId: 'manggo-milktea',
+        productName: 'Manggo Milktea',
+        variantId: 'manggo-milktea_r',
+        variantName: 'Reguler',
+        qty: 2,
+        unitPrice: 11000,
+        modifiers: ['Normal', 'Es Normal', 'Boba', 'Selasih'],
+      ),
+    ];
+    // Resep 2150/cup x 2 = 4300; topping (1500+500) x 2 = 4000.
+    expect(estimateHppForItems(items, recipes, toppingCosts), 8300);
+  });
+
   test('computeDailyStats: omzet, cup, rata-rata, HPP, laba, per cara bayar',
       () {
     final sales = [

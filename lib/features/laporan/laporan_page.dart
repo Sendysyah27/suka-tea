@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../core/theme/app_icons.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
+import '../../core/utils/roles.dart';
 import '../../core/widgets/tap_feedback.dart';
 import '../../data/models.dart';
 import '../../data/sale_history.dart';
@@ -19,7 +20,9 @@ import '../riwayat/riwayat_page.dart';
 /// (bukan angka contoh). Bila belum ada transaksi hari ini, tampil
 /// state kosong yang jujur.
 class LaporanPage extends StatefulWidget {
-  const LaporanPage({super.key});
+  const LaporanPage({super.key, required this.role});
+
+  final AppRole role;
 
   @override
   State<LaporanPage> createState() => _LaporanPageState();
@@ -50,7 +53,10 @@ class _LaporanPageState extends State<LaporanPage> {
     return ListenableBuilder(
       listenable: SaleHistoryService.instance,
       builder: (context, _) {
-        final today = SaleHistoryService.instance.salesOn(DateTime.now());
+        // Transaksi void DIKECUALIKAN (Batch C1): tutup kasir +
+        // terlaris tidak menghitung transaksi yang sudah di-void.
+        final today =
+            SaleHistoryService.instance.activeSalesOn(DateTime.now());
         final tunaiSales = today
             .where((s) => s.method == PaymentMethod.tunai)
             .fold(0, (sum, s) => sum + s.total);
@@ -166,7 +172,7 @@ class _LaporanPageState extends State<LaporanPage> {
                       onPressed: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => const RiwayatPage(),
+                            builder: (_) => RiwayatPage(role: widget.role),
                           ),
                         );
                       },

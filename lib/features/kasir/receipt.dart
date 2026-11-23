@@ -17,6 +17,8 @@ import 'receipt_pdf.dart';
 
 /// Teks struk digital. Format yang sama dipakai untuk cetak ESC/POS
 /// 58mm (Fase 2) — tinggal ganti renderer, datanya sama.
+/// [total] = yang dibayar = subtotal - diskon; bila [discount] > 0,
+/// baris Subtotal + Diskon ikut ditulis supaya auditnya jelas.
 String buildReceiptText({
   required List<ReceiptLine> lines,
   required PaymentMethod method,
@@ -24,6 +26,8 @@ String buildReceiptText({
   required int paid,
   String cashier = 'Kasir',
   DateTime? time,
+  int discount = 0,
+  bool isVoid = false,
 }) {
   final now = time ?? DateTime.now();
   final buf = StringBuffer();
@@ -41,6 +45,11 @@ String buildReceiptText({
     );
   }
   buf.writeln('--------------------------------');
+  if (discount > 0) {
+    buf.writeln('Subtotal     ${formatRupiah(total + discount)}');
+    buf.writeln('Diskon       -${formatRupiah(discount)}');
+  }
+  if (isVoid) buf.writeln('*** VOID ***');
   buf.writeln('TOTAL        ${formatRupiah(total)}');
   buf.writeln('Bayar (${method.label})  ${formatRupiah(paid)}');
   buf.writeln('Kembali      ${formatRupiah(paid - total)}');
@@ -66,10 +75,14 @@ class DigitalReceiptPage extends StatefulWidget {
     required this.paid,
     this.cashier = 'Kasir',
     this.time,
+    this.discount = 0,
+    this.isVoid = false,
   });
 
   final List<ReceiptLine> lines;
   final PaymentMethod method;
+
+  /// Total yang dibayar = subtotal - diskon.
   final int total;
   final int paid;
 
@@ -78,6 +91,13 @@ class DigitalReceiptPage extends StatefulWidget {
 
   /// Waktu transaksi (riwayat memakai waktu aslinya; kasir = sekarang).
   final DateTime? time;
+
+  /// Diskon manual transaksi ini (0 = tanpa diskon). Bila > 0,
+  /// tampil baris Subtotal + "Diskon -RpX" sebelum TOTAL.
+  final int discount;
+
+  /// Transaksi void: pill LUNAS diganti pill VOID (merah).
+  final bool isVoid;
 
   @override
   State<DigitalReceiptPage> createState() => _DigitalReceiptPageState();
@@ -153,6 +173,8 @@ class _DigitalReceiptPageState extends State<DigitalReceiptPage> {
       paid: widget.paid,
       cashier: widget.cashier,
       time: widget.time,
+      discount: widget.discount,
+      isVoid: widget.isVoid,
     );
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -291,9 +313,34 @@ class _DigitalReceiptPageState extends State<DigitalReceiptPage> {
                         const SizedBox(height: 2),
                         _hairline(),
                         const SizedBox(height: 12),
+                        // Diskon (Batch C1): baris Subtotal + Diskon hanya
+                        // bila diskon > 0 — TOTAL tetap total yang dibayar.
+                        if (widget.discount > 0) ...[
+                          _row(
+                            'Subtotal',
+                            formatRupiah(widget.total + widget.discount),
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            mainAxisAlignment:
+                                MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('Diskon'),
+                              Text(
+                                '-${formatRupiah(widget.discount)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: SukaTeaColors.danger,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                        ],
                         // TOTAL 17 Bold + pill "LUNAS" emerald di samping label
                         // (FigCraft frame 03, v23): pill solid 56x22, teks
                         // putih 11 Bold; nominal emerald (bukan ink).
+                        // Transaksi void: pill merah "VOID", bukan LUNAS.
                         Row(
                           children: [
                             const Text(
@@ -309,12 +356,14 @@ class _DigitalReceiptPageState extends State<DigitalReceiptPage> {
                               height: 22,
                               alignment: Alignment.center,
                               decoration: BoxDecoration(
-                                color: SukaTeaColors.emerald,
+                                color: widget.isVoid
+                                    ? SukaTeaColors.danger
+                                    : SukaTeaColors.emerald,
                                 borderRadius: BorderRadius.circular(11),
                               ),
-                              child: const Text(
-                                'LUNAS',
-                                style: TextStyle(
+                              child: Text(
+                                widget.isVoid ? 'VOID' : 'LUNAS',
+                                style: const TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.bold,
                                   fontSize: 11,

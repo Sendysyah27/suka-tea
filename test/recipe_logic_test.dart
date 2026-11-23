@@ -76,6 +76,49 @@ void main() {
     expect(dJum.containsKey('Cup 16oz'), isFalse);
   });
 
+  test('topping memotong stok: 1 cup +Boba +Selasih, qty 2', () {
+    // Batch C1: tiap topping = 1 porsi per cup. 2 cup dengan Boba
+    // + Selasih -> Boba 2 porsi, Selasih 2 porsi (di samping resep).
+    final cart = [
+      CartItem(
+        product: manggo,
+        variant: manggo.variants.first,
+        qty: 2,
+        modifiers: const [
+          Modifier(name: 'Normal', kind: 'gula'),
+          Modifier(name: 'Es Normal', kind: 'es'),
+          Modifier(name: 'Boba', kind: 'topping', priceDelta: 3000),
+          Modifier(name: 'Selasih', kind: 'topping', priceDelta: 1000),
+        ],
+      ),
+    ];
+    final d = computeDeductions(cart, recipes, stockByName);
+    expect(d['Boba'], 2);
+    expect(d['Selasih'], 2);
+    // Resep tetap jalan: Teh 0.010 x 2 cup.
+    expect(d['Teh'], closeTo(0.020, 1e-9));
+    expect(d['Cup 16oz'], 2);
+  });
+
+  test('topping tanpa bahan stok dilewati (tidak gagal)', () {
+    // Boba dihapus dari stok (mis. bahan dihapus Owner) -> deduksi
+    // Boba dilewati, bahan lain tetap dihitung.
+    stockByName.remove('Boba');
+    final cart = [
+      CartItem(
+        product: manggo,
+        variant: manggo.variants.first,
+        qty: 1,
+        modifiers: const [
+          Modifier(name: 'Boba', kind: 'topping', priceDelta: 3000),
+        ],
+      ),
+    ];
+    final d = computeDeductions(cart, recipes, stockByName);
+    expect(d.containsKey('Boba'), isFalse);
+    expect(d['Teh'], closeTo(0.010, 1e-9));
+  });
+
   test('seed resep mencakup semua 20 produk x 2 varian', () {
     final menu = seedMenu();
     expect(menu, hasLength(20));

@@ -64,6 +64,37 @@ class SaleItem {
         'unitPrice': unitPrice,
         'modifiers': modifiers,
       };
+
+  /// Rekonstruksi CartItem dari item riwayat — dipakai void untuk
+  /// mengembalikan stok. Modifier hanya menyimpan nama, jadi kind
+  /// topping dikenali dari [toppingNames] (nama topping yang dikenal
+  /// saat ini). priceDelta 0: deduksi stok tidak memakai harga.
+  CartItem toCartItem(Set<String> toppingNames) {
+    final variant = ProductVariant(
+      id: variantId,
+      name: variantName,
+      price: unitPrice,
+    );
+    final product = Product(
+      id: productId,
+      name: productName,
+      category: '',
+      variants: [variant],
+    );
+    return CartItem(
+      product: product,
+      variant: variant,
+      qty: qty,
+      modifiers: modifiers
+          .map(
+            (name) => Modifier(
+              name: name,
+              kind: toppingNames.contains(name) ? 'topping' : 'other',
+            ),
+          )
+          .toList(),
+    );
+  }
 }
 
 /// Satu transaksi selesai (sudah dibayar).
@@ -76,18 +107,44 @@ class SaleRecord {
     required this.method,
     required this.paid,
     required this.change,
+    this.discount = 0,
+    this.isVoid = false,
   });
 
   final String id;
   final DateTime createdAt;
   final List<SaleItem> items;
+
+  /// Total yang dibayar = subtotal - diskon.
   final int total;
   final PaymentMethod method;
   final int paid;
   final int change;
 
+  /// Diskon manual transaksi ini (0 bila tanpa diskon).
+  final int discount;
+
+  /// true = transaksi di-void Owner (stok dikembalikan, tidak
+  /// dihitung di omzet/Keuangan/Laporan).
+  final bool isVoid;
+
+  /// Subtotal sebelum diskon (total + diskon).
+  int get subtotal => total + discount;
+
   /// Jumlah cup terjual di transaksi ini.
   int get cups => items.fold(0, (s, i) => s + i.qty);
+
+  SaleRecord copyWith({bool? isVoid}) => SaleRecord(
+        id: id,
+        createdAt: createdAt,
+        items: items,
+        total: total,
+        method: method,
+        paid: paid,
+        change: change,
+        discount: discount,
+        isVoid: isVoid ?? this.isVoid,
+      );
 
   factory SaleRecord.fromJson(Map<String, dynamic> json) {
     final methodName = json['method'] as String? ?? 'tunai';
@@ -105,6 +162,8 @@ class SaleRecord {
       ),
       paid: (json['paid'] as num? ?? 0).toInt(),
       change: (json['change'] as num? ?? 0).toInt(),
+      discount: (json['discount'] as num? ?? 0).toInt(),
+      isVoid: json['isVoid'] as bool? ?? false,
     );
   }
 
@@ -116,6 +175,8 @@ class SaleRecord {
         'method': method.name,
         'paid': paid,
         'change': change,
+        'discount': discount,
+        'isVoid': isVoid,
       };
 }
 
@@ -158,8 +219,9 @@ class TopProduct {
 
 /// HPP estimasi satu transaksi: untuk tiap cup, jumlahkan
 /// (qty bahan di resep x biaya bahan per satuan). Bahan yang tidak ada
-/// di [costs] dihitung Rp0 (bukan gagal). Topping tidak masuk resep,
-/// jadi tidak menambah HPP di sini.
+/// di [costs] dihitung Rp0 (bukan gagal). Topping juga menambah HPP:
+/// tiap modifier topping = 1 porsi x biaya di [costs] (nama topping =
+/// nama bahan stok; modifier gula/es tidak ada di costs, jadi lewati).
 double estimateHppForItems(
   List<SaleItem> items,
   Map<String, List<RecipeLine>> recipes,
@@ -170,11 +232,17 @@ double estimateHppForItems(
     for (final line in recipes[item.variantId] ?? const <RecipeLine>[]) {
       hpp += line.qty * (costs[line.stockName] ?? 0) * item.qty;
     }
+    for (final name in item.modifiers) {
+      final cost = costs[name];
+      if (cost != null) hpp += cost * 1 * item.qty;
+    }
   }
   return hpp;
 }
 
 /// Ringkasan [sales] (sudah difilter satu hari oleh pemanggil).
+/// Transaksi void DIKECUALIKAN (tidak masuk omzet, cup, HPP, laba,
+/// maupun per cara bayar) — void = transaksi batal, bukan penjualan.
 DailyStats computeDailyStats(
   List<SaleRecord> sales,
   Map<String, List<RecipeLine>> recipes,
@@ -184,7 +252,10 @@ DailyStats computeDailyStats(
   var cups = 0;
   var hpp = 0.0;
   final byMethod = <PaymentMethod, int>{};
+  var txnCount = 0;
   for (final s in sales) {
+    if (s.isVoid) continue;
+    txnCount++;
     omzet += s.total;
     cups += s.cups;
     hpp += estimateHppForItems(s.items, recipes, costs);
@@ -193,9 +264,9 @@ DailyStats computeDailyStats(
   final hppInt = hpp.round();
   return DailyStats(
     omzet: omzet,
-    txnCount: sales.length,
+    txnCount: txnCount,
     cups: cups,
-    avgPerTxn: sales.isEmpty ? 0 : omzet ~/ sales.length,
+    avgPerTxn: txnCount == 0 ? 0 : omzet ~/ txnCount,
     hppEstimate: hppInt,
     labaEstimate: omzet - hppInt,
     byMethod: byMethod,
@@ -203,9 +274,11 @@ DailyStats computeDailyStats(
 }
 
 /// Produk terlaris dari [sales], urut jumlah cup menurun.
+/// Transaksi void DIKECUALIKAN.
 List<TopProduct> topProducts(List<SaleRecord> sales, {int limit = 3}) {
   final counts = <String, int>{};
   for (final s in sales) {
+    if (s.isVoid) continue;
     for (final item in s.items) {
       counts[item.productName] = (counts[item.productName] ?? 0) + item.qty;
     }
@@ -237,12 +310,18 @@ class SaleHistoryService extends ChangeNotifier {
   bool get isInitialized => _initialized;
 
   /// Transaksi pada tanggal [day] (banding tahun/bulan/tanggal saja).
+  /// Termasuk yang void — Riwayat menampilkan semuanya (dengan label).
   List<SaleRecord> salesOn(DateTime day) => _sales
       .where((s) =>
           s.createdAt.year == day.year &&
           s.createdAt.month == day.month &&
           s.createdAt.day == day.day)
       .toList();
+
+  /// Transaksi pada tanggal [day] yang BUKAN void — dipakai Keuangan
+  /// + Laporan (omzet, tutup kasir, terlaris tidak menghitung void).
+  List<SaleRecord> activeSalesOn(DateTime day) =>
+      salesOn(day).where((s) => !s.isVoid).toList();
 
   /// Baca Drift; tabel kosong = belum ada transaksi (bukan error).
   Future<void> init() async {
@@ -259,6 +338,8 @@ class SaleHistoryService extends ChangeNotifier {
               'method': r.method,
               'paid': r.paid,
               'change': r.change,
+              'discount': r.discount,
+              'isVoid': r.isVoid,
             }),
           )
           .toList()
@@ -273,12 +354,15 @@ class SaleHistoryService extends ChangeNotifier {
   }
 
   /// Catat satu penjualan selesai. Dipanggil di _selesaikanBayar()
-  /// SESUDAH deductForSale. Mengembalikan record yang dicatat.
+  /// SESUDAH deductForSale. [total] = yang dibayar = subtotal -
+  /// diskon; [discount] dicatat supaya bisa diaudit di Riwayat.
+  /// Mengembalikan record yang dicatat.
   Future<SaleRecord> recordSale({
     required List<CartItem> items,
     required int total,
     required PaymentMethod method,
     required int paid,
+    int discount = 0,
   }) async {
     final record = SaleRecord(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
@@ -288,6 +372,7 @@ class SaleHistoryService extends ChangeNotifier {
       method: method,
       paid: paid,
       change: paid - total,
+      discount: discount,
     );
     _sales = [record, ..._sales];
     notifyListeners();
@@ -303,11 +388,33 @@ class SaleHistoryService extends ChangeNotifier {
               method: record.method.name,
               paid: record.paid,
               change: record.change,
+              discount: Value(record.discount),
+              isVoid: const Value(false),
             ),
           );
     } catch (e) {
       debugPrint('SaleHistory simpan gagal (riwayat memori tetap ada): $e');
     }
     return record;
+  }
+
+  /// Tandai satu transaksi sebagai void (HANYA Owner — dicek di UI).
+  /// Stok dikembalikan DULU oleh pemanggil (restoreForSale), baru
+  /// record ini ditandai. false = id tidak ada / sudah void.
+  /// Transaksi void tetap tampil di Riwayat (dengan label VOID) tapi
+  /// tidak dihitung di statistik mana pun.
+  Future<bool> voidSale(String id) async {
+    final i = _sales.indexWhere((s) => s.id == id);
+    if (i < 0 || _sales[i].isVoid) return false;
+    _sales[i] = _sales[i].copyWith(isVoid: true);
+    notifyListeners();
+    try {
+      await (_database.update(_database.saleHistory)
+            ..where((t) => t.id.equals(id)))
+          .write(const SaleHistoryCompanion(isVoid: Value(true)));
+    } catch (e) {
+      debugPrint('SaleHistory void gagal simpan (memori tetap void): $e');
+    }
+    return true;
   }
 }

@@ -51,7 +51,7 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
         KatalogPage(role: _role),
         StokPage(role: _role),
         KeuanganPage(role: _role),
-        const LaporanPage(),
+        LaporanPage(role: _role),
       ];
 
   /// Minta PIN Owner. true = PIN benar, peran jadi Owner.

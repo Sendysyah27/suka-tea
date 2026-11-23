@@ -60,6 +60,9 @@ class ProductRecipes extends Table {
 /// Riwayat penjualan selesai (lokal, append-only). Satu baris per
 /// transaksi yang sudah dibayar. itemsJson = daftar SaleItem (JSON).
 /// Dipakai tab Keuangan + Laporan (data nyata) dan halaman Riwayat.
+/// [discount] = diskon manual transaksi ini (0 bila tanpa diskon);
+/// total yang disimpan = subtotal - diskon. [isVoid] = transaksi
+/// dibatalkan Owner (stok dikembalikan, tidak dihitung di omzet).
 class SaleHistory extends Table {
   TextColumn get id => text()();
   DateTimeColumn get createdAt => dateTime()();
@@ -68,6 +71,35 @@ class SaleHistory extends Table {
   TextColumn get method => text()();
   IntColumn get paid => integer()();
   IntColumn get change => integer()();
+  IntColumn get discount => integer().withDefault(const Constant(0))();
+  BoolColumn get isVoid => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Order yang ditahan di Kasir (Batch C1). Satu baris per keranjang
+/// yang ditahan; itemsJson = daftar CartItem (JSON). Label otomatis
+/// "Tahan N • HH:mm". Pulihkan = hapus baris + isi kembali keranjang.
+class HeldOrders extends Table {
+  TextColumn get id => text()();
+  TextColumn get label => text()();
+  TextColumn get itemsJson => text()();
+  DateTimeColumn get createdAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Topping yang bisa dipilih di sheet opsi produk (Batch C1).
+/// Nama topping HARUS sama dengan nama bahan stok (Boba/Jelly/dll) —
+/// ToppingService menjaga sinkronisasinya. [active] = false berarti
+/// topping disembunyikan dari sheet (tidak dihapus).
+class Toppings extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  IntColumn get priceDelta => integer()();
+  BoolColumn get active => boolean().withDefault(const Constant(true))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -79,12 +111,14 @@ class SaleHistory extends Table {
   StockLevels,
   ProductRecipes,
   SaleHistory,
+  HeldOrders,
+  Toppings,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -99,6 +133,15 @@ class AppDatabase extends _$AppDatabase {
           // Tabel lama TIDAK dihapus.
           if (from < 3) {
             await m.createTable(saleHistory);
+          }
+          // v3 -> v4 (23 Nov 2026, Batch C1): tambah kolom diskon +
+          // void di SaleHistory, dan tabel baru HeldOrders + Toppings.
+          // Tabel lama TIDAK dihapus.
+          if (from < 4) {
+            await m.addColumn(saleHistory, saleHistory.discount);
+            await m.addColumn(saleHistory, saleHistory.isVoid);
+            await m.createTable(heldOrders);
+            await m.createTable(toppings);
           }
         },
       );

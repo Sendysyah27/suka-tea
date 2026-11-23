@@ -61,6 +61,31 @@ class Modifier {
   final String name;
   final String kind;
   final int priceDelta;
+
+  /// Kesamaan nilai (bukan identitas): dipakai Set<Modifier> di sheet
+  /// opsi produk — topping dari ToppingService dibuat baru tiap baca,
+  /// jadi contains() harus membandingkan isi, bukan instance.
+  @override
+  bool operator ==(Object other) =>
+      other is Modifier &&
+      other.name == name &&
+      other.kind == kind &&
+      other.priceDelta == priceDelta;
+
+  @override
+  int get hashCode => Object.hash(name, kind, priceDelta);
+
+  factory Modifier.fromJson(Map<String, dynamic> json) => Modifier(
+        name: json['name'] as String? ?? '',
+        kind: json['kind'] as String? ?? '',
+        priceDelta: (json['priceDelta'] as num? ?? 0).toInt(),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'kind': kind,
+        'priceDelta': priceDelta,
+      };
 }
 
 class CartItem {
@@ -95,6 +120,45 @@ class CartItem {
 
   String get label =>
       modifiers.isEmpty ? nameText : '$nameText $modifierText';
+
+  /// Serialisasi untuk order tertahan (HeldOrders.itemsJson).
+  /// Produk direkonstruksi dengan satu varian (varian yang ditahan)
+  /// — cukup untuk keranjang, struk, dan deduksi stok (resep memakai
+  /// variant.id; harga memakai variant.price + delta modifier).
+  Map<String, dynamic> toJson() => {
+        'productId': product.id,
+        'productName': product.name,
+        'productCategory': product.category,
+        'photoUrl': product.photoUrl,
+        'variantId': variant.id,
+        'variantName': variant.name,
+        'variantPrice': variant.price,
+        'qty': qty,
+        'modifiers': modifiers.map((m) => m.toJson()).toList(),
+      };
+
+  factory CartItem.fromJson(Map<String, dynamic> json) {
+    final variant = ProductVariant(
+      id: json['variantId'] as String? ?? '',
+      name: json['variantName'] as String? ?? 'Reguler',
+      price: (json['variantPrice'] as num? ?? 0).toInt(),
+    );
+    final product = Product(
+      id: json['productId'] as String? ?? '',
+      name: json['productName'] as String? ?? '',
+      category: json['productCategory'] as String? ?? '',
+      photoUrl: json['photoUrl'] as String?,
+      variants: [variant],
+    );
+    return CartItem(
+      product: product,
+      variant: variant,
+      qty: (json['qty'] as num? ?? 1).toInt(),
+      modifiers: (json['modifiers'] as List<dynamic>? ?? const [])
+          .map((e) => Modifier.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
 }
 
 class StockItem {

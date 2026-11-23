@@ -11,6 +11,7 @@ import '../../data/menu_service.dart';
 import '../../data/models.dart';
 import '../../data/seed_menu.dart';
 import '../resep/resep_page.dart';
+import '../topping/topping_page.dart';
 
 /// Kelola Menu — HANYA Owner. Menu, harga, dan foto produk di-custom di
 /// dalam app (bukan hardcode). Kasir read-only. Desain v2: thumb 56px
@@ -219,6 +220,17 @@ class _KatalogPageState extends State<KatalogPage> {
     if (mounted) setState(() {});
   }
 
+  /// Buka Kelola Topping (Batch C1) — HANYA Owner. Topping yang
+  /// dipilih kasir di sheet opsi produk dikelola di sana.
+  Future<void> _openToppings() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ToppingPage(role: widget.role),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
   /// Pemilih foto dari 20 foto poster bawaan. '' = hapus foto,
   /// null = batal.
   Future<String?> _pickPhoto(String? selected) async {
@@ -412,6 +424,22 @@ class _KatalogPageState extends State<KatalogPage> {
                             )
                           else
                             const Chip(label: Text('Kasir: lihat saja')),
+                          // Kelola Topping (Batch C1): topping di sheet
+                          // opsi produk dikelola di halaman sendiri.
+                          // HANYA Owner — Kasir tidak melihat tombolnya.
+                          if (_canEdit) ...[
+                            const SizedBox(height: 12),
+                            TapFeedback(
+                              child: OutlinedButton.icon(
+                                onPressed: _openToppings,
+                                style: OutlinedButton.styleFrom(
+                                  minimumSize: const Size(0, 56),
+                                ),
+                                icon: const Icon(Icons.local_drink_outlined),
+                                label: const Text('Kelola topping'),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     );

@@ -37,7 +37,10 @@ class KeuanganPage extends StatelessWidget {
     return ListenableBuilder(
       listenable: SaleHistoryService.instance,
       builder: (context, _) {
-        final today = SaleHistoryService.instance.salesOn(DateTime.now());
+        // Transaksi void DIKECUALIKAN (Batch C1): omzet, laba, dan
+        // rincian tidak menghitung transaksi yang sudah di-void.
+        final today =
+            SaleHistoryService.instance.activeSalesOn(DateTime.now());
         if (today.isEmpty) {
           return const Center(
             child: Padding(

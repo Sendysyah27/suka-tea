@@ -5,6 +5,7 @@ import '../../core/utils/money.dart';
 import '../../core/widgets/tap_feedback.dart';
 import '../../data/models.dart';
 import '../../data/seed_menu.dart';
+import '../../data/topping_service.dart';
 
 /// Pilihan item yang dikembalikan sheet opsi produk.
 class ProductSelection {
@@ -16,7 +17,10 @@ class ProductSelection {
 
 /// Sheet pilihan saat kartu produk diketuk: varian Reguler/Jumbo
 /// (dengan harga masing-masing), gula, es, topping (multi-pilih,
-/// harga topping dari seed_menu — Boba +3K, Jelly +2K, Selasih +1K).
+/// harga topping dari ToppingService — Boba +3K, Jelly +2K, Selasih
+/// +1K sebagai seed; Owner bisa ubah di Kelola Topping).
+/// Topping AKTIF saja yang tampil; sebelum ToppingService init,
+/// dipakai seed (toppingOptions) supaya widget test tetap jalan.
 /// Harga live = harga varian + delta topping.
 /// Mengembalikan ProductSelection atau null bila batal.
 Future<ProductSelection?> showProductOptionsSheet(
@@ -27,6 +31,9 @@ Future<ProductSelection?> showProductOptionsSheet(
   var gula = gulaOptions.first;
   var es = esOptions.first;
   final toppings = <Modifier>{};
+  // Snapshot saat sheet dibuka (tidak me-rebuild bila Owner mengubah
+  // topping di halaman lain selagi sheet terbuka).
+  final toppingChoices = ToppingService.instance.activeModifiers;
 
   final result = await showModalBottomSheet<ProductSelection>(
     context: context,
@@ -132,7 +139,7 @@ Future<ProductSelection?> showProductOptionsSheet(
               Wrap(
                 spacing: 8,
                 children: [
-                  for (final t in toppingOptions)
+                  for (final t in toppingChoices)
                     FilterChip(
                       label: Text(
                         '${t.name} +${formatRupiah(t.priceDelta)}',

@@ -56,6 +56,18 @@ Map<String, double> computeDeductions(
       out[line.stockName] =
           (out[line.stockName] ?? 0) + line.qty * item.qty;
     }
+    // Topping (Batch C1): tiap topping = 1 porsi per cup — topping
+    // juga memotong stok bahan (nama topping = nama bahan stok).
+    // Hanya bila nama itu ada di stockByName — aturan skip yang sama
+    // seperti baris resep basi. Karena checkCart, deductForSale, dan
+    // restoreForSale semuanya memakai fungsi ini, ketiganya ikut
+    // benar: topping yang stoknya kurang memicu dialog shortage,
+    // dan void mengembalikan stok topping.
+    for (final m in item.modifiers) {
+      if (m.kind != 'topping') continue;
+      if (!stockByName.containsKey(m.name)) continue;
+      out[m.name] = (out[m.name] ?? 0) + 1 * item.qty;
+    }
   }
   return out;
 }

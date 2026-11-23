@@ -3,11 +3,13 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../core/theme/app_icons.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/discount.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/product_photo.dart';
 import '../../core/widgets/screen_title.dart';
 import '../../core/widgets/tap_feedback.dart';
+import '../../data/held_order_service.dart';
 import '../../data/local/outbox_service.dart';
 import '../../data/menu_service.dart';
 import '../../data/models.dart';
@@ -17,6 +19,7 @@ import '../../data/seed_menu.dart';
 import '../../data/stock_service.dart';
 import '../qris/qris_pay_page.dart';
 import 'cash_sheet.dart';
+import 'discount_sheet.dart';
 import 'product_options_sheet.dart';
 import 'receipt.dart';
 
@@ -43,6 +46,11 @@ class _KasirPageState extends State<KasirPage> {
   String _query = '';
   bool _isProcessing = false;
 
+  /// Diskon manual keranjang aktif (nominal Rp, 0..subtotal).
+  /// TIDAK ikut tertahan bersama order (diskon itu per keranjang
+  /// aktif; saat pulih dari Tahan, diskon mulai dari 0).
+  int _discount = 0;
+
   List<Product> get _menu => MenuService.instance.products;
 
   List<Product> get _visible {
@@ -54,7 +62,11 @@ class _KasirPageState extends State<KasirPage> {
     return byCategory.where((p) => p.name.toLowerCase().contains(q)).toList();
   }
 
-  int get _total => _cart.fold(0, (sum, item) => sum + item.total);
+  /// Subtotal sebelum diskon.
+  int get _subtotal => _cart.fold(0, (sum, item) => sum + item.total);
+
+  /// Total yang dibayar = subtotal - diskon (tidak pernah negatif).
+  int get _total => payableAfterDiscount(_subtotal, _discount);
 
   int get _count => _cart.fold(0, (sum, item) => sum + item.qty);
 
@@ -172,6 +184,8 @@ class _KasirPageState extends State<KasirPage> {
       // Cek stok bahan dulu — SEBELUM layar QRIS / uang diterima dibuka.
       // Kalau ada yang kurang, kasir memilih: batal (cart utuh,
       // _isProcessing direset oleh finally) atau tetap jual.
+      // checkCart memakai computeDeductions — topping ikut dicek
+      // (1 porsi per topping per cup, Batch C1).
       final shortages = StockService.instance.checkCart(_cart);
       if (shortages.isNotEmpty) {
         final lanjut = await _confirmShortage(shortages);
@@ -180,11 +194,13 @@ class _KasirPageState extends State<KasirPage> {
       if (_method == PaymentMethod.qris) {
         // QRIS dinamis: nominal bisa di-custom di layar QRIS, konfirmasi
         // bayar manual oleh kasir (cek mutasi dulu).
-        // Total penjualan = total keranjang; paid = nominal QRIS yang
-        // dibayar (bisa beda karena custom/bulatkan) — selisihnya
-        // tercatat sebagai kembalian, omzet tidak ikut membengkak.
+        // Total penjualan = total keranjang SESUDAH diskon; paid =
+        // nominal QRIS yang dibayar (bisa beda karena custom/bulatkan)
+        // — selisihnya tercatat sebagai kembalian, omzet tidak ikut
+        // membengkak.
         final items = List<CartItem>.from(_cart);
         final total = _total;
+        final discount = _discount;
         final paidNominal = await Navigator.of(context).push<int>(
           MaterialPageRoute(
             builder: (_) => QrisPayPage(total: total, role: widget.role),
@@ -194,6 +210,7 @@ class _KasirPageState extends State<KasirPage> {
         await _selesaikanBayar(
           items: items,
           total: total,
+          discount: discount,
           method: PaymentMethod.qris,
           paid: paidNominal,
         );
@@ -201,6 +218,7 @@ class _KasirPageState extends State<KasirPage> {
       }
       final items = List<CartItem>.from(_cart);
       final total = _total;
+      final discount = _discount;
       var paid = total;
       if (_method == PaymentMethod.tunai) {
         // Tunai: tanya uang diterima dulu (nominal cepat + manual),
@@ -213,6 +231,7 @@ class _KasirPageState extends State<KasirPage> {
       await _selesaikanBayar(
         items: items,
         total: total,
+        discount: discount,
         method: _method,
         paid: paid,
       );
@@ -221,10 +240,238 @@ class _KasirPageState extends State<KasirPage> {
     }
   }
 
+  /// Buka sheet diskon manual. Nilai kembali = diskon baru (0 =
+  /// hapus diskon). Dipanggil dari panel keranjang.
+  Future<void> _editDiscount() async {
+    if (_cart.isEmpty) return;
+    final value = await showDiscountSheet(
+      context,
+      subtotal: _subtotal,
+      currentDiscount: _discount,
+    );
+    if (value == null || !mounted) return;
+    setState(() => _discount = value);
+  }
+
+  /// Tahan keranjang saat ini sebagai order tertahan (label otomatis
+  /// "Tahan N • HH:mm"), lalu kosongkan keranjang + diskon.
+  Future<void> _holdCart() async {
+    if (_cart.isEmpty || _isProcessing) return;
+    final held =
+        await HeldOrderService.instance.hold(List<CartItem>.from(_cart));
+    if (!mounted) return;
+    setState(() {
+      _cart.clear();
+      _discount = 0;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Keranjang ditahan sebagai ${held.label}.')),
+    );
+  }
+
+  /// Daftar order tertahan (bottom sheet). Tap satu order = pulihkan
+  /// ke keranjang. Pulih hanya bila keranjang kosong; bila berisi,
+  /// kasir memilih "Tahan & Buka" (keranjang saat ini ikut ditahan)
+  /// atau "Batal".
+  Future<void> _showHeldOrders() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => ListenableBuilder(
+        listenable: HeldOrderService.instance,
+        builder: (context, _) {
+          final held = HeldOrderService.instance.orders;
+          // Pola sheet yang sudah ada (kasir): SingleChildScrollView +
+          // daftar shrinkWrap (tanpa Flexible — flex di dalam sheet
+          // yang tingginya mengikuti konten bisa overflow).
+          return SingleChildScrollView(
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: 16,
+                right: 16,
+                top: 16,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 30,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFC9D6CE),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Order yang ditahan',
+                    style:
+                        TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Ketuk satu order untuk memulihkannya ke keranjang.',
+                    style: TextStyle(color: SukaTeaColors.muted),
+                  ),
+                  const SizedBox(height: 12),
+                  if (held.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'Belum ada order yang ditahan.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: SukaTeaColors.muted),
+                      ),
+                    )
+                  else
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: held.length,
+                      itemBuilder: (context, i) {
+                        final order = held[i];
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          child: InkWell(
+                            onTap: () =>
+                                _restoreHeld(order, sheetContext),
+                            borderRadius: BorderRadius.circular(20),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          order.label,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 15,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          order.summary,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: SukaTeaColors.muted,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          '${order.count} cup • '
+                                          '${formatRupiah(order.subtotal)}',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: SukaTeaColors.emerald,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Hapus order yang ditahan',
+                                    icon: const Icon(Icons.close),
+                                    onPressed: () =>
+                                        _deleteHeld(order, sheetContext),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+              ],
+            ),
+          ),
+        );
+        },
+      ),
+    );
+  }
+
+  /// Pulihkan satu order tertahan ke keranjang.
+  Future<void> _restoreHeld(HeldOrder order, BuildContext sheetContext) async {
+    if (_cart.isNotEmpty) {
+      final holdFirst = await showDialog<bool>(
+        context: sheetContext,
+        builder: (context) => AlertDialog(
+          title: const Text('Keranjang berisi'),
+          content: const Text(
+            'Keranjang saat ini berisi item. Tahan dulu keranjang ini '
+            'sebelum membuka order yang ditahan?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Batal'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Tahan & Buka'),
+            ),
+          ],
+        ),
+      );
+      if (holdFirst != true || !mounted) return;
+      await HeldOrderService.instance.hold(List<CartItem>.from(_cart));
+      if (!mounted) return;
+      setState(() {
+        _cart.clear();
+        _discount = 0;
+      });
+    }
+    final items = await HeldOrderService.instance.restore(order.id);
+    if (items == null || !mounted) return;
+    Navigator.of(sheetContext).pop();
+    setState(() {
+      _cart.addAll(items);
+      _discount = 0;
+    });
+  }
+
+  /// Hapus order tertahan tanpa memulihkan (konfirmasi dulu).
+  Future<void> _deleteHeld(HeldOrder order, BuildContext sheetContext) async {
+    final ok = await showDialog<bool>(
+      context: sheetContext,
+      builder: (context) => AlertDialog(
+        title: Text('Hapus ${order.label}?'),
+        content: const Text(
+          'Order yang ditahan ini hilang. Item di dalamnya ikut terhapus.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: SukaTeaColors.danger,
+            ),
+            child: const Text('Hapus'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await HeldOrderService.instance.remove(order.id);
+  }
+
   /// Catat transaksi ke outbox + riwayat, potong stok, tampilkan struk.
   Future<void> _selesaikanBayar({
     required List<CartItem> items,
     required int total,
+    required int discount,
     required PaymentMethod method,
     required int paid,
   }) async {
@@ -232,6 +479,7 @@ class _KasirPageState extends State<KasirPage> {
       'client_uuid': DateTime.now().microsecondsSinceEpoch.toString(),
       'payment_method': method.name,
       'total': total,
+      'discount': discount,
       'items': items
           .map((i) => {'name': i.label, 'qty': i.qty, 'price': i.unitPrice})
           .toList(),
@@ -244,9 +492,13 @@ class _KasirPageState extends State<KasirPage> {
       total: total,
       method: method,
       paid: paid,
+      discount: discount,
     );
     if (!mounted) return;
-    setState(_cart.clear);
+    setState(() {
+      _cart.clear();
+      _discount = 0;
+    });
     final lines = items.map(ReceiptLine.fromCartItem).toList();
     await Navigator.of(context).push(
       MaterialPageRoute(
@@ -255,6 +507,7 @@ class _KasirPageState extends State<KasirPage> {
           method: method,
           total: total,
           paid: paid,
+          discount: discount,
           cashier: widget.role == AppRole.owner ? 'Owner' : 'Kasir',
         ),
       ),
@@ -290,15 +543,27 @@ class _KasirPageState extends State<KasirPage> {
               onQuickAdd: _quickAdd,
               onOptions: _openOptions,
             );
-            final cart = _CartPanel(
-              cart: _cart,
-              total: _total,
-              method: _method,
-              isProcessing: _isProcessing,
-              onMethod: (m) => setState(() => _method = m),
-              onQty: _changeQty,
-              onRemove: _removeItem,
-              onBayar: _bayar,
+            // Panel keranjang mendengarkan HeldOrderService supaya
+            // angka "Ditahan (N)" ikut berubah saat order ditahan /
+            // dipulihkan / dihapus (tanpa menunggu setState Kasir).
+            final cart = ListenableBuilder(
+              listenable: HeldOrderService.instance,
+              builder: (context, _) => _CartPanel(
+                cart: _cart,
+                subtotal: _subtotal,
+                discount: _discount,
+                total: _total,
+                method: _method,
+                isProcessing: _isProcessing,
+                heldCount: HeldOrderService.instance.orders.length,
+                onMethod: (m) => setState(() => _method = m),
+                onQty: _changeQty,
+                onRemove: _removeItem,
+                onBayar: _bayar,
+                onHold: _holdCart,
+                onShowHeld: _showHeldOrders,
+                onDiscount: _editDiscount,
+              ),
             );
 
             if (SukaTeaBreakpoints.isWide(width)) {
@@ -363,9 +628,13 @@ class _KasirPageState extends State<KasirPage> {
                               _CartPanel(
                                 shrink: true,
                                 cart: _cart,
+                                subtotal: _subtotal,
+                                discount: _discount,
                                 total: _total,
                                 method: _method,
                                 isProcessing: _isProcessing,
+                                heldCount:
+                                    HeldOrderService.instance.orders.length,
                                 onMethod: (m) {
                                   setState(() => _method = m);
                                   refreshSheet();
@@ -383,6 +652,18 @@ class _KasirPageState extends State<KasirPage> {
                                 onBayar: () {
                                   Navigator.of(sheetContext).pop();
                                   _bayar();
+                                },
+                                onHold: () async {
+                                  await _holdCart();
+                                  refreshSheet();
+                                },
+                                onShowHeld: () async {
+                                  await _showHeldOrders();
+                                  refreshSheet();
+                                },
+                                onDiscount: () async {
+                                  await _editDiscount();
+                                  refreshSheet();
                                 },
                               ),
                             ],
@@ -667,24 +948,50 @@ class _MenuSection extends StatelessWidget {
 class _CartPanel extends StatelessWidget {
   const _CartPanel({
     required this.cart,
+    required this.subtotal,
+    required this.discount,
     required this.total,
     required this.method,
     required this.isProcessing,
+    required this.heldCount,
     required this.onMethod,
     required this.onQty,
     required this.onRemove,
     required this.onBayar,
+    required this.onHold,
+    required this.onShowHeld,
+    required this.onDiscount,
     this.shrink = false,
   });
 
   final List<CartItem> cart;
+
+  /// Subtotal sebelum diskon (untuk baris Subtotal saat diskon > 0).
+  final int subtotal;
+
+  /// Diskon manual keranjang aktif (0 = tanpa diskon).
+  final int discount;
+
+  /// Total yang dibayar = subtotal - diskon.
   final int total;
   final PaymentMethod method;
   final bool isProcessing;
+
+  /// Jumlah order yang sedang ditahan (untuk chip "Ditahan (N)").
+  final int heldCount;
   final ValueChanged<PaymentMethod> onMethod;
   final void Function(int, int) onQty;
   final void Function(int) onRemove;
   final VoidCallback onBayar;
+
+  /// Tahan keranjang saat ini sebagai order tertahan.
+  final VoidCallback onHold;
+
+  /// Buka daftar order tertahan.
+  final VoidCallback onShowHeld;
+
+  /// Buka sheet diskon manual.
+  final VoidCallback onDiscount;
 
   /// true = di bottom sheet HP: kolom mengecil mengikuti konten
   /// (bukan Expanded + tinggi tetap 75%).
@@ -1037,7 +1344,36 @@ class _CartPanel extends StatelessWidget {
             mainAxisSize: shrink ? MainAxisSize.min : MainAxisSize.max,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const ScreenTitle('Keranjang'),
+              // Judul + chip "Ditahan (N)" (Batch C1): ketuk untuk
+              // membuka daftar order tertahan. Nonaktif bila tidak ada
+              // order yang ditahan.
+              Row(
+                children: [
+                  const Expanded(child: ScreenTitle('Keranjang')),
+                  const SizedBox(width: 8),
+                  TapFeedback(
+                    enabled: heldCount > 0,
+                    child: OutlinedButton(
+                      onPressed: heldCount == 0 ? null : onShowHeld,
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 36),
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                      child: Text(
+                        'Ditahan ($heldCount)',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 12),
               if (shrink) list else Expanded(child: list),
               const Divider(height: 1),
@@ -1074,6 +1410,54 @@ class _CartPanel extends StatelessWidget {
                       ],
                     ),
               const SizedBox(height: 12),
+              // Diskon manual (Batch C1): subtotal + baris diskon hanya
+              // tampil bila diskon > 0; tombol Diskon selalu ada
+              // (nonaktif bila keranjang kosong).
+              if (discount > 0) ...[
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Subtotal',
+                      style: TextStyle(color: SukaTeaColors.muted),
+                    ),
+                    Text(
+                      formatRupiah(subtotal),
+                      style: const TextStyle(color: SukaTeaColors.muted),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+              ],
+              Row(
+                children: [
+                  TapFeedback(
+                    enabled: cart.isNotEmpty,
+                    child: TextButton.icon(
+                      onPressed: cart.isEmpty ? null : onDiscount,
+                      icon: const Icon(Icons.percent, size: 18),
+                      label: const Text(
+                        'Diskon',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  if (discount > 0)
+                    Text(
+                      '-${formatRupiah(discount)}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: SukaTeaColors.danger,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -1094,7 +1478,31 @@ class _CartPanel extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              _bayarButton(),
+              // Tahan + Bayar berdampingan (Batch C1): Tahan outline
+              // flex 1, Bayar flex 2. Label Bayar tetap "Bayar • RpX"
+              // dengan X = total sesudah diskon.
+              Row(
+                children: [
+                  Expanded(
+                    child: TapFeedback(
+                      enabled: cart.isNotEmpty && !isProcessing,
+                      child: OutlinedButton(
+                        onPressed:
+                            (cart.isEmpty || isProcessing) ? null : onHold,
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 56),
+                        ),
+                        child: const Text(
+                          'Tahan',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(flex: 2, child: _bayarButton()),
+                ],
+              ),
               if (!short) ...[
                 const SizedBox(height: 8),
                 const Text(

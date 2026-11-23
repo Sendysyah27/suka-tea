@@ -11,4 +11,10 @@ extension AppRoleX on AppRole {
   bool get canManageStock => this == AppRole.owner;
   bool get canExportSheets => this == AppRole.owner;
   bool get canCloseShift => this == AppRole.owner;
+
+  /// Hanya Owner yang boleh kelola topping (Batch C1).
+  bool get canManageToppings => this == AppRole.owner;
+
+  /// Hanya Owner yang boleh void transaksi (Batch C1).
+  bool get canVoidSale => this == AppRole.owner;
 }

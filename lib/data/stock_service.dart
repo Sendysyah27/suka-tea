@@ -39,6 +39,10 @@ class StockService extends ChangeNotifier {
 
   /// Baca Drift; kalau tabel stok kosong, seed dari seedStock() +
   /// seedRecipes() lalu simpan. Dipanggil di main() sebelum runApp.
+  /// Seed yang BARU (bahan yang belum ada di DB — mis. Boba/Jelly/
+  /// Selasih dari Batch C1) ditambahkan tanpa menyentuh stok yang
+  /// sudah ada: install lama yang sudah punya 10 bahan tetap
+  /// mendapat 3 bahan topping saat upgrade, tanpa reset jumlah.
   Future<void> init() async {
     if (_initialized) return;
     try {
@@ -57,6 +61,14 @@ class StockService extends ChangeNotifier {
                   lowThreshold: r.lowThreshold,
                 ))
             .toList();
+        // Seed baru yang belum ada di DB -> tambahkan (jangan timpa).
+        var addedSeed = false;
+        for (final seed in seedStock()) {
+          if (_levels.any((s) => s.name == seed.name)) continue;
+          _levels = [..._levels, seed];
+          addedSeed = true;
+        }
+        if (addedSeed) await _saveAllLevels();
         final dbRecipes =
             await _database.select(_database.productRecipes).get();
         final map = <String, List<RecipeLine>>{};
@@ -197,6 +209,84 @@ class StockService extends ChangeNotifier {
       debugPrint('StockService outbox mutasi gagal (penjualan tetap sah): $e');
     }
     return newlyLow;
+  }
+
+  /// Kembalikan stok sesuai resep keranjang yang di-void (inverse
+  /// dari deductForSale — JANGAN ubah deductForSale). Dipakai void
+  /// di Riwayat. Stok hanya ditambah (tidak ada clamp atas); mutasi
+  /// dicatat ke outbox (kind 'stock_movement', reason 'void').
+  Future<void> restoreForSale(List<CartItem> cart) async {
+    final additions = computeDeductions(cart, _recipes, stockByName);
+    if (additions.isEmpty) return;
+    for (final entry in additions.entries) {
+      final i = _levels.indexWhere((s) => s.name == entry.key);
+      if (i < 0) continue;
+      final before = _levels[i];
+      _levels[i] = StockItem(
+        name: before.name,
+        unit: before.unit,
+        qty: before.qty + entry.value,
+        lowThreshold: before.lowThreshold,
+      );
+    }
+    notifyListeners();
+    await _saveAllLevels();
+    try {
+      await OutboxService.instance.enqueueSale(
+        {
+          'client_uuid': DateTime.now().microsecondsSinceEpoch.toString(),
+          'reason': 'void',
+          'additions': additions,
+        },
+        kind: 'stock_movement',
+      );
+    } catch (e) {
+      debugPrint('StockService outbox mutasi gagal (void tetap sah): $e');
+    }
+  }
+
+  /// Ganti nama satu bahan. false = nama baru sudah dipakai bahan lain
+  /// (bentrok) atau nama lama tidak ada. Resep yang memakai bahan ini
+  /// ikut diganti namanya supaya deduksi tetap jalan.
+  Future<bool> renameStock(String oldName, String newName) async {
+    if (oldName == newName) return true;
+    if (_levels.any((s) => s.name == newName)) return false;
+    final i = _levels.indexWhere((s) => s.name == oldName);
+    if (i < 0) return false;
+    final before = _levels[i];
+    _levels[i] = StockItem(
+      name: newName,
+      unit: before.unit,
+      qty: before.qty,
+      lowThreshold: before.lowThreshold,
+    );
+    // Resep memakai nama bahan sebagai kunci — ganti juga di memori.
+    final newRecipes = <String, List<RecipeLine>>{};
+    for (final entry in _recipes.entries) {
+      newRecipes[entry.key] = entry.value
+          .map(
+            (l) => l.stockName == oldName
+                ? RecipeLine(stockName: newName, qty: l.qty)
+                : l,
+          )
+          .toList();
+    }
+    _recipes = newRecipes;
+    notifyListeners();
+    try {
+      await (_database.delete(_database.stockLevels)
+            ..where((t) => t.name.equals(oldName)))
+          .go();
+      await _saveOneLevel(_levels[i]);
+      await (_database.update(_database.productRecipes)
+            ..where((t) => t.stockName.equals(oldName)))
+          .write(
+            ProductRecipesCompanion(stockName: Value(newName)),
+          );
+    } catch (e) {
+      debugPrint('StockService rename gagal simpan: $e');
+    }
+    return true;
   }
 
   Future<void> _saveOneLevel(StockItem item) async {

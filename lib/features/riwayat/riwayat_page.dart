@@ -2,21 +2,72 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
+import '../../core/utils/roles.dart';
 import '../../core/widgets/screen_title.dart';
 import '../../data/models.dart';
 import '../../data/sale_history.dart';
+import '../../data/stock_service.dart';
+import '../../data/topping_service.dart';
 import '../kasir/receipt.dart';
 
 /// Riwayat transaksi — daftar penjualan selesai, terbaru dulu.
 /// Tap satu transaksi = buka lagi struknya (halaman penuh).
 /// Dibuka dari tab Laporan ("Lihat Riwayat").
+/// Void (Batch C1): HANYA Owner (tombol ⋮ di kartu, konfirmasi dulu).
+/// Void mengembalikan stok bahan (termasuk topping) dan transaksi
+/// tidak lagi dihitung di omzet/Keuangan/Laporan — tapi tetap tampil
+/// di sini dengan label VOID.
 class RiwayatPage extends StatelessWidget {
-  const RiwayatPage({super.key});
+  const RiwayatPage({super.key, required this.role});
+
+  final AppRole role;
 
   String _timeText(DateTime t) {
     return '${t.day}/${t.month}/${t.year} '
         '${t.hour.toString().padLeft(2, '0')}:'
         '${t.minute.toString().padLeft(2, '0')}';
+  }
+
+  /// Konfirmasi + jalankan void: kembalikan stok dulu (restoreForSale),
+  /// baru tandai record void. Stok dikembalikan dari item riwayat
+  /// (SaleItem -> CartItem; topping dikenali dari nama).
+  Future<void> _voidSale(BuildContext context, SaleRecord sale) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Void transaksi ini?'),
+        content: const Text(
+          'Transaksi dibatalkan dan tidak dihitung di omzet. '
+          'Stok bahan akan dikembalikan.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: SukaTeaColors.danger,
+            ),
+            child: const Text('Void'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final cartItems = sale.items
+        .map((it) => it.toCartItem(ToppingService.instance.toppingNames))
+        .toList();
+    await StockService.instance.restoreForSale(cartItems);
+    await SaleHistoryService.instance.voidSale(sale.id);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Transaksi di-void, stok dikembalikan.'),
+        ),
+      );
+    }
   }
 
   @override
@@ -68,6 +119,8 @@ class RiwayatPage extends StatelessWidget {
                           paid: sale.paid,
                           cashier: 'Kasir',
                           time: sale.createdAt,
+                          discount: sale.discount,
+                          isVoid: sale.isVoid,
                         ),
                       ),
                     );
@@ -88,6 +141,28 @@ class RiwayatPage extends StatelessWidget {
                                 ),
                               ),
                             ),
+                            // Pill VOID (merah) untuk transaksi yang
+                            // sudah di-void — tetap tampil di riwayat.
+                            if (sale.isVoid)
+                              Container(
+                                margin: const EdgeInsets.only(right: 8),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: SukaTeaColors.danger,
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: const Text(
+                                  'VOID',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
                             // Pill metode outline (FigCraft frame 08)
                             // — bukan Chip tinted.
                             Container(
@@ -106,6 +181,24 @@ class RiwayatPage extends StatelessWidget {
                                 style: const TextStyle(fontSize: 12),
                               ),
                             ),
+                            // Aksi Void (HANYA Owner, belum void):
+                            // menu ⋮ di kanan kartu.
+                            if (role.canVoidSale && !sale.isVoid)
+                              PopupMenuButton<String>(
+                                tooltip: 'Aksi transaksi',
+                                icon: const Icon(Icons.more_vert),
+                                onSelected: (value) {
+                                  if (value == 'void') {
+                                    _voidSale(context, sale);
+                                  }
+                                },
+                                itemBuilder: (context) => [
+                                  const PopupMenuItem(
+                                    value: 'void',
+                                    child: Text('Void transaksi'),
+                                  ),
+                                ],
+                              ),
                           ],
                         ),
                         const SizedBox(height: 4),
@@ -122,17 +215,20 @@ class RiwayatPage extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text(
-                              '${sale.cups} cup • ${sale.items.length} item',
+                              '${sale.cups} cup • ${sale.items.length} item'
+                              '${sale.discount > 0 ? ' • Diskon -${formatRupiah(sale.discount)}' : ''}',
                               style: const TextStyle(
                                 color: SukaTeaColors.muted,
                               ),
                             ),
                             Text(
                               formatRupiah(sale.total),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w800,
                                 fontSize: 16,
-                                color: SukaTeaColors.emerald,
+                                color: sale.isVoid
+                                    ? SukaTeaColors.muted
+                                    : SukaTeaColors.emerald,
                               ),
                             ),
                           ],
