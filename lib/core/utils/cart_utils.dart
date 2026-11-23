@@ -1,4 +1,4 @@
-import '../data/models.dart';
+import '../../data/models.dart';
 
 /// Helper murni untuk keranjang Kasir (Batch C5) — tanpa BuildContext,
 /// supaya bisa di-test langsung.

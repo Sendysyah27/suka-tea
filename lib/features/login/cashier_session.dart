@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-import '../data/local/app_database.dart';
+import '../../data/local/app_database.dart';
 
 /// Batas idle untuk auto-lock kasir (Batch C5): 15 menit tanpa
 /// interaksi apa pun di app → layar PIN Kasir gerai aktif.
