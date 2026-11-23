@@ -1453,13 +1453,13 @@ class _CartPanel extends StatelessWidget {
     );
   }
 
-  Widget _bayarButton() {
+  Widget _bayarButton({bool shortMode = false}) {
     return TapFeedback(
       enabled: cart.isNotEmpty && !isProcessing,
       child: FilledButton(
         onPressed: (cart.isEmpty || isProcessing) ? null : onBayar,
         style: FilledButton.styleFrom(
-        minimumSize: const Size(0, 56),
+        minimumSize: Size(0, shortMode ? 48 : 56),
         // Padding horizontal M3 default (24) + ikon + label panjang
         // ("Bayar • Rp8.000") overflow 0,5px di panel 320dp (test 23 Nov
         // 01:31 — font test Ahem lebih lebar dari Plus Jakarta Sans).
@@ -1611,20 +1611,22 @@ class _CartPanel extends StatelessWidget {
               );
             },
           );
-    return Container(
-      decoration: const BoxDecoration(
-        color: SukaTeaColors.card,
-        border: Border(left: BorderSide(color: SukaTeaColors.border)),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // Layar pendek (landscape POVA, tinggi konten < 430dp): kolom
-          // panel tanpa scroll overflow 61px (ketangkep 22 Nov 22:19).
-          // Mode pendek: chip 1 baris scroll horizontal + teks kosong
-          // 1 baris, supaya Total + Bayar tetap muat.
-          final short = constraints.maxHeight < 430;
-          return Column(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Layar pendek (landscape POVA, tinggi konten < 430dp): kolom
+        // panel tanpa scroll overflow 61px (ketangkep 22 Nov 22:19).
+        // Mode pendek dipadatkan (Batch C5 Wrap + v29.3): padding 12,
+        // spacer 4, chip 12px, tombol 48 — supaya Total + Bayar tetap
+        // muat tanpa overflow di viewport tes 1000x300 (ketangkep
+        // CI v29.2: overflow 37px).
+        final short = constraints.maxHeight < 430;
+        return Container(
+          decoration: const BoxDecoration(
+            color: SukaTeaColors.card,
+            border: Border(left: BorderSide(color: SukaTeaColors.border)),
+          ),
+          padding: EdgeInsets.all(short ? 12 : 16),
+          child: Column(
             mainAxisSize: shrink ? MainAxisSize.min : MainAxisSize.max,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -1640,7 +1642,7 @@ class _CartPanel extends StatelessWidget {
                     child: OutlinedButton(
                       onPressed: heldCount == 0 ? null : onShowHeld,
                       style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(0, 32),
+                        minimumSize: Size(0, short ? 28 : 32),
                         padding:
                             const EdgeInsets.symmetric(horizontal: 12),
                         shape: RoundedRectangleBorder(
@@ -1670,23 +1672,30 @@ class _CartPanel extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: short ? 4 : 8),
               if (shrink) list else Expanded(child: list),
               const Divider(height: 1),
-              const SizedBox(height: 8),
+              SizedBox(height: short ? 4 : 8),
               short
-                  // Mode pendek (Batch C5): Wrap 2 baris, bukan 1 baris
-                  // scroll — 4 chip (Transfer + E-Wallet sudah dihapus
-                  // dari pilihan) muat tanpa terpotong ("QRIS (manu..."
-                  // di screenshot Sendy 21:15). Total + Bayar selalu
+                  // Mode pendek (Batch C5): Wrap, bukan 1 baris scroll
+                  // — 4 chip (Transfer + E-Wallet sudah dihapus dari
+                  // pilihan) muat tanpa terpotong ("QRIS (manu..." di
+                  // screenshot Sendy 21:15). Dipadatkan di v29.3
+                  // (label 12px + runSpacing 4): Wrap 2-3 baris bikin
+                  // panel overflow 37px di viewport tes 1000x300
+                  // (ketangkep CI v29.2). Total + Bayar selalu
                   // terlihat di bawahnya.
                   ? Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+                      spacing: 6,
+                      runSpacing: 4,
                       children: [
                         for (final m in selectablePaymentMethods)
                           ChoiceChip(
                             label: Text(m.label),
+                            labelStyle: const TextStyle(fontSize: 12),
+                            labelPadding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                            ),
                             selected: method == m,
                             onSelected: (_) => onMethod(m),
                             visualDensity: VisualDensity.compact,
@@ -1709,7 +1718,7 @@ class _CartPanel extends StatelessWidget {
                         _methodCard(),
                       ],
                     ),
-              const SizedBox(height: 8),
+              SizedBox(height: short ? 4 : 8),
               // Diskon manual (Batch C1): subtotal + baris diskon hanya
               // tampil bila diskon > 0. Tombol Diskon digabung ke baris
               // Total (bukan baris sendiri) — panel overflow 45px di
@@ -1778,7 +1787,7 @@ class _CartPanel extends StatelessWidget {
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                       style: TextButton.styleFrom(
-                        minimumSize: const Size(0, 32),
+                        minimumSize: Size(0, short ? 28 : 32),
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         padding:
                             const EdgeInsets.symmetric(horizontal: 8),
@@ -1831,7 +1840,9 @@ class _CartPanel extends StatelessWidget {
               const SizedBox(height: 8),
               // Pending + Bayar berdampingan (Batch C1): Pending outline
               // flex 1, Bayar flex 2. Label Bayar tetap "Bayar • RpX"
-              // dengan X = total sesudah diskon.
+              // dengan X = total sesudah diskon. Mode pendek: tinggi
+              // tombol 48 (v29.3, hemat 8px lawan overflow 37px di
+              // viewport tes 1000x300) — masih target sentuh minimum.
               Row(
                 children: [
                   Expanded(
@@ -1841,7 +1852,7 @@ class _CartPanel extends StatelessWidget {
                         onPressed:
                             (cart.isEmpty || isProcessing) ? null : onHold,
                         style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(0, 56),
+                          minimumSize: Size(0, short ? 48 : 56),
                         ),
                         child: const Text(
                           'Pending',
@@ -1851,7 +1862,7 @@ class _CartPanel extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Expanded(flex: 2, child: _bayarButton()),
+                  Expanded(flex: 2, child: _bayarButton(shortMode: short)),
                 ],
               ),
               if (!short) ...[
@@ -1866,9 +1877,9 @@ class _CartPanel extends StatelessWidget {
                 ),
               ],
             ],
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 }
