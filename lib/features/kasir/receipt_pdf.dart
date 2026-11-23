@@ -110,7 +110,7 @@ Future<Uint8List> buildReceiptPdfBytes({
             pw.Text(
               'VOID',
               textAlign: pw.TextAlign.center,
-              style: pw.TextStyle(
+              style: const pw.TextStyle(
                 fontWeight: pw.FontWeight.bold,
                 fontSize: 14,
                 color: PdfColors.red,
