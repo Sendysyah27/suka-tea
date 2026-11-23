@@ -107,7 +107,7 @@ Future<Uint8List> buildReceiptPdfBytes({
             row('Diskon', '-${formatRupiah(discount)}'),
           ],
           if (isVoid)
-            const pw.Text(
+            pw.Text(
               'VOID',
               textAlign: pw.TextAlign.center,
               style: pw.TextStyle(
