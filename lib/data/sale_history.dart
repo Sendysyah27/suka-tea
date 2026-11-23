@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'local/app_database.dart';
 import 'models.dart';
+import 'outlet_service.dart';
 import 'recipe_logic.dart';
 
 /// Satu item dalam satu transaksi yang sudah dibayar.
@@ -110,6 +111,7 @@ class SaleRecord {
     required this.change,
     this.discount = 0,
     this.isVoid = false,
+    this.outletId = defaultOutletId,
   });
 
   final String id;
@@ -129,6 +131,10 @@ class SaleRecord {
   /// dihitung di omzet/Keuangan/Laporan).
   final bool isVoid;
 
+  /// Gerai tempat transaksi terjadi (Batch C4). Riwayat di HP ini
+  /// hanya punya transaksi gerai yang login di HP ini.
+  final String outletId;
+
   /// Subtotal sebelum diskon (total + diskon).
   int get subtotal => total + discount;
 
@@ -145,6 +151,7 @@ class SaleRecord {
         change: change,
         discount: discount,
         isVoid: isVoid ?? this.isVoid,
+        outletId: outletId,
       );
 
   factory SaleRecord.fromJson(Map<String, dynamic> json) {
@@ -165,6 +172,7 @@ class SaleRecord {
       change: (json['change'] as num? ?? 0).toInt(),
       discount: (json['discount'] as num? ?? 0).toInt(),
       isVoid: json['isVoid'] as bool? ?? false,
+      outletId: json['outletId'] as String? ?? defaultOutletId,
     );
   }
 
@@ -178,6 +186,7 @@ class SaleRecord {
         'change': change,
         'discount': discount,
         'isVoid': isVoid,
+        'outletId': outletId,
       };
 }
 
@@ -310,19 +319,37 @@ class SaleHistoryService extends ChangeNotifier {
 
   bool get isInitialized => _initialized;
 
-  /// Transaksi pada tanggal [day] (banding tahun/bulan/tanggal saja).
+  /// Transaksi pada tanggal [day] (banding tahun/bulan/tanggal saja)
+  /// untuk satu gerai ([outletId] null = gerai aktif sesi ini).
   /// Termasuk yang void — Riwayat menampilkan semuanya (dengan label).
-  List<SaleRecord> salesOn(DateTime day) => _sales
-      .where((s) =>
-          s.createdAt.year == day.year &&
-          s.createdAt.month == day.month &&
-          s.createdAt.day == day.day)
-      .toList();
+  List<SaleRecord> salesOn(DateTime day, {String? outletId}) {
+    final outlet = outletId ?? OutletService.instance.currentOutletId;
+    return _sales
+        .where((s) =>
+            s.outletId == outlet &&
+            s.createdAt.year == day.year &&
+            s.createdAt.month == day.month &&
+            s.createdAt.day == day.day)
+        .toList();
+  }
 
   /// Transaksi pada tanggal [day] yang BUKAN void — dipakai Keuangan
   /// + Laporan (omzet, tutup kasir, terlaris tidak menghitung void).
-  List<SaleRecord> activeSalesOn(DateTime day) =>
-      salesOn(day).where((s) => !s.isVoid).toList();
+  List<SaleRecord> activeSalesOn(DateTime day, {String? outletId}) =>
+      salesOn(day, outletId: outletId).where((s) => !s.isVoid).toList();
+
+  /// Transaksi AKTIF (bukan void) dalam satu bulan — dipakai laporan
+  /// Bulanan di Pantau Gerai. [month] cukup tahun + bulannya.
+  List<SaleRecord> salesInMonth(DateTime month, {String? outletId}) {
+    final outlet = outletId ?? OutletService.instance.currentOutletId;
+    return _sales
+        .where((s) =>
+            !s.isVoid &&
+            s.outletId == outlet &&
+            s.createdAt.year == month.year &&
+            s.createdAt.month == month.month)
+        .toList();
+  }
 
   /// Baca Drift; tabel kosong = belum ada transaksi (bukan error).
   Future<void> init() async {
@@ -341,6 +368,7 @@ class SaleHistoryService extends ChangeNotifier {
               'change': r.change,
               'discount': r.discount,
               'isVoid': r.isVoid,
+              'outletId': r.outletId,
             }),
           )
           .toList()
@@ -357,13 +385,15 @@ class SaleHistoryService extends ChangeNotifier {
   /// Catat satu penjualan selesai. Dipanggil di _selesaikanBayar()
   /// SESUDAH deductForSale. [total] = yang dibayar = subtotal -
   /// diskon; [discount] dicatat supaya bisa diaudit di Riwayat.
-  /// Mengembalikan record yang dicatat.
+  /// [outletId] null = gerai aktif sesi ini. Mengembalikan record
+  /// yang dicatat.
   Future<SaleRecord> recordSale({
     required List<CartItem> items,
     required int total,
     required PaymentMethod method,
     required int paid,
     int discount = 0,
+    String? outletId,
   }) async {
     final record = SaleRecord(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
@@ -374,6 +404,7 @@ class SaleHistoryService extends ChangeNotifier {
       paid: paid,
       change: paid - total,
       discount: discount,
+      outletId: outletId ?? OutletService.instance.currentOutletId,
     );
     _sales = [record, ..._sales];
     notifyListeners();
@@ -391,6 +422,7 @@ class SaleHistoryService extends ChangeNotifier {
               change: record.change,
               discount: Value(record.discount),
               isVoid: const Value(false),
+              outletId: Value(record.outletId),
             ),
           );
     } catch (e) {

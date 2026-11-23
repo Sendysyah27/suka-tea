@@ -17,4 +17,8 @@ extension AppRoleX on AppRole {
 
   /// Hanya Owner yang boleh void transaksi (Batch C1).
   bool get canVoidSale => this == AppRole.owner;
+
+  /// Hanya Owner yang boleh kelola gerai: tambah/ubah/hapus gerai,
+  /// pantau gerai, dan ubah PIN Kasir gerai (Batch C4).
+  bool get canManageOutlets => this == AppRole.owner;
 }

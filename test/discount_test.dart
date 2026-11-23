@@ -26,4 +26,23 @@ void main() {
     expect(payableAfterDiscount(10000, 99999), 0);
     expect(payableAfterDiscount(5000, -1000), 5000);
   });
+
+  test('clampPercent: dijepit 0..100', () {
+    expect(clampPercent(-5), 0);
+    expect(clampPercent(0), 0);
+    expect(clampPercent(10), 10);
+    expect(clampPercent(100), 100);
+    expect(clampPercent(150), 100);
+  });
+
+  test('percentToAmount: subtotal * persen ~/ 100 (bulat ke bawah)', () {
+    expect(percentToAmount(21000, 10), 2100);
+    expect(percentToAmount(21000, 100), 21000);
+    expect(percentToAmount(21000, 0), 0);
+    // 19.999 x 33% = 6.599,67 -> 6.599 (BUKAN 6.600).
+    expect(percentToAmount(19999, 33), 6599);
+    // Persen di luar 0..100 dijepit dulu, bukan dibiarkan lewat.
+    expect(percentToAmount(10000, 150), 10000);
+    expect(percentToAmount(10000, -10), 0);
+  });
 }

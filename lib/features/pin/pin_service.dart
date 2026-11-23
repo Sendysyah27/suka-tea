@@ -35,7 +35,9 @@ class PinService {
 
   static bool isValidPin(String pin) => RegExp(r'^\d{6}$').hasMatch(pin);
 
-  Future<PinVerifyResult> verify(String pin) async {
+  /// Verifikasi PIN Owner satu gerai. [outletId] null = outlet
+  /// default (...0001, dipakai sebelum pemilihan gerai ada).
+  Future<PinVerifyResult> verify(String pin, {String? outletId}) async {
     if (isLocked) return PinVerifyResult.locked;
     if (!isValidPin(pin)) return PinVerifyResult.wrong;
     if (!SupabaseService.instance.isConfigured) {
@@ -44,7 +46,7 @@ class PinService {
     try {
       final res = await SupabaseService.instance.client.functions.invoke(
         'verify-owner-pin',
-        body: {'outlet_id': defaultOutletId, 'pin': pin},
+        body: {'outlet_id': outletId ?? defaultOutletId, 'pin': pin},
       );
       final data = res.data;
       if (data is! Map) return PinVerifyResult.unavailable;
@@ -72,14 +74,19 @@ class PinService {
   }
 
   /// Atur PIN pertama (currentPin null) atau ubah PIN (currentPin wajib).
-  Future<bool> setPin({String? currentPin, required String newPin}) async {
+  /// [outletId] null = outlet default.
+  Future<bool> setPin({
+    String? currentPin,
+    required String newPin,
+    String? outletId,
+  }) async {
     if (!isValidPin(newPin)) return false;
     if (!SupabaseService.instance.isConfigured) return false;
     try {
       final res = await SupabaseService.instance.client.functions.invoke(
         'set-owner-pin',
         body: {
-          'outlet_id': defaultOutletId,
+          'outlet_id': outletId ?? defaultOutletId,
           if (currentPin != null) 'current_pin': currentPin,
           'new_pin': newPin,
         },
@@ -94,12 +101,13 @@ class PinService {
 
   /// Apakah PIN sudah diatur (untuk label status di Pengaturan).
   /// null = tidak bisa dicek (offline / fungsi belum di-deploy).
-  Future<bool?> isPinSet() async {
+  /// [outletId] null = outlet default.
+  Future<bool?> isPinSet({String? outletId}) async {
     if (!SupabaseService.instance.isConfigured) return null;
     try {
       final res = await SupabaseService.instance.client.functions.invoke(
         'pin-status',
-        body: {'outlet_id': defaultOutletId},
+        body: {'outlet_id': outletId ?? defaultOutletId},
       );
       final data = res.data;
       if (data is! Map || data['ok'] != true) return null;

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/cash.dart';
 import '../../core/utils/money.dart';
+import '../../core/utils/sheet_pop.dart';
 import '../../core/widgets/tap_feedback.dart';
 
 /// Sheet "Uang diterima" untuk bayar tunai: chip nominal cepat
@@ -126,9 +127,14 @@ Future<int?> showCashReceivedSheet(
               TapFeedback(
                 enabled: received >= total,
                 child: FilledButton(
+                  // Pop aman (popSheetSafely): TextField nominal manual
+                  // masih fokus saat tombol ditekan — pop langsung =
+                  // layar merah '_dependents.isEmpty', sama seperti
+                  // discount_sheet (23 Nov 2026). Lepas fokus + tunggu
+                  // satu frame dulu baru pop.
                   onPressed: received < total
                       ? null
-                      : () => Navigator.of(context).pop(received),
+                      : () => popSheetSafely(context, received),
                   style: FilledButton.styleFrom(
                     minimumSize: const Size(0, 56),
                   ),

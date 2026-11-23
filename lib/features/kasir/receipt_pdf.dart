@@ -20,6 +20,7 @@ Future<Uint8List> buildReceiptPdfBytes({
   String cashier = 'Kasir',
   DateTime? time,
   int discount = 0,
+  int discountPercent = 0,
   bool isVoid = false,
 }) async {
   final now = time ?? DateTime.now();
@@ -104,7 +105,12 @@ Future<Uint8List> buildReceiptPdfBytes({
           pw.SizedBox(height: 4),
           if (discount > 0) ...[
             row('Subtotal', formatRupiah(total + discount)),
-            row('Diskon', '-${formatRupiah(discount)}'),
+            row(
+              discountPercent > 0
+                  ? 'Diskon ($discountPercent%)'
+                  : 'Diskon',
+              '-${formatRupiah(discount)}',
+            ),
           ],
           if (isVoid)
             pw.Text(
@@ -150,6 +156,7 @@ Future<String?> saveReceiptPdf({
   String cashier = 'Kasir',
   DateTime? time,
   int discount = 0,
+  int discountPercent = 0,
   bool isVoid = false,
 }) async {
   try {
@@ -161,6 +168,7 @@ Future<String?> saveReceiptPdf({
       cashier: cashier,
       time: time,
       discount: discount,
+      discountPercent: discountPercent,
       isVoid: isVoid,
     );
     final now = time ?? DateTime.now();

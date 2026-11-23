@@ -121,8 +121,9 @@ class CartItem {
   String get label =>
       modifiers.isEmpty ? nameText : '$nameText $modifierText';
 
-  /// Serialisasi untuk order tertahan (HeldOrders.itemsJson).
-  /// Produk direkonstruksi dengan satu varian (varian yang ditahan)
+  /// Serialisasi untuk order Pending (HeldOrders.itemsJson).
+  /// Produk direkonstruksi dengan satu varian (varian yang disimpan
+  /// sebagai Pending)
   /// — cukup untuk keranjang, struk, dan deduksi stok (resep memakai
   /// variant.id; harga memakai variant.price + delta modifier).
   Map<String, dynamic> toJson() => {

@@ -27,6 +27,7 @@ String buildReceiptText({
   String cashier = 'Kasir',
   DateTime? time,
   int discount = 0,
+  int discountPercent = 0,
   bool isVoid = false,
 }) {
   final now = time ?? DateTime.now();
@@ -47,7 +48,10 @@ String buildReceiptText({
   buf.writeln('--------------------------------');
   if (discount > 0) {
     buf.writeln('Subtotal     ${formatRupiah(total + discount)}');
-    buf.writeln('Diskon       -${formatRupiah(discount)}');
+    buf.writeln(
+      'Diskon${discountPercent > 0 ? ' ($discountPercent%)' : ''}'
+      '       -${formatRupiah(discount)}',
+    );
   }
   if (isVoid) buf.writeln('*** VOID ***');
   buf.writeln('TOTAL        ${formatRupiah(total)}');
@@ -76,6 +80,7 @@ class DigitalReceiptPage extends StatefulWidget {
     this.cashier = 'Kasir',
     this.time,
     this.discount = 0,
+    this.discountPercent = 0,
     this.isVoid = false,
   });
 
@@ -95,6 +100,11 @@ class DigitalReceiptPage extends StatefulWidget {
   /// Diskon manual transaksi ini (0 = tanpa diskon). Bila > 0,
   /// tampil baris Subtotal + "Diskon -RpX" sebelum TOTAL.
   final int discount;
+
+  /// Persen diskon transaksi ini (0 = mode rupiah). Hanya untuk
+  /// tampilan "(N%)" di baris Diskon — yang disimpan di riwayat
+  /// tetap nominal rupiah [discount].
+  final int discountPercent;
 
   /// Transaksi void: pill LUNAS diganti pill VOID (merah).
   final bool isVoid;
@@ -174,6 +184,7 @@ class _DigitalReceiptPageState extends State<DigitalReceiptPage> {
       cashier: widget.cashier,
       time: widget.time,
       discount: widget.discount,
+      discountPercent: widget.discountPercent,
       isVoid: widget.isVoid,
     );
     if (!context.mounted) return;
@@ -325,7 +336,11 @@ class _DigitalReceiptPageState extends State<DigitalReceiptPage> {
                             mainAxisAlignment:
                                 MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text('Diskon'),
+                              Text(
+                                widget.discountPercent > 0
+                                    ? 'Diskon (${widget.discountPercent}%)'
+                                    : 'Diskon',
+                              ),
                               Text(
                                 '-${formatRupiah(widget.discount)}',
                                 style: const TextStyle(

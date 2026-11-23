@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/utils/roles.dart';
+import 'qris_scan_logic.dart';
+import 'qris_scan_page.dart';
 import 'qris_service.dart';
 import 'qris_settings_service.dart';
 
 /// Pengaturan QRIS Merchant — HANYA Owner.
 ///
-/// Owner menempel (atau scan, M5) kode QRIS statisnya. Format divalidasi
+/// Owner menempel (atau scan) kode QRIS statisnya. Format divalidasi
 /// dasar sebelum disimpan (format indicator, CRC, mata uang IDR).
 /// Nilai asli TIDAK PERNAH di-hardcode di repo; yang tampil di sini hanya
 /// nama merchant + status, bukan payload mentah. Kasir tidak bisa ubah.
@@ -43,6 +45,21 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
     if (text.isNotEmpty) {
       setState(() => _controller.text = text);
     }
+  }
+
+  /// Buka halaman scan kamera. Hasil scan diisi ke field, lalu
+  /// divalidasi seperti tempelan manual — TIDAK langsung disimpan.
+  /// Bila hasil scan bukan QRIS valid, tampilkan error validasinya.
+  Future<void> _scan() async {
+    final raw = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const QrisScanPage()),
+    );
+    if (raw == null || !mounted) return;
+    final result = processScannedPayload(raw);
+    setState(() {
+      _controller.text = result.payload;
+      _error = result.error;
+    });
   }
 
   Future<void> _save() async {
@@ -146,9 +163,7 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Scan QR — segera (M5)')),
-                  ),
+                  onPressed: _scan,
                   icon: const Icon(Icons.qr_code_scanner),
                   label: const Text('Scan'),
                 ),

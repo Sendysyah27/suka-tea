@@ -52,7 +52,7 @@ void main() {
     final lemon = seedMenu().firstWhere((p) => p.id == 'es-teh-lemon');
     final order = HeldOrder(
       id: 'test-1',
-      label: 'Tahan 1 • 14:05',
+      label: 'Pending 1 • 14:05',
       items: [
         CartItem(
           product: manggo,

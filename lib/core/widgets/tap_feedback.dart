@@ -22,7 +22,7 @@ class TapFeedback extends StatefulWidget {
     required this.child,
     this.enabled = true,
     this.pressedScale = 0.96,
-    this.duration = const Duration(milliseconds: 120),
+    this.duration = const Duration(milliseconds: 140),
   });
 
   /// Widget yang dibungkus (tombol / tab / stepper). Aksinya tetap
@@ -36,7 +36,8 @@ class TapFeedback extends StatefulWidget {
   /// Skala saat ditekan (default 0.96).
   final double pressedScale;
 
-  /// Durasi animasi mengecil + kembali (default 120ms, easeOut).
+  /// Durasi animasi mengecil + kembali (default 140ms, easeOutCubic —
+  /// sedikit lebih lambat + lebih halus dari 120ms easeOut v18).
   final Duration duration;
 
   /// Suara klik sistem (SystemSoundType.click — tanpa dependensi audio,
@@ -93,7 +94,7 @@ class _TapFeedbackState extends State<TapFeedback> {
       child: AnimatedScale(
         scale: _pressed ? widget.pressedScale : 1.0,
         duration: widget.duration,
-        curve: Curves.easeOut,
+        curve: Curves.easeOutCubic,
         child: widget.child,
       ),
     );

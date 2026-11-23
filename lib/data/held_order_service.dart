@@ -1,25 +1,31 @@
 import 'dart:convert';
 
+import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import 'local/app_database.dart';
 import 'models.dart';
+import 'outlet_service.dart';
 
-/// Satu order yang ditahan di Kasir.
+/// Satu order Pending di Kasir.
 class HeldOrder {
   const HeldOrder({
     required this.id,
     required this.label,
     required this.items,
     required this.createdAt,
+    this.outletId = defaultOutletId,
   });
 
   final String id;
 
-  /// Label otomatis: "Tahan 1 • 14:05" (nomor urut + jam tahan).
+  /// Label otomatis: "Pending 1 • 14:05" (nomor urut + jam simpan).
   final String label;
   final List<CartItem> items;
   final DateTime createdAt;
+
+  /// Gerai tempat order disimpan (Batch C4).
+  final String outletId;
 
   int get subtotal => items.fold(0, (s, i) => s + i.total);
   int get count => items.fold(0, (s, i) => s + i.qty);
@@ -28,11 +34,12 @@ class HeldOrder {
       items.map((i) => '${i.qty}x ${i.product.name}').join(', ');
 }
 
-/// Order tertahan — di memori (ChangeNotifier) dan dicerminkan ke
-/// Drift (tabel HeldOrders). Dipakai Kasir: tahan keranjang saat ini,
-/// pulihkan nanti (hanya bila keranjang kosong — bila berisi, kasir
-/// memilih "Tahan & Buka" dulu). Diskon TIDAK ikut tertahan (diskon
-/// itu per keranjang aktif; saat pulih, diskon mulai dari 0).
+/// Order Pending — di memori (ChangeNotifier) dan dicerminkan ke
+/// Drift (tabel HeldOrders). Dipakai Kasir: simpan keranjang saat ini
+/// sebagai Pending, pulihkan nanti (hanya bila keranjang kosong —
+/// bila berisi, kasir memilih "Pending & Buka" dulu). Diskon TIDAK
+/// ikut disimpan sebagai Pending (diskon itu per keranjang aktif;
+/// saat pulih, diskon mulai dari 0).
 ///
 /// Semua tulis ke DB dibungkus try/catch (pola StockService): gagal
 /// simpan tidak boleh crash app — state memori tetap yang dipakai.
@@ -47,8 +54,13 @@ class HeldOrderService extends ChangeNotifier {
   List<HeldOrder> _orders = [];
   bool _initialized = false;
 
-  /// Order tertahan, urutan tahan (paling lama dulu).
-  List<HeldOrder> get orders => List.unmodifiable(_orders);
+  /// Order Pending gerai aktif sesi ini, urutan simpan (paling lama
+  /// dulu). Order gerai lain (di HP yang sama) tidak tampil di sini.
+  List<HeldOrder> get orders => List.unmodifiable(
+        _orders.where(
+          (o) => o.outletId == OutletService.instance.currentOutletId,
+        ),
+      );
 
   bool get isInitialized => _initialized;
 
@@ -69,6 +81,7 @@ class HeldOrderService extends ChangeNotifier {
               label: r.label,
               items: items,
               createdAt: r.createdAt,
+              outletId: r.outletId,
             ),
           );
         } catch (e) {
@@ -87,11 +100,12 @@ class HeldOrderService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Tahan keranjang saat ini. Label otomatis "Tahan N • HH:mm"
-  /// (N = jumlah order tertahan + 1). Mengembalikan order yang dibuat.
+  /// Simpan keranjang saat ini sebagai Pending. Label otomatis
+  /// "Pending N • HH:mm" (N = jumlah order Pending gerai aktif + 1).
+  /// Mengembalikan order yang dibuat.
   Future<HeldOrder> hold(List<CartItem> items) async {
     final now = DateTime.now();
-    final label = 'Tahan ${_orders.length + 1} • '
+    final label = 'Pending ${orders.length + 1} • '
         '${now.hour.toString().padLeft(2, '0')}:'
         '${now.minute.toString().padLeft(2, '0')}';
     final order = HeldOrder(
@@ -99,6 +113,7 @@ class HeldOrderService extends ChangeNotifier {
       label: label,
       items: List<CartItem>.from(items),
       createdAt: now,
+      outletId: OutletService.instance.currentOutletId,
     );
     _orders = [..._orders, order];
     notifyListeners();
@@ -111,6 +126,7 @@ class HeldOrderService extends ChangeNotifier {
                 order.items.map((i) => i.toJson()).toList(),
               ),
               createdAt: order.createdAt,
+              outletId: Value(order.outletId),
             ),
           );
     } catch (e) {
@@ -137,7 +153,7 @@ class HeldOrderService extends ChangeNotifier {
     return items;
   }
 
-  /// Hapus order tertahan tanpa memulihkan (dengan konfirmasi di UI).
+  /// Hapus order Pending tanpa memulihkan (dengan konfirmasi di UI).
   Future<void> remove(String id) async {
     _orders = _orders.where((o) => o.id != id).toList();
     notifyListeners();

@@ -47,9 +47,14 @@ class _KasirPageState extends State<KasirPage> {
   bool _isProcessing = false;
 
   /// Diskon manual keranjang aktif (nominal Rp, 0..subtotal).
-  /// TIDAK ikut tertahan bersama order (diskon itu per keranjang
-  /// aktif; saat pulih dari Tahan, diskon mulai dari 0).
+  /// TIDAK ikut disimpan sebagai Pending bersama order (diskon itu per keranjang
+  /// aktif; saat pulih dari Pending, diskon mulai dari 0).
   int _discount = 0;
+
+  /// Persen diskon aktif (0 = mode rupiah / tanpa diskon). Hanya
+  /// untuk tampilan "(N%)" di keranjang + struk — yang disimpan di
+  /// riwayat tetap nominal rupiah (SaleHistory.discount).
+  int _discountPercent = 0;
 
   List<Product> get _menu => MenuService.instance.products;
 
@@ -201,6 +206,7 @@ class _KasirPageState extends State<KasirPage> {
         final items = List<CartItem>.from(_cart);
         final total = _total;
         final discount = _discount;
+        final discountPercent = _discountPercent;
         final paidNominal = await Navigator.of(context).push<int>(
           MaterialPageRoute(
             builder: (_) => QrisPayPage(total: total, role: widget.role),
@@ -211,6 +217,7 @@ class _KasirPageState extends State<KasirPage> {
           items: items,
           total: total,
           discount: discount,
+          discountPercent: discountPercent,
           method: PaymentMethod.qris,
           paid: paidNominal,
         );
@@ -219,6 +226,7 @@ class _KasirPageState extends State<KasirPage> {
       final items = List<CartItem>.from(_cart);
       final total = _total;
       final discount = _discount;
+      final discountPercent = _discountPercent;
       var paid = total;
       if (_method == PaymentMethod.tunai) {
         // Tunai: tanya uang diterima dulu (nominal cepat + manual),
@@ -232,6 +240,7 @@ class _KasirPageState extends State<KasirPage> {
         items: items,
         total: total,
         discount: discount,
+        discountPercent: discountPercent,
         method: _method,
         paid: paid,
       );
@@ -241,20 +250,25 @@ class _KasirPageState extends State<KasirPage> {
   }
 
   /// Buka sheet diskon manual. Nilai kembali = diskon baru (0 =
-  /// hapus diskon). Dipanggil dari panel keranjang.
+  /// hapus diskon) + persennya (0 = mode rupiah). Dipanggil dari
+  /// panel keranjang.
   Future<void> _editDiscount() async {
     if (_cart.isEmpty) return;
-    final value = await showDiscountSheet(
+    final result = await showDiscountSheet(
       context,
       subtotal: _subtotal,
       currentDiscount: _discount,
+      currentPercent: _discountPercent,
     );
-    if (value == null || !mounted) return;
-    setState(() => _discount = value);
+    if (result == null || !mounted) return;
+    setState(() {
+      _discount = result.amount;
+      _discountPercent = result.percent;
+    });
   }
 
-  /// Tahan keranjang saat ini sebagai order tertahan (label otomatis
-  /// "Tahan N • HH:mm"), lalu kosongkan keranjang + diskon.
+  /// Simpan keranjang saat ini sebagai order Pending (label otomatis
+  /// "Pending N • HH:mm"), lalu kosongkan keranjang + diskon.
   Future<void> _holdCart() async {
     if (_cart.isEmpty || _isProcessing) return;
     final held =
@@ -263,15 +277,18 @@ class _KasirPageState extends State<KasirPage> {
     setState(() {
       _cart.clear();
       _discount = 0;
+      _discountPercent = 0;
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Keranjang ditahan sebagai ${held.label}.')),
+      SnackBar(
+        content: Text('Keranjang disimpan sebagai Pending ${held.label}.'),
+      ),
     );
   }
 
-  /// Daftar order tertahan (bottom sheet). Tap satu order = pulihkan
+  /// Daftar order Pending (bottom sheet). Tap satu order = pulihkan
   /// ke keranjang. Pulih hanya bila keranjang kosong; bila berisi,
-  /// kasir memilih "Tahan & Buka" (keranjang saat ini ikut ditahan)
+  /// kasir memilih "Pending & Buka" (keranjang saat ini ikut disimpan)
   /// atau "Batal".
   Future<void> _showHeldOrders() async {
     await showModalBottomSheet<void>(
@@ -308,7 +325,7 @@ class _KasirPageState extends State<KasirPage> {
                   ),
                   const SizedBox(height: 12),
                   const Text(
-                    'Order yang ditahan',
+                    'Order Pending',
                     style:
                         TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
                   ),
@@ -322,7 +339,7 @@ class _KasirPageState extends State<KasirPage> {
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 16),
                       child: Text(
-                        'Belum ada order yang ditahan.',
+                        'Belum ada order Pending.',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: SukaTeaColors.muted),
                       ),
@@ -378,7 +395,7 @@ class _KasirPageState extends State<KasirPage> {
                                     ),
                                   ),
                                   IconButton(
-                                    tooltip: 'Hapus order yang ditahan',
+                                    tooltip: 'Hapus order Pending',
                                     icon: const Icon(Icons.close),
                                     onPressed: () =>
                                         _deleteHeld(order, sheetContext),
@@ -399,7 +416,7 @@ class _KasirPageState extends State<KasirPage> {
     );
   }
 
-  /// Pulihkan satu order tertahan ke keranjang.
+  /// Pulihkan satu order Pending ke keranjang.
   Future<void> _restoreHeld(HeldOrder order, BuildContext sheetContext) async {
     if (_cart.isNotEmpty) {
       final holdFirst = await showDialog<bool>(
@@ -407,8 +424,8 @@ class _KasirPageState extends State<KasirPage> {
         builder: (context) => AlertDialog(
           title: const Text('Keranjang berisi'),
           content: const Text(
-            'Keranjang saat ini berisi item. Tahan dulu keranjang ini '
-            'sebelum membuka order yang ditahan?',
+            'Keranjang saat ini berisi item. Simpan dulu keranjang ini '
+            'sebagai Pending sebelum membuka order Pending?',
           ),
           actions: [
             TextButton(
@@ -417,7 +434,7 @@ class _KasirPageState extends State<KasirPage> {
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Tahan & Buka'),
+              child: const Text('Pending & Buka'),
             ),
           ],
         ),
@@ -428,6 +445,7 @@ class _KasirPageState extends State<KasirPage> {
       setState(() {
         _cart.clear();
         _discount = 0;
+        _discountPercent = 0;
       });
     }
     final items = await HeldOrderService.instance.restore(order.id);
@@ -436,17 +454,18 @@ class _KasirPageState extends State<KasirPage> {
     setState(() {
       _cart.addAll(items);
       _discount = 0;
+      _discountPercent = 0;
     });
   }
 
-  /// Hapus order tertahan tanpa memulihkan (konfirmasi dulu).
+  /// Hapus order Pending tanpa memulihkan (konfirmasi dulu).
   Future<void> _deleteHeld(HeldOrder order, BuildContext sheetContext) async {
     final ok = await showDialog<bool>(
       context: sheetContext,
       builder: (context) => AlertDialog(
         title: Text('Hapus ${order.label}?'),
         content: const Text(
-          'Order yang ditahan ini hilang. Item di dalamnya ikut terhapus.',
+          'Order Pending ini hilang. Item di dalamnya ikut terhapus.',
         ),
         actions: [
           TextButton(
@@ -468,12 +487,15 @@ class _KasirPageState extends State<KasirPage> {
   }
 
   /// Catat transaksi ke outbox + riwayat, potong stok, tampilkan struk.
+  /// [discountPercent] hanya untuk tampilan "(N%)" di struk — yang
+  /// disimpan di riwayat tetap nominal rupiah [discount].
   Future<void> _selesaikanBayar({
     required List<CartItem> items,
     required int total,
     required int discount,
     required PaymentMethod method,
     required int paid,
+    int discountPercent = 0,
   }) async {
     await OutboxService.instance.enqueueSale({
       'client_uuid': DateTime.now().microsecondsSinceEpoch.toString(),
@@ -498,6 +520,7 @@ class _KasirPageState extends State<KasirPage> {
     setState(() {
       _cart.clear();
       _discount = 0;
+      _discountPercent = 0;
     });
     final lines = items.map(ReceiptLine.fromCartItem).toList();
     await Navigator.of(context).push(
@@ -508,6 +531,7 @@ class _KasirPageState extends State<KasirPage> {
           total: total,
           paid: paid,
           discount: discount,
+          discountPercent: discountPercent,
           cashier: widget.role == AppRole.owner ? 'Owner' : 'Kasir',
         ),
       ),
@@ -544,7 +568,7 @@ class _KasirPageState extends State<KasirPage> {
               onOptions: _openOptions,
             );
             // Panel keranjang mendengarkan HeldOrderService supaya
-            // angka "Ditahan (N)" ikut berubah saat order ditahan /
+            // angka "Pending (N)" ikut berubah saat order di-Pending /
             // dipulihkan / dihapus (tanpa menunggu setState Kasir).
             final cart = ListenableBuilder(
               listenable: HeldOrderService.instance,
@@ -552,6 +576,7 @@ class _KasirPageState extends State<KasirPage> {
                 cart: _cart,
                 subtotal: _subtotal,
                 discount: _discount,
+                discountPercent: _discountPercent,
                 total: _total,
                 method: _method,
                 isProcessing: _isProcessing,
@@ -630,6 +655,7 @@ class _KasirPageState extends State<KasirPage> {
                                 cart: _cart,
                                 subtotal: _subtotal,
                                 discount: _discount,
+                                discountPercent: _discountPercent,
                                 total: _total,
                                 method: _method,
                                 isProcessing: _isProcessing,
@@ -950,6 +976,7 @@ class _CartPanel extends StatelessWidget {
     required this.cart,
     required this.subtotal,
     required this.discount,
+    required this.discountPercent,
     required this.total,
     required this.method,
     required this.isProcessing,
@@ -972,22 +999,26 @@ class _CartPanel extends StatelessWidget {
   /// Diskon manual keranjang aktif (0 = tanpa diskon).
   final int discount;
 
+  /// Persen diskon aktif (0 = mode rupiah). Hanya untuk tampilan
+  /// "(N%)" di baris Diskon — nominal yang disimpan tetap [discount].
+  final int discountPercent;
+
   /// Total yang dibayar = subtotal - diskon.
   final int total;
   final PaymentMethod method;
   final bool isProcessing;
 
-  /// Jumlah order yang sedang ditahan (untuk chip "Ditahan (N)").
+  /// Jumlah order yang sedang di-Pending (untuk chip "Pending (N)").
   final int heldCount;
   final ValueChanged<PaymentMethod> onMethod;
   final void Function(int, int) onQty;
   final void Function(int) onRemove;
   final VoidCallback onBayar;
 
-  /// Tahan keranjang saat ini sebagai order tertahan.
+  /// Simpan keranjang saat ini sebagai order Pending.
   final VoidCallback onHold;
 
-  /// Buka daftar order tertahan.
+  /// Buka daftar order Pending.
   final VoidCallback onShowHeld;
 
   /// Buka sheet diskon manual.
@@ -1224,11 +1255,21 @@ class _CartPanel extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Flexible(
-              child: Text(
-                'Bayar • ${formatRupiah(total)}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w700),
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeIn,
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: child,
+                ),
+                child: Text(
+                  'Bayar • ${formatRupiah(total)}',
+                  key: ValueKey<int>(total),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
               ),
             ),
           ],
@@ -1344,9 +1385,9 @@ class _CartPanel extends StatelessWidget {
             mainAxisSize: shrink ? MainAxisSize.min : MainAxisSize.max,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Judul + chip "Ditahan (N)" (Batch C1): ketuk untuk
-              // membuka daftar order tertahan. Nonaktif bila tidak ada
-              // order yang ditahan.
+              // Judul + chip "Pending (N)" (Batch C1): ketuk untuk
+              // membuka daftar order Pending. Nonaktif bila tidak ada
+              // order yang di-Pending.
               Row(
                 children: [
                   const Expanded(child: ScreenTitle('Keranjang')),
@@ -1363,11 +1404,23 @@ class _CartPanel extends StatelessWidget {
                           borderRadius: BorderRadius.circular(999),
                         ),
                       ),
-                      child: Text(
-                        'Ditahan ($heldCount)',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
+                      // Angka chip ikut beranimasi (fade) saat berubah.
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 250),
+                        switchInCurve: Curves.easeOutCubic,
+                        switchOutCurve: Curves.easeIn,
+                        transitionBuilder: (child, animation) =>
+                            FadeTransition(
+                          opacity: animation,
+                          child: child,
+                        ),
+                        child: Text(
+                          'Pending ($heldCount)',
+                          key: ValueKey<int>(heldCount),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
                         ),
                       ),
                     ),
@@ -1437,18 +1490,32 @@ class _CartPanel extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      'Diskon',
-                      style: TextStyle(
+                    Text(
+                      discountPercent > 0
+                          ? 'Diskon ($discountPercent%)'
+                          : 'Diskon',
+                      style: const TextStyle(
                         fontWeight: FontWeight.w600,
                         color: SukaTeaColors.danger,
                       ),
                     ),
-                    Text(
-                      '-${formatRupiah(discount)}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: SukaTeaColors.danger,
+                    // Nominal diskon ikut beranimasi (fade) saat berubah.
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 250),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeIn,
+                      transitionBuilder: (child, animation) =>
+                          FadeTransition(
+                        opacity: animation,
+                        child: child,
+                      ),
+                      child: Text(
+                        '-${formatRupiah(discount)}',
+                        key: ValueKey<int>(discount),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: SukaTeaColors.danger,
+                        ),
                       ),
                     ),
                   ],
@@ -1483,22 +1550,42 @@ class _CartPanel extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
+                  // Angka Total ikut beranimasi (fade + geser naik
+                  // halus) tiap berubah — diskon / tambah item tidak
+                  // lagi "lompat" kasar.
                   Flexible(
-                    child: Text(
-                      formatRupiah(total),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 22,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 250),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeIn,
+                      transitionBuilder: (child, animation) =>
+                          FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0, 0.3),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      ),
+                      child: Text(
+                        formatRupiah(total),
+                        key: ValueKey<int>(total),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 22,
+                        ),
                       ),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 8),
-              // Tahan + Bayar berdampingan (Batch C1): Tahan outline
+              // Pending + Bayar berdampingan (Batch C1): Pending outline
               // flex 1, Bayar flex 2. Label Bayar tetap "Bayar • RpX"
               // dengan X = total sesudah diskon.
               Row(
@@ -1513,7 +1600,7 @@ class _CartPanel extends StatelessWidget {
                           minimumSize: const Size(0, 56),
                         ),
                         child: const Text(
-                          'Tahan',
+                          'Pending',
                           style: TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ),

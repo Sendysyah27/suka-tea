@@ -6,9 +6,11 @@ import '../core/theme/app_theme.dart';
 import '../core/utils/roles.dart';
 import '../core/widgets/screen_title.dart';
 import '../core/widgets/tap_feedback.dart';
+import '../data/outlet_service.dart';
 import '../features/kasir/kasir_page.dart';
 import '../features/katalog/katalog_page.dart';
 import '../features/keuangan/keuangan_page.dart';
+import '../features/login/login_page.dart';
 import '../features/pin/pin_dialog.dart';
 import '../features/pin/settings_page.dart';
 import '../features/qris/qris_settings_page.dart';
@@ -24,17 +26,52 @@ class SukaTeaApp extends StatelessWidget {
       title: 'SUKA TEA',
       theme: SukaTeaTheme.light,
       debugShowCheckedModeBanner: false,
-      home: const SukaTeaShell(),
+      home: const _LoginGate(),
     );
   }
 }
 
-/// Shell + navigasi bawah 5 tab. Peran default = Kasir (fail closed).
-/// Mode Owner HANYA terbuka lewat PIN Owner (hash bcrypt di Supabase,
-/// verifikasi via Edge Function). Turun ke Kasir tidak perlu PIN.
+/// Gerbang login (Batch C4): sebelum login, yang tampil hanya
+/// LoginPage (pilih gerai + PIN Kasir / PIN Owner). Sesudah login
+/// sukses, shell dibuka dengan peran hasil login. Tutup app =
+/// login lagi (peran hanya di memori sesi — sama seperti sebelum C4).
+class _LoginGate extends StatefulWidget {
+  const _LoginGate();
+
+  @override
+  State<_LoginGate> createState() => _LoginGateState();
+}
+
+class _LoginGateState extends State<_LoginGate> {
+  LoginResult? _login;
+
+  @override
+  Widget build(BuildContext context) {
+    final login = _login;
+    if (login == null) {
+      return LoginPage(
+        onSuccess: (result) => setState(() => _login = result),
+      );
+    }
+    // Key per login supaya shell + semua halaman dibuat ulang segar
+    // tiap login (keranjang/riwayat tidak bocor antar sesi).
+    return SukaTeaShell(
+      key: ValueKey(login.outletId + login.role.name),
+      initialRole: login.role,
+    );
+  }
+}
+
+/// Shell + navigasi bawah 5 tab. Peran awal = hasil login (default
+/// Kasir, fail closed). Mode Owner HANYA terbuka lewat PIN Owner
+/// (hash bcrypt di Supabase, verifikasi via Edge Function). Turun ke
+/// Kasir tidak perlu PIN.
 /// Pengaturan (PIN, outlet) juga hanya bisa dibuka sesudah PIN benar.
 class SukaTeaShell extends StatefulWidget {
-  const SukaTeaShell({super.key});
+  const SukaTeaShell({super.key, this.initialRole = AppRole.kasir});
+
+  /// Peran dari halaman Login (Kasir / Owner).
+  final AppRole initialRole;
 
   @override
   State<SukaTeaShell> createState() => _SukaTeaShellState();
@@ -42,7 +79,13 @@ class SukaTeaShell extends StatefulWidget {
 
 class _SukaTeaShellState extends State<SukaTeaShell> {
   int _index = 0;
-  AppRole _role = AppRole.kasir;
+  late AppRole _role;
+
+  @override
+  void initState() {
+    super.initState();
+    _role = widget.initialRole;
+  }
 
   static const _titles = ['Kasir', 'Kelola Menu', 'Stok', 'Keuangan', 'Laporan'];
 
@@ -54,12 +97,14 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
         LaporanPage(role: _role),
       ];
 
-  /// Minta PIN Owner. true = PIN benar, peran jadi Owner.
+  /// Minta PIN Owner gerai aktif. true = PIN benar, peran jadi Owner.
   Future<bool> _unlockOwner() async {
     final ok = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const PinEntryDialog(),
+      builder: (_) => PinEntryDialog(
+        outletId: OutletService.instance.currentOutletId,
+      ),
     );
     if (ok == true) {
       setState(() => _role = AppRole.owner);
@@ -75,7 +120,11 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
     }
     if (!mounted) return;
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const SettingsPage()),
+      MaterialPageRoute(
+        builder: (_) => SettingsPage(
+          outletId: OutletService.instance.currentOutletId,
+        ),
+      ),
     );
   }
 
@@ -83,8 +132,33 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        // Judul + underline emerald (FigCraft title_block, v23).
-        title: ScreenTitle(_titles[_index]),
+        // Judul + underline emerald (FigCraft title_block, v23) +
+        // nama gerai aktif di bawahnya (Batch C4 — supaya kasir
+        // selalu tahu gerai mana yang sedang dibuka).
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ScreenTitle(_titles[_index]),
+            const SizedBox(height: 2),
+            ListenableBuilder(
+              listenable: OutletService.instance,
+              builder: (context, _) {
+                return Text(
+                  OutletService.instance.currentOutlet?.name ??
+                      'Gerai 1 — Stand Utama',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: SukaTeaColors.muted,
+                    fontWeight: FontWeight.w500,
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: 'Pengaturan',
@@ -131,21 +205,22 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
           ),
         ],
       ),
-      // Ganti menu: fade + slide halus (250ms, easeInOut), bukan ganti
-      // kasar. KeyedSubtree per tab supaya AnimatedSwitcher membedakan
-      // tiap halaman (kelima halaman tipenya memang beda, kunci ini
-      // membuat niatnya eksplisit). Halaman lama tetap di-unmount
-      // sesudah transisi — sama seperti sebelum animasi (pindah tab
-      // memang membuat ulang halaman, mis. keranjang Kasir).
+      // Ganti menu: fade + slide halus (320ms, easeOutCubic masuk /
+      // easeIn keluar), bukan ganti kasar. KeyedSubtree per tab supaya
+      // AnimatedSwitcher membedakan tiap halaman (kelima halaman
+      // tipenya memang beda, kunci ini membuat niatnya eksplisit).
+      // Halaman lama tetap di-unmount sesudah transisi — sama seperti
+      // sebelum animasi (pindah tab memang membuat ulang halaman,
+      // mis. keranjang Kasir).
       body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 250),
-        switchInCurve: Curves.easeInOut,
-        switchOutCurve: Curves.easeInOut,
+        duration: const Duration(milliseconds: 320),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeIn,
         transitionBuilder: (child, animation) => FadeTransition(
           opacity: animation,
           child: SlideTransition(
             position: Tween<Offset>(
-              begin: const Offset(0.02, 0),
+              begin: const Offset(0.03, 0),
               end: Offset.zero,
             ).animate(animation),
             child: child,
@@ -198,10 +273,11 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               // Pill aktif: AnimatedContainer supaya tint muncul halus
-              // (200ms), bukan pop. Ikon + label ikut berubah warna.
+              // (250ms, easeOutCubic), bukan pop. Ikon + label ikut
+              // berubah warna.
               AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeInOut,
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOutCubic,
                 width: 48,
                 height: 32,
                 decoration: BoxDecoration(
@@ -223,8 +299,8 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
               ),
               const SizedBox(height: 4),
               AnimatedDefaultTextStyle(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeInOut,
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOutCubic,
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight:

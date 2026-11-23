@@ -67,6 +67,8 @@ class ProductRecipes extends Table {
 /// [discount] = diskon manual transaksi ini (0 bila tanpa diskon);
 /// total yang disimpan = subtotal - diskon. [isVoid] = transaksi
 /// dibatalkan Owner (stok dikembalikan, tidak dihitung di omzet).
+/// [outletId] = gerai tempat transaksi terjadi (Batch C4) — baris lama
+/// (sebelum v6) memakai outlet utama (...0001).
 class SaleHistory extends Table {
   TextColumn get id => text()();
   DateTimeColumn get createdAt => dateTime()();
@@ -77,19 +79,27 @@ class SaleHistory extends Table {
   IntColumn get change => integer()();
   IntColumn get discount => integer().withDefault(const Constant(0))();
   BoolColumn get isVoid => boolean().withDefault(const Constant(false))();
+  TextColumn get outletId => text().withDefault(
+        const Constant('00000000-0000-0000-0000-000000000001'),
+      )();
 
   @override
   Set<Column> get primaryKey => {id};
 }
 
-/// Order yang ditahan di Kasir (Batch C1). Satu baris per keranjang
-/// yang ditahan; itemsJson = daftar CartItem (JSON). Label otomatis
-/// "Tahan N • HH:mm". Pulihkan = hapus baris + isi kembali keranjang.
+/// Order Pending di Kasir (Batch C1). Satu baris per keranjang
+/// yang disimpan sebagai Pending; itemsJson = daftar CartItem (JSON).
+/// Label otomatis "Pending N • HH:mm". Pulihkan = hapus baris + isi
+/// kembali keranjang. [outletId] = gerai tempat order disimpan
+/// (Batch C4) — baris lama memakai outlet utama (...0001).
 class HeldOrders extends Table {
   TextColumn get id => text()();
   TextColumn get label => text()();
   TextColumn get itemsJson => text()();
   DateTimeColumn get createdAt => dateTime()();
+  TextColumn get outletId => text().withDefault(
+        const Constant('00000000-0000-0000-0000-000000000001'),
+      )();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -109,6 +119,26 @@ class Toppings extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Gerai/outlet lokal (Batch C4 multi-gerai). Cermin lokal tabel
+/// Supabase `outlets` — anon TIDAK bisa membaca tabel itu (RLS
+/// member-only, butuh Supabase Auth M0), jadi daftar gerai yang
+/// dipakai app adalah tabel ini (seed 4 gerai placeholder; Owner
+/// ubah nama/alamat dari menu Gerai). [id] = UUID Supabase gerai itu
+/// (...0001–...0004 untuk 4 gerai awal, SAMA dengan migrasi 006,
+/// supaya sinkronisasi nanti tinggal cocokkan id); gerai baru yang
+/// dibuat dari app memakai id 'local-<microseconds>' sampai ada
+/// sinkronisasi ke Supabase.
+class Outlets extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get address => text().withDefault(const Constant(''))();
+  BoolColumn get isOpen => boolean().withDefault(const Constant(true))();
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 @DriftDatabase(tables: [
   OutboxEntries,
   LocalProducts,
@@ -117,12 +147,13 @@ class Toppings extends Table {
   SaleHistory,
   HeldOrders,
   Toppings,
+  Outlets,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -154,6 +185,16 @@ class AppDatabase extends _$AppDatabase {
           // Tabel lama TIDAK dihapus.
           if (from < 5) {
             await m.addColumn(stockLevels, stockLevels.costPerUnit);
+          }
+          // v5 -> v6 (23 Nov 2026, Batch C4 multi-gerai): tabel Outlets
+          // + kolom outletId di SaleHistory + HeldOrders (transaksi &
+          // order Pending tercatat per gerai). Baris lama memakai
+          // outlet utama (...0001) lewat default kolom.
+          // Tabel lama TIDAK dihapus.
+          if (from < 6) {
+            await m.createTable(outlets);
+            await m.addColumn(saleHistory, saleHistory.outletId);
+            await m.addColumn(heldOrders, heldOrders.outletId);
           }
         },
       );

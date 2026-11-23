@@ -11,10 +11,25 @@ import 'pin_service.dart';
 /// - Ubah PIN (`requireCurrentPin: true`): PIN lama dulu, lalu PIN baru 2x.
 /// Mengembalikan `true` lewat Navigator.pop bila berhasil, `false` bila batal.
 class PinEntryDialog extends StatefulWidget {
-  const PinEntryDialog({super.key, this.requireCurrentPin = false});
+  const PinEntryDialog({
+    super.key,
+    this.requireCurrentPin = false,
+    this.outletId,
+    this.onPinVerified,
+  });
 
   /// true = ubah PIN (minta PIN lama dulu). false = verifikasi / setup.
   final bool requireCurrentPin;
+
+  /// Gerai yang PIN-nya diverifikasi/diatur (null = outlet default).
+  final String? outletId;
+
+  /// Dipanggil dengan PIN Owner yang berhasil diverifikasi (sebelum
+  /// pop) — dipakai alur yang butuh nilai PIN-nya lagi, mis. Ubah PIN
+  /// Gerai yang meneruskan PIN Owner ke set-kasir-pin. PIN TIDAK
+  /// disimpan di mana pun; hanya diteruskan sekali ke server.
+  /// null = pemanggil tidak butuh nilainya (perilaku lama).
+  final ValueChanged<String>? onPinVerified;
 
   @override
   State<PinEntryDialog> createState() => _PinEntryDialogState();
@@ -75,7 +90,10 @@ class _PinEntryDialogState extends State<PinEntryDialog> {
     final entered = _entered;
     setState(() => _busy = true);
     if (_step == _Step.enter) {
-      final result = await PinService.instance.verify(entered);
+      final result = await PinService.instance.verify(
+        entered,
+        outletId: widget.outletId,
+      );
       if (!mounted) return;
       switch (result) {
         case PinVerifyResult.ok:
@@ -87,6 +105,7 @@ class _PinEntryDialogState extends State<PinEntryDialog> {
               _busy = false;
             });
           } else {
+            widget.onPinVerified?.call(entered);
             Navigator.of(context).pop(true);
           }
         case PinVerifyResult.notSet:
@@ -141,9 +160,15 @@ class _PinEntryDialogState extends State<PinEntryDialog> {
     final ok = await PinService.instance.setPin(
       currentPin: _currentPin,
       newPin: _newPin!,
+      outletId: widget.outletId,
     );
     if (!mounted) return;
     if (ok) {
+      // PIN baru saja dibuat (mode setup pertama): PIN yang berlaku
+      // sekarang = PIN baru ini.
+      if (!widget.requireCurrentPin) {
+        widget.onPinVerified?.call(_newPin!);
+      }
       Navigator.of(context).pop(true);
     } else {
       setState(() {
