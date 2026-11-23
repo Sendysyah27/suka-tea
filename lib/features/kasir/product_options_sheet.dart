@@ -38,7 +38,7 @@ Future<ProductSelection?> showProductOptionsSheet(
   final initialModifiers = initial?.modifiers ?? const <Modifier>[];
   // Gula/es dicari berdasarkan kind (nama bisa berubah-ubah, kind
   // tetap: 'gula' / 'es').
-  Modifier _pickKind(String kind, List<Modifier> defaults) {
+  Modifier pickKind(String kind, List<Modifier> defaults) {
     for (final m in initialModifiers) {
       if (m.kind == kind) return m;
     }
@@ -46,8 +46,8 @@ Future<ProductSelection?> showProductOptionsSheet(
   }
 
   var variant = initial?.variant ?? product.variants.first;
-  var gula = _pickKind('gula', gulaOptions);
-  var es = _pickKind('es', esOptions);
+  var gula = pickKind('gula', gulaOptions);
+  var es = pickKind('es', esOptions);
   final toppings = <Modifier>{};
   // Snapshot saat sheet dibuka (tidak me-rebuild bila Owner mengubah
   // topping di halaman lain selagi sheet terbuka).
