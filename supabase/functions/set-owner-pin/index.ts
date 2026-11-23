@@ -12,7 +12,11 @@
 // POST { outlet_id, current_pin?, new_pin } -> { ok, error? }
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as bcrypt from "npm:bcryptjs@2.4.3";
+// bcryptjs = modul CommonJS. `import * as bcrypt` di Deno memberi namespace
+// yang fungsinya ada di `.default`, jadi `bcrypt.hash` = undefined
+// (TypeError, 500 — akar gagal buat PIN 23 Nov 2026). Default import =
+// module.exports, jadi `bcrypt.hash` / `bcrypt.compare` jalan.
+import bcrypt from "npm:bcryptjs@2.4.3";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

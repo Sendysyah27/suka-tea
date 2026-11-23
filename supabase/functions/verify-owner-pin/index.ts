@@ -13,7 +13,13 @@
 //   ok:false error:...       input tidak valid / server error
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as bcrypt from "npm:bcryptjs@2.4.3";
+// bcryptjs = modul CommonJS. `import * as bcrypt` di Deno memberi namespace
+// yang fungsinya ada di `.default`, jadi `bcrypt.compare` = undefined
+// (TypeError, 500 — bug laten yang sama dengan set-owner-pin, 23 Nov 2026:
+// verify lolos selama ini hanya karena PIN belum pernah diatur, jadi
+// kodenya balik `not_set` SEBELUM menyentuh bcrypt). Default import =
+// module.exports, jadi `bcrypt.compare` jalan.
+import bcrypt from "npm:bcryptjs@2.4.3";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
