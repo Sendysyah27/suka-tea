@@ -134,8 +134,13 @@ class KeuanganPage extends StatelessWidget {
                 _row(
                   m.label,
                   formatRupiah(stats.byMethod[m]!),
-                  dotColor:
-                      m.isCashless ? SukaTeaColors.cashless : SukaTeaColors.cash,
+                  // Split (Batch C2) = campuran tunai + cashless —
+                  // dot amber supaya tidak dikira murni tunai/cashless.
+                  dotColor: m.isSplit
+                      ? SukaTeaColors.amber
+                      : (m.isCashless
+                          ? SukaTeaColors.cashless
+                          : SukaTeaColors.cash),
                 ),
             const SizedBox(height: 16),
             const Text(

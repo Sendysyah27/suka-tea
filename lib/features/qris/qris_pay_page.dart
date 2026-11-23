@@ -7,6 +7,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/cash.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
+import '../../core/utils/split_payment.dart';
 import '../../core/widgets/screen_title.dart';
 import 'qris_service.dart';
 import 'qris_settings_page.dart';
@@ -18,14 +19,27 @@ import 'qris_settings_service.dart';
 /// QR berlaku 5 menit (timer). Konfirmasi bayar masih MANUAL di MVP:
 /// kasir mengecek mutasi/rekening dulu, baru tap "Sudah Dibayar".
 /// Page ini mengembalikan nominal yang dibayar (int) atau null bila batal.
+///
+/// Mode split ([splitMode] = true, Batch C2): nominal yang dimasukkan
+/// adalah BAGIAN QRIS saja (min Rp1.000, harus kurang dari total) —
+/// sisanya dibayar tunai di sheet berikutnya. Tombol konfirmasi jadi
+/// "Lanjut ke Tunai" dan nilai yang dikembalikan = bagian QRIS.
 class QrisPayPage extends StatefulWidget {
-  const QrisPayPage({super.key, required this.total, required this.role});
+  const QrisPayPage({
+    super.key,
+    required this.total,
+    required this.role,
+    this.splitMode = false,
+  });
 
   final int total;
 
   /// Peran pemanggil — dipakai untuk meneruskan ke Pengaturan QRIS
   /// (hanya Owner yang bisa mengubah pengaturan merchant).
   final AppRole role;
+
+  /// true = mode split: nominal = bagian QRIS saja (< total).
+  final bool splitMode;
 
   @override
   State<QrisPayPage> createState() => _QrisPayPageState();
@@ -45,7 +59,11 @@ class _QrisPayPageState extends State<QrisPayPage> {
   @override
   void initState() {
     super.initState();
-    _nominal = widget.total;
+    // Mode split: nominal awal = bagian QRIS default (di bawah total),
+    // bukan total — total bukan nilai split yang valid.
+    _nominal = widget.splitMode
+        ? defaultSplitQrisAmount(widget.total)
+        : widget.total;
     _nominalController = TextEditingController(text: _nominal.toString());
     // Pembulatan ke Rp500 (dulu Rp1.000).
     final rounded = roundUpTo500(widget.total);
@@ -64,6 +82,12 @@ class _QrisPayPageState extends State<QrisPayPage> {
     if (_demoMode) return QrisService.sampleStaticPayload();
     return QrisSettingsService.instance.staticPayload;
   }
+
+  /// Error validasi mode split (null = valid / bukan mode split).
+  /// Dipakai menonaktifkan Generate + menampilkan pesan live.
+  String? get _splitError => widget.splitMode
+      ? splitQrisError(qrisAmount: _nominal, total: widget.total)
+      : null;
 
   void _startTimer() {
     _timer?.cancel();
@@ -130,7 +154,11 @@ class _QrisPayPageState extends State<QrisPayPage> {
   Widget build(BuildContext context) {
     final merchantReady = _merchantPayload != null;
     return Scaffold(
-      appBar: AppBar(title: const ScreenTitle('Bayar QRIS')),
+      appBar: AppBar(
+        title: ScreenTitle(
+          widget.splitMode ? 'Bayar QRIS (Split)' : 'Bayar QRIS',
+        ),
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -218,21 +246,42 @@ class _QrisPayPageState extends State<QrisPayPage> {
               },
             ),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: [
-                ChoiceChip(
-                  label: Text('Total ${formatRupiah(widget.total)}'),
-                  selected: _nominal == widget.total,
-                  onSelected: (_) => _setNominal(widget.total),
+            if (widget.splitMode) ...[
+              const Text(
+                'Bagian QRIS — sisanya dibayar tunai.',
+                style: TextStyle(color: SukaTeaColors.muted),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _splitError ??
+                    'Sisa tunai: ${formatRupiah(splitCashRemainder(total: widget.total, qrisAmount: _nominal))}',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: _splitError != null
+                      ? SukaTeaColors.danger
+                      : SukaTeaColors.emerald,
                 ),
-                ChoiceChip(
-                  label: Text('Bulatkan ${formatRupiah(_roundedUp)}'),
-                  selected: _nominal == _roundedUp,
-                  onSelected: (_) => _setNominal(_roundedUp),
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            // Chip "Total" + "Bulatkan" (>= total) tidak ada artinya
+            // di mode split — bagian QRIS harus kurang dari total.
+            if (!widget.splitMode)
+              Wrap(
+                spacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: Text('Total ${formatRupiah(widget.total)}'),
+                    selected: _nominal == widget.total,
+                    onSelected: (_) => _setNominal(widget.total),
+                  ),
+                  ChoiceChip(
+                    label: Text('Bulatkan ${formatRupiah(_roundedUp)}'),
+                    selected: _nominal == _roundedUp,
+                    onSelected: (_) => _setNominal(_roundedUp),
+                  ),
+                ],
+              ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -247,7 +296,7 @@ class _QrisPayPageState extends State<QrisPayPage> {
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: _generate,
+              onPressed: _splitError != null ? null : _generate,
               icon: const Icon(Icons.qr_code),
               label: Text(_payload == null ? 'Generate QR' : 'Generate Ulang'),
             ),
@@ -301,7 +350,9 @@ class _QrisPayPageState extends State<QrisPayPage> {
                   style: FilledButton.styleFrom(
                     minimumSize: const Size(0, 56),
                   ),
-                  child: const Text('Sudah Dibayar'),
+                  child: Text(
+                    widget.splitMode ? 'Lanjut ke Tunai' : 'Sudah Dibayar',
+                  ),
                 ),
               ),
             ],

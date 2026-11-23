@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
@@ -14,6 +16,7 @@ import '../features/login/login_page.dart';
 import '../features/pin/pin_dialog.dart';
 import '../features/pin/settings_page.dart';
 import '../features/qris/qris_settings_page.dart';
+import '../features/qris/qris_settings_service.dart';
 import '../features/laporan/laporan_page.dart';
 import '../features/stok/stok_page.dart';
 
@@ -50,7 +53,15 @@ class _LoginGateState extends State<_LoginGate> {
     final login = _login;
     if (login == null) {
       return LoginPage(
-        onSuccess: (result) => setState(() => _login = result),
+        onSuccess: (result) {
+          // Gerai aktif baru diketahui di sini (bukan di main) —
+          // QRIS merchant dibaca dari Supabase untuk gerai ini.
+          // load() jalan tanpa ditunggu supaya login tidak tertahan;
+          // halaman QRIS membaca dari memori sesudah load selesai.
+          QrisSettingsService.instance.currentOutletId = result.outletId;
+          unawaited(QrisSettingsService.instance.load());
+          setState(() => _login = result);
+        },
       );
     }
     // Key per login supaya shell + semua halaman dibuat ulang segar

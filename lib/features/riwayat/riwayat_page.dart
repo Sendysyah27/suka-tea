@@ -121,6 +121,8 @@ class RiwayatPage extends StatelessWidget {
                           time: sale.createdAt,
                           discount: sale.discount,
                           isVoid: sale.isVoid,
+                          qrisAmount: sale.qrisAmount,
+                          cashAmount: sale.cashAmount,
                         ),
                       ),
                     );

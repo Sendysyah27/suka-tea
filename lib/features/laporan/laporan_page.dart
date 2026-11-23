@@ -6,7 +6,6 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/tap_feedback.dart';
-import '../../data/models.dart';
 import '../../data/sale_history.dart';
 import '../../data/sheets_export.dart';
 import '../riwayat/riwayat_page.dart';
@@ -57,9 +56,12 @@ class _LaporanPageState extends State<LaporanPage> {
         // terlaris tidak menghitung transaksi yang sudah di-void.
         final today =
             SaleHistoryService.instance.activeSalesOn(DateTime.now());
-        final tunaiSales = today
-            .where((s) => s.method == PaymentMethod.tunai)
-            .fold(0, (sum, s) => sum + s.total);
+        // Tunai di laci (Batch C2): tunai penuh + BAGIAN TUNAI dari
+        // transaksi split (total - bagian QRIS). Kembalian sudah
+        // diperhitungkan di cashInDrawer — tunai lebih bayar yang
+        // kembali ke pelanggan tidak menambah isi laci.
+        final tunaiSales =
+            today.fold(0, (sum, s) => sum + s.cashInDrawer);
         final top = topProducts(today);
         final expected = _openingCash + tunaiSales;
         return ListView(

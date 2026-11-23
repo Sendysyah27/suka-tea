@@ -69,6 +69,10 @@ class ProductRecipes extends Table {
 /// dibatalkan Owner (stok dikembalikan, tidak dihitung di omzet).
 /// [outletId] = gerai tempat transaksi terjadi (Batch C4) — baris lama
 /// (sebelum v6) memakai outlet utama (...0001).
+/// [qrisAmount]/[cashAmount] = bagian QRIS + tunai untuk transaksi
+/// split (Batch C2); transaksi non-split = 0. paid = qrisAmount +
+/// cashAmount (tunai yang DITERIMA — bisa lebih dari sisa tunai,
+/// selisihnya kembalian); total tetap subtotal - diskon.
 class SaleHistory extends Table {
   TextColumn get id => text()();
   DateTimeColumn get createdAt => dateTime()();
@@ -82,6 +86,8 @@ class SaleHistory extends Table {
   TextColumn get outletId => text().withDefault(
         const Constant('00000000-0000-0000-0000-000000000001'),
       )();
+  IntColumn get qrisAmount => integer().withDefault(const Constant(0))();
+  IntColumn get cashAmount => integer().withDefault(const Constant(0))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -153,7 +159,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -195,6 +201,13 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(outlets);
             await m.addColumn(saleHistory, saleHistory.outletId);
             await m.addColumn(heldOrders, heldOrders.outletId);
+          }
+          // v6 -> v7 (23 Nov 2026, Batch C2 split payment): kolom
+          // bagian QRIS + tunai di SaleHistory. Baris lama = 0
+          // (bukan split). Tabel lama TIDAK dihapus.
+          if (from < 7) {
+            await m.addColumn(saleHistory, saleHistory.qrisAmount);
+            await m.addColumn(saleHistory, saleHistory.cashAmount);
           }
         },
       );

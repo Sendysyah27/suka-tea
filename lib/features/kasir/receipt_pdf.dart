@@ -12,6 +12,8 @@ import '../../data/models.dart';
 /// Dipakai tombol "Simpan PDF" di halaman struk.
 /// [total] = yang dibayar = subtotal - diskon; bila [discount] > 0,
 /// baris Subtotal + Diskon ikut ditulis. [isVoid] = tampilkan "VOID".
+/// [qrisAmount]/[cashAmount] = bagian split (Batch C2) — tampil dua
+/// baris bayar bila method split.
 Future<Uint8List> buildReceiptPdfBytes({
   required List<ReceiptLine> lines,
   required PaymentMethod method,
@@ -22,6 +24,8 @@ Future<Uint8List> buildReceiptPdfBytes({
   int discount = 0,
   int discountPercent = 0,
   bool isVoid = false,
+  int qrisAmount = 0,
+  int cashAmount = 0,
 }) async {
   final now = time ?? DateTime.now();
   final timeText =
@@ -123,7 +127,11 @@ Future<Uint8List> buildReceiptPdfBytes({
               ),
             ),
           row('TOTAL', formatRupiah(total), bold: true),
-          row('Bayar (${method.label})', formatRupiah(paid)),
+          if (method == PaymentMethod.split) ...[
+            row('Bayar (QRIS)', formatRupiah(qrisAmount)),
+            row('Bayar (Tunai)', formatRupiah(cashAmount)),
+          ] else
+            row('Bayar (${method.label})', formatRupiah(paid)),
           row('Kembali', formatRupiah(paid - total)),
           pw.SizedBox(height: 4),
           pw.Divider(),
@@ -158,6 +166,8 @@ Future<String?> saveReceiptPdf({
   int discount = 0,
   int discountPercent = 0,
   bool isVoid = false,
+  int qrisAmount = 0,
+  int cashAmount = 0,
 }) async {
   try {
     final bytes = await buildReceiptPdfBytes(
@@ -170,6 +180,8 @@ Future<String?> saveReceiptPdf({
       discount: discount,
       discountPercent: discountPercent,
       isVoid: isVoid,
+      qrisAmount: qrisAmount,
+      cashAmount: cashAmount,
     );
     final now = time ?? DateTime.now();
     final stamp = '${now.year}${now.month.toString().padLeft(2, '0')}'

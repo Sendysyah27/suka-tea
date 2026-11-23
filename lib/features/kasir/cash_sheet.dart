@@ -12,18 +12,22 @@ import '../../core/widgets/tap_feedback.dart';
 /// Mengembalikan nominal diterima (int) atau null bila batal.
 /// Tombol konfirmasi nonaktif bila diterima < total.
 ///
+/// [subtitle] = teks pengganti "Total belanja RpX" — dipakai alur
+/// split (Batch C2) untuk menampilkan "Sisa tunai setelah QRIS RpX".
+///
 /// Tombol konfirmasi TIDAK pop langsung: pop jalan lewat
 /// [popSheetSafely] — unfocus TextField + tunggu satu frame dulu.
 /// Pop langsung saat TextField masih fokus = layar merah debug
 /// (assertion '_dependents.isEmpty', 23 Nov 2026 16:01).
 Future<int?> showCashReceivedSheet(
   BuildContext context,
-  int total,
-) async {
+  int total, {
+  String? subtitle,
+}) async {
   return showModalBottomSheet<int>(
     context: context,
     isScrollControlled: true,
-    builder: (context) => _CashSheetContent(total: total),
+    builder: (context) => _CashSheetContent(total: total, subtitle: subtitle),
   );
 }
 
@@ -40,9 +44,12 @@ Future<int?> showCashReceivedSheet(
 /// saat State di-unmount sesudah animasi keluar selesai — controller
 /// tidak pernah dipakai sesudah dispose.
 class _CashSheetContent extends StatefulWidget {
-  const _CashSheetContent({required this.total});
+  const _CashSheetContent({required this.total, this.subtitle});
 
   final int total;
+
+  /// Teks pengganti "Total belanja RpX" (null = teks default).
+  final String? subtitle;
 
   @override
   State<_CashSheetContent> createState() => _CashSheetContentState();
@@ -106,7 +113,7 @@ class _CashSheetContentState extends State<_CashSheetContent> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Total belanja ${formatRupiah(total)}',
+            widget.subtitle ?? 'Total belanja ${formatRupiah(total)}',
             style: const TextStyle(color: SukaTeaColors.muted),
           ),
           const SizedBox(height: 16),

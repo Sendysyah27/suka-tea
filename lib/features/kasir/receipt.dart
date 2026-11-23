@@ -29,6 +29,8 @@ String buildReceiptText({
   int discount = 0,
   int discountPercent = 0,
   bool isVoid = false,
+  int qrisAmount = 0,
+  int cashAmount = 0,
 }) {
   final now = time ?? DateTime.now();
   final buf = StringBuffer();
@@ -55,7 +57,14 @@ String buildReceiptText({
   }
   if (isVoid) buf.writeln('*** VOID ***');
   buf.writeln('TOTAL        ${formatRupiah(total)}');
-  buf.writeln('Bayar (${method.label})  ${formatRupiah(paid)}');
+  if (method == PaymentMethod.split) {
+    // Split (Batch C2): dua baris bayar, bukan satu — kembalian tetap
+    // paid - total (hanya dari tunai).
+    buf.writeln('Bayar (QRIS)   ${formatRupiah(qrisAmount)}');
+    buf.writeln('Bayar (Tunai)  ${formatRupiah(cashAmount)}');
+  } else {
+    buf.writeln('Bayar (${method.label})  ${formatRupiah(paid)}');
+  }
   buf.writeln('Kembali      ${formatRupiah(paid - total)}');
   buf.writeln('--------------------------------');
   buf.writeln('   Terima kasih sudah mampir!');
@@ -82,6 +91,8 @@ class DigitalReceiptPage extends StatefulWidget {
     this.discount = 0,
     this.discountPercent = 0,
     this.isVoid = false,
+    this.qrisAmount = 0,
+    this.cashAmount = 0,
   });
 
   final List<ReceiptLine> lines;
@@ -108,6 +119,11 @@ class DigitalReceiptPage extends StatefulWidget {
 
   /// Transaksi void: pill LUNAS diganti pill VOID (merah).
   final bool isVoid;
+
+  /// Bagian split payment (Batch C2): nominal QRIS + tunai diterima.
+  /// Non-split = 0; untuk split berlaku paid = qrisAmount + cashAmount.
+  final int qrisAmount;
+  final int cashAmount;
 
   @override
   State<DigitalReceiptPage> createState() => _DigitalReceiptPageState();
@@ -186,6 +202,8 @@ class _DigitalReceiptPageState extends State<DigitalReceiptPage> {
       discount: widget.discount,
       discountPercent: widget.discountPercent,
       isVoid: widget.isVoid,
+      qrisAmount: widget.qrisAmount,
+      cashAmount: widget.cashAmount,
     );
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -397,10 +415,23 @@ class _DigitalReceiptPageState extends State<DigitalReceiptPage> {
                           ],
                         ),
                         const SizedBox(height: 6),
-                        _row(
-                          'Bayar (${widget.method.label})',
-                          formatRupiah(widget.paid),
-                        ),
+                        // Split (Batch C2): dua baris bayar (QRIS +
+                        // Tunai) — kembalian tetap paid - total.
+                        if (widget.method == PaymentMethod.split) ...[
+                          _row(
+                            'Bayar (QRIS)',
+                            formatRupiah(widget.qrisAmount),
+                          ),
+                          const SizedBox(height: 6),
+                          _row(
+                            'Bayar (Tunai)',
+                            formatRupiah(widget.cashAmount),
+                          ),
+                        ] else
+                          _row(
+                            'Bayar (${widget.method.label})',
+                            formatRupiah(widget.paid),
+                          ),
                         const SizedBox(height: 6),
                         _row('Kembali', formatRupiah(widget.paid - widget.total)),
                         const SizedBox(height: 12),

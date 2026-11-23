@@ -112,6 +112,8 @@ class SaleRecord {
     this.discount = 0,
     this.isVoid = false,
     this.outletId = defaultOutletId,
+    this.qrisAmount = 0,
+    this.cashAmount = 0,
   });
 
   final String id;
@@ -135,13 +137,39 @@ class SaleRecord {
   /// hanya punya transaksi gerai yang login di HP ini.
   final String outletId;
 
+  /// Bagian split payment (Batch C2): nominal yang dibayar via QRIS
+  /// + tunai yang DITERIMA (bisa lebih dari sisa tunai — selisihnya
+  /// kembalian). Transaksi non-split = 0; untuk split berlaku
+  /// paid = qrisAmount + cashAmount.
+  final int qrisAmount;
+  final int cashAmount;
+
   /// Subtotal sebelum diskon (total + diskon).
   int get subtotal => total + discount;
 
   /// Jumlah cup terjual di transaksi ini.
   int get cups => items.fold(0, (s, i) => s + i.qty);
 
-  SaleRecord copyWith({bool? isVoid}) => SaleRecord(
+  /// Uang tunai yang TINGGAL di laci dari transaksi ini (untuk
+  /// rekonsiliasi Tutup Kasir): Tunai = total; Split = total -
+  /// bagian QRIS; selain itu 0. Kembalian sudah diperhitungkan —
+  /// tunai yang diterima lebih dari sisa tunai kembali ke pelanggan,
+  /// jadi tidak menambah isi laci.
+  int get cashInDrawer {
+    if (method == PaymentMethod.tunai) return total;
+    if (method == PaymentMethod.split) {
+      final cash = total - qrisAmount;
+      return cash < 0 ? 0 : cash;
+    }
+    return 0;
+  }
+
+  SaleRecord copyWith({
+    bool? isVoid,
+    int? qrisAmount,
+    int? cashAmount,
+  }) =>
+      SaleRecord(
         id: id,
         createdAt: createdAt,
         items: items,
@@ -152,6 +180,8 @@ class SaleRecord {
         discount: discount,
         isVoid: isVoid ?? this.isVoid,
         outletId: outletId,
+        qrisAmount: qrisAmount ?? this.qrisAmount,
+        cashAmount: cashAmount ?? this.cashAmount,
       );
 
   factory SaleRecord.fromJson(Map<String, dynamic> json) {
@@ -173,6 +203,8 @@ class SaleRecord {
       discount: (json['discount'] as num? ?? 0).toInt(),
       isVoid: json['isVoid'] as bool? ?? false,
       outletId: json['outletId'] as String? ?? defaultOutletId,
+      qrisAmount: (json['qrisAmount'] as num? ?? 0).toInt(),
+      cashAmount: (json['cashAmount'] as num? ?? 0).toInt(),
     );
   }
 
@@ -187,6 +219,8 @@ class SaleRecord {
         'discount': discount,
         'isVoid': isVoid,
         'outletId': outletId,
+        'qrisAmount': qrisAmount,
+        'cashAmount': cashAmount,
       };
 }
 
@@ -253,6 +287,8 @@ double estimateHppForItems(
 /// Ringkasan [sales] (sudah difilter satu hari oleh pemanggil).
 /// Transaksi void DIKECUALIKAN (tidak masuk omzet, cup, HPP, laba,
 /// maupun per cara bayar) — void = transaksi batal, bukan penjualan.
+/// Transaksi split (Batch C2) dihitung SATU kali di omzet, di bawah
+/// cara bayar `split` (bukan dobel ke QRIS + tunai).
 DailyStats computeDailyStats(
   List<SaleRecord> sales,
   Map<String, List<RecipeLine>> recipes,
@@ -369,6 +405,8 @@ class SaleHistoryService extends ChangeNotifier {
               'discount': r.discount,
               'isVoid': r.isVoid,
               'outletId': r.outletId,
+              'qrisAmount': r.qrisAmount,
+              'cashAmount': r.cashAmount,
             }),
           )
           .toList()
@@ -385,8 +423,9 @@ class SaleHistoryService extends ChangeNotifier {
   /// Catat satu penjualan selesai. Dipanggil di _selesaikanBayar()
   /// SESUDAH deductForSale. [total] = yang dibayar = subtotal -
   /// diskon; [discount] dicatat supaya bisa diaudit di Riwayat.
-  /// [outletId] null = gerai aktif sesi ini. Mengembalikan record
-  /// yang dicatat.
+  /// [outletId] null = gerai aktif sesi ini. [qrisAmount]/[cashAmount]
+  /// = bagian split (Batch C2); transaksi non-split = 0.
+  /// Mengembalikan record yang dicatat.
   Future<SaleRecord> recordSale({
     required List<CartItem> items,
     required int total,
@@ -394,6 +433,8 @@ class SaleHistoryService extends ChangeNotifier {
     required int paid,
     int discount = 0,
     String? outletId,
+    int qrisAmount = 0,
+    int cashAmount = 0,
   }) async {
     final record = SaleRecord(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
@@ -405,6 +446,8 @@ class SaleHistoryService extends ChangeNotifier {
       change: paid - total,
       discount: discount,
       outletId: outletId ?? OutletService.instance.currentOutletId,
+      qrisAmount: qrisAmount,
+      cashAmount: cashAmount,
     );
     _sales = [record, ..._sales];
     notifyListeners();
@@ -423,6 +466,8 @@ class SaleHistoryService extends ChangeNotifier {
               discount: Value(record.discount),
               isVoid: const Value(false),
               outletId: Value(record.outletId),
+              qrisAmount: Value(record.qrisAmount),
+              cashAmount: Value(record.cashAmount),
             ),
           );
     } catch (e) {

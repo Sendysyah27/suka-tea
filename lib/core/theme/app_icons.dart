@@ -28,12 +28,13 @@ class AppIcons {
 
   /// Ikon cara bayar (Lucide, ISC) — tile mint di payment sheet
   /// (FigCraft frame 02): banknote / landmark / qr-code / keyboard /
-  /// wallet.
+  /// wallet / split (Batch C2: QRIS + Tunai).
   static const String payTunai = 'assets/icons/pay/banknote.svg';
   static const String payTransfer = 'assets/icons/pay/landmark.svg';
   static const String payQris = 'assets/icons/pay/qr-code.svg';
   static const String payQrisManual = 'assets/icons/pay/keyboard.svg';
   static const String payEwallet = 'assets/icons/pay/wallet.svg';
+  static const String paySplit = 'assets/icons/pay/split.svg';
 
   static const List<String> all = [
     kasir, menu, stok, keuangan, laporan, pengaturan,

@@ -69,15 +69,29 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
       setState(() => _error = error);
       return;
     }
-    await QrisSettingsService.instance.save(payload);
+    final result = await QrisSettingsService.instance.save(payload);
     if (!mounted) return;
+    if (!result.ok) {
+      setState(() {
+        _error = 'Gagal menyimpan — enkripsi tidak tersedia di perangkat ini. '
+            'Coba lagi.';
+      });
+      return;
+    }
     setState(() {
       _error = null;
       _savedMerchant = QrisService.merchantName(payload);
       _controller.clear();
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('QRIS merchant tersimpan.')),
+      SnackBar(
+        content: Text(
+          result.synced
+              ? 'QRIS merchant tersimpan.'
+              : 'Tersimpan di perangkat saja — belum ke Supabase. '
+                  'Simpan ulang saat online.',
+        ),
+      ),
     );
   }
 
@@ -194,8 +208,9 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
           const Text(
             'Validasi sebelum simpan: Payload Format Indicator "01", '
             'Point of Initiation "11"/"12", mata uang "360" (IDR), dan CRC '
-            'tag 63 harus valid. Nilai asli hanya tersimpan di Supabase '
-            '(app_settings, Owner-only) — tidak di repo.',
+            'tag 63 harus valid. Nilai disimpan TERENKRIPSI (AES-256-GCM) '
+            'di Supabase (app_settings, Owner-only) — kuncinya hanya ada '
+            'di HP ini, tidak di repo.',
             style: TextStyle(color: Colors.black54),
           ),
         ],

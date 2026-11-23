@@ -1,6 +1,6 @@
 // Model domain SUKA TEA. Uang = integer rupiah.
 
-enum PaymentMethod { tunai, transfer, qris, qrisManual, ewallet }
+enum PaymentMethod { tunai, transfer, qris, qrisManual, ewallet, split }
 
 extension PaymentMethodX on PaymentMethod {
   String get label => switch (this) {
@@ -9,10 +9,17 @@ extension PaymentMethodX on PaymentMethod {
         PaymentMethod.qris => 'QRIS',
         PaymentMethod.qrisManual => 'QRIS (manual)',
         PaymentMethod.ewallet => 'E-Wallet',
+        // Split (Batch C2): sebagian QRIS + sebagian tunai.
+        PaymentMethod.split => 'Split (QRIS + Tunai)',
       };
 
-  /// Cashless = semua kecuali tunai. Dipakai laporan cash s.d. cashless.
-  bool get isCashless => this != PaymentMethod.tunai;
+  /// Cashless = semua kecuali tunai DAN split (split mengandung tunai).
+  /// Dipakai laporan cash s.d. cashless.
+  bool get isCashless =>
+      this != PaymentMethod.tunai && this != PaymentMethod.split;
+
+  /// true = transaksi split QRIS + tunai (Batch C2).
+  bool get isSplit => this == PaymentMethod.split;
 }
 
 class ProductVariant {

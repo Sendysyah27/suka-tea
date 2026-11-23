@@ -6,6 +6,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/discount.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
+import '../../core/utils/split_payment.dart';
 import '../../core/widgets/product_photo.dart';
 import '../../core/widgets/screen_title.dart';
 import '../../core/widgets/tap_feedback.dart';
@@ -195,6 +196,83 @@ class _KasirPageState extends State<KasirPage> {
       if (shortages.isNotEmpty) {
         final lanjut = await _confirmShortage(shortages);
         if (!lanjut || !mounted) return;
+      }
+      if (_method == PaymentMethod.split) {
+        // Split (Batch C2): sebagian QRIS + sebagian tunai.
+        // 1) Layar QRIS mode split: nominal = bagian QRIS saja
+        //    (min Rp1.000, harus kurang dari total).
+        // 2) Sheet tunai untuk sisanya (total - bagian QRIS).
+        // paid = bagian QRIS + tunai diterima; kembalian HANYA dari
+        // tunai (cashReceived - sisa tunai).
+        final items = List<CartItem>.from(_cart);
+        final total = _total;
+        final discount = _discount;
+        final discountPercent = _discountPercent;
+        final qrisAmount = await Navigator.of(context).push<int>(
+          MaterialPageRoute(
+            builder: (_) => QrisPayPage(
+              total: total,
+              role: widget.role,
+              splitMode: true,
+            ),
+          ),
+        );
+        if (qrisAmount == null || !mounted) return;
+        final remainder =
+            splitCashRemainder(total: total, qrisAmount: qrisAmount);
+        // Kaki QRIS sudah dibayar saat sampai di sini — sheet tunai
+        // TIDAK BOLEH batal diam-diam (uang QRIS masuk, penjualan
+        // tidak tercatat). Batal = dialog dulu: lanjut bayar tunai
+        // atau batalkan split dengan sadar.
+        int? cashReceived;
+        while (cashReceived == null) {
+          cashReceived = await showCashReceivedSheet(
+            context,
+            remainder,
+            subtitle:
+                'Sisa tunai setelah QRIS ${formatRupiah(qrisAmount)}',
+          );
+          if (cashReceived == null) {
+            if (!mounted) return;
+            final lanjutTunai = await showDialog<bool>(
+              context: context,
+              builder: (dialogContext) => AlertDialog(
+                title: const Text('Sisa tunai belum dibayar'),
+                content: Text(
+                  'Pembayaran QRIS ${formatRupiah(qrisAmount)} sudah '
+                  'diterima. Selesaikan sisa tunai '
+                  '${formatRupiah(remainder)}, atau batalkan split '
+                  '(keranjang tetap, tapi uang QRIS sudah masuk).',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () =>
+                        Navigator.of(dialogContext).pop(false),
+                    child: const Text('Batalkan'),
+                  ),
+                  FilledButton(
+                    onPressed: () =>
+                        Navigator.of(dialogContext).pop(true),
+                    child: const Text('Bayar tunai'),
+                  ),
+                ],
+              ),
+            );
+            if (lanjutTunai != true) return;
+          }
+        }
+        if (!mounted) return;
+        await _selesaikanBayar(
+          items: items,
+          total: total,
+          discount: discount,
+          discountPercent: discountPercent,
+          method: PaymentMethod.split,
+          paid: qrisAmount + cashReceived,
+          qrisAmount: qrisAmount,
+          cashAmount: cashReceived,
+        );
+        return;
       }
       if (_method == PaymentMethod.qris) {
         // QRIS dinamis: nominal bisa di-custom di layar QRIS, konfirmasi
@@ -489,6 +567,7 @@ class _KasirPageState extends State<KasirPage> {
   /// Catat transaksi ke outbox + riwayat, potong stok, tampilkan struk.
   /// [discountPercent] hanya untuk tampilan "(N%)" di struk — yang
   /// disimpan di riwayat tetap nominal rupiah [discount].
+  /// [qrisAmount]/[cashAmount] = bagian split (Batch C2); non-split = 0.
   Future<void> _selesaikanBayar({
     required List<CartItem> items,
     required int total,
@@ -496,12 +575,16 @@ class _KasirPageState extends State<KasirPage> {
     required PaymentMethod method,
     required int paid,
     int discountPercent = 0,
+    int qrisAmount = 0,
+    int cashAmount = 0,
   }) async {
     await OutboxService.instance.enqueueSale({
       'client_uuid': DateTime.now().microsecondsSinceEpoch.toString(),
       'payment_method': method.name,
       'total': total,
       'discount': discount,
+      'qris_amount': qrisAmount,
+      'cash_amount': cashAmount,
       'items': items
           .map((i) => {'name': i.label, 'qty': i.qty, 'price': i.unitPrice})
           .toList(),
@@ -515,6 +598,8 @@ class _KasirPageState extends State<KasirPage> {
       method: method,
       paid: paid,
       discount: discount,
+      qrisAmount: qrisAmount,
+      cashAmount: cashAmount,
     );
     if (!mounted) return;
     setState(() {
@@ -532,6 +617,8 @@ class _KasirPageState extends State<KasirPage> {
           paid: paid,
           discount: discount,
           discountPercent: discountPercent,
+          qrisAmount: qrisAmount,
+          cashAmount: cashAmount,
           cashier: widget.role == AppRole.owner ? 'Owner' : 'Kasir',
         ),
       ),
@@ -1100,12 +1187,14 @@ class _CartPanel extends StatelessWidget {
     PaymentMethod.qrisManual:
         ('Masukkan kode manual', AppIcons.payQrisManual),
     PaymentMethod.ewallet: ('GoPay / OVO / DANA', AppIcons.payEwallet),
+    PaymentMethod.split: ('QRIS + Tunai', AppIcons.paySplit),
   };
 
   /// Payment sheet ala FigCraft frame 02 (Stripe pattern): satu kartu
-  /// putih berisi 5 baris metode — tile ikon mint 36x36 r10 + nama 14
-  /// SemiBold + sublabel 12 muted + radio 22 di kanan; baris terpilih
-  /// tint #EAF6EF + centang emerald; divider inset antar baris.
+  /// putih berisi 6 baris metode (Batch C2 menambah Split) — tile ikon
+  /// mint 36x36 r10 + nama 14 SemiBold + sublabel 12 muted + radio 22
+  /// di kanan; baris terpilih tint #EAF6EF + centang emerald; divider
+  /// inset antar baris.
   /// Mode pendek (<430dp) TIDAK pakai kartu ini (230px tidak muat) —
   /// tetap chip 1 baris scroll (perbaikan overflow 22 Nov 22:19).
   Widget _methodCard() {
