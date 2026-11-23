@@ -63,11 +63,17 @@ Future<ExportResult> exportShiftToSheets({
       body: {'shift_id': shiftId, 'outlet_id': outletId},
     );
     return parseExportResponse(res.data);
-  } on FunctionsException catch (e) {
+  } on FunctionException catch (e) {
     // Edge Function mengembalikan 4xx/5xx dengan body JSON {ok, error}:
     // details membawa body itu — tampilkan pesannya apa adanya.
+    // NAMA KELAS: `FunctionException` (tunggal) — inilah nama di
+    // supabase_flutter 2.x (functions_client 2.x: status + details +
+    // reasonPhrase). `FunctionsException`/`FunctionsApiException`
+    // baru ada di supabase_functions 3.x — JANGAN "diperbaiki" ke
+    // nama itu selama pubspec masih supabase_flutter ^2.9.0
+    // (ketangkep CI v28: non_type_in_catch_clause + unused_import).
     final result = parseExportResponse(e.details);
-    debugPrint('Export Sheets gagal (${e.statusCode}): ${e.details}');
+    debugPrint('Export Sheets gagal (${e.status}): ${e.details}');
     return result;
   } catch (e) {
     debugPrint('Export Sheets gagal: $e');
