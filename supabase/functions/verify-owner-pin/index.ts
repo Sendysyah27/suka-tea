@@ -67,12 +67,17 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, reason: "locked" });
     }
 
-    const { data: row } = await supabase
+    const { data: row, error: readError } = await supabase
       .from("app_settings")
       .select("value")
       .eq("outlet_id", outletId)
       .eq("key", "owner_pin_hash")
       .maybeSingle();
+    // Jangan telan error baca: SELECT yang gagal (mis. GRANT belum ada)
+    // harus terlihat sebagai 500, bukan disangka "PIN belum diatur".
+    if (readError) {
+      return json({ ok: false, error: readError.message }, 500);
+    }
     const hash = (row as { value?: string } | null)?.value;
     if (!hash) {
       return json({ ok: false, reason: "not_set" });
