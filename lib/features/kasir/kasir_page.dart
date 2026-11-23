@@ -3,6 +3,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../core/theme/app_icons.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/cart_utils.dart';
 import '../../core/utils/discount.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
@@ -18,6 +19,7 @@ import '../../data/recipe_logic.dart';
 import '../../data/sale_history.dart';
 import '../../data/seed_menu.dart';
 import '../../data/stock_service.dart';
+import '../login/cashier_session.dart';
 import '../qris/qris_pay_page.dart';
 import 'cash_sheet.dart';
 import 'discount_sheet.dart';
@@ -76,17 +78,8 @@ class _KasirPageState extends State<KasirPage> {
 
   int get _count => _cart.fold(0, (sum, item) => sum + item.qty);
 
-  bool _sameModifiers(List<Modifier> a, List<Modifier> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].kind != b[i].kind ||
-          a[i].name != b[i].name ||
-          a[i].priceDelta != b[i].priceDelta) {
-        return false;
-      }
-    }
-    return true;
-  }
+  bool _sameModifiers(List<Modifier> a, List<Modifier> b) =>
+      sameModifiers(a, b);
 
   void _add(
     Product product,
@@ -122,6 +115,36 @@ class _KasirPageState extends State<KasirPage> {
     final selection = await showProductOptionsSheet(context, product);
     if (selection == null || !mounted) return;
     _add(product, selection.variant, selection.modifiers);
+  }
+
+  /// Tap ikon edit di baris keranjang (Batch C5): sheet opsi dibuka
+  /// dengan pilihan baris itu terisi (varian, gula, es, topping) —
+  /// Simpan = UPDATE baris itu (replaceCartItem, qty dipertahankan;
+  /// bila hasil edit duplikat baris lain, qty digabung). Batal =
+  /// tidak berubah.
+  Future<void> _editCartItem(int index) async {
+    if (index < 0 || index >= _cart.length) return;
+    final item = _cart[index];
+    final selection = await showProductOptionsSheet(
+      context,
+      item.product,
+      initial: ProductSelection(
+        variant: item.variant,
+        modifiers: List<Modifier>.from(item.modifiers),
+      ),
+    );
+    if (selection == null || !mounted) return;
+    setState(() {
+      final updated = replaceCartItem(
+        _cart,
+        index,
+        selection.variant,
+        selection.modifiers,
+      );
+      _cart
+        ..clear()
+        ..addAll(updated);
+    });
   }
 
   void _changeQty(int index, int delta) {
@@ -318,7 +341,8 @@ class _KasirPageState extends State<KasirPage> {
         if (received == null || !mounted) return;
         paid = received;
       }
-      // Transfer / QRIS manual / E-Wallet: bayar pas.
+      // QRIS manual: bayar pas (Transfer / E-Wallet tidak lagi
+      // dipilih sejak Batch C5 — transaksi lamanya tetap tercatat).
       await _selesaikanBayar(
         items: items,
         total: total,
@@ -362,6 +386,8 @@ class _KasirPageState extends State<KasirPage> {
       _discount = 0;
       _discountPercent = 0;
     });
+    // Simpan Pending = interaksi (Batch C5): reset jam idle auto-lock.
+    CashierSessionService.instance.touch();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Keranjang disimpan sebagai Pending ${held.label}.'),
@@ -612,7 +638,14 @@ class _KasirPageState extends State<KasirPage> {
       _discount = 0;
       _discountPercent = 0;
     });
+    // Transaksi selesai = interaksi (Batch C5): reset jam idle
+    // auto-lock supaya kasir tidak dikunci tepat sesudah bayar.
+    CashierSessionService.instance.touch();
     final lines = items.map(ReceiptLine.fromCartItem).toList();
+    // Nama kasir dari sesi (Batch C5) tampil di struk; Owner tetap
+    // 'Owner', tanpa sesi = 'Kasir'.
+    final sessionName =
+        CashierSessionService.instance.cashierName?.trim() ?? '';
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => DigitalReceiptPage(
@@ -624,7 +657,9 @@ class _KasirPageState extends State<KasirPage> {
           discountPercent: discountPercent,
           qrisAmount: qrisAmount,
           cashAmount: cashAmount,
-          cashier: widget.role == AppRole.owner ? 'Owner' : 'Kasir',
+          cashier: widget.role == AppRole.owner
+              ? 'Owner'
+              : (sessionName.isNotEmpty ? sessionName : 'Kasir'),
         ),
       ),
     );
@@ -658,6 +693,13 @@ class _KasirPageState extends State<KasirPage> {
               onCategory: (c) => setState(() => _category = c),
               onQuickAdd: _quickAdd,
               onOptions: _openOptions,
+              // Badge qty per produk (Batch C5) — dihitung ulang tiap
+              // build dari _cart, jadi badge ikut berubah saat qty
+              // berubah. Chip kategori horizontal disembunyikan di
+              // mode wide: rail vertikal kiri sudah menampilkannya
+              // (duplikat dihapus, Batch C5).
+              cartQty: cartQtyByProduct(_cart),
+              showCategoryChips: !SukaTeaBreakpoints.isWide(width),
             );
             // Panel keranjang mendengarkan HeldOrderService supaya
             // angka "Pending (N)" ikut berubah saat order di-Pending /
@@ -676,6 +718,7 @@ class _KasirPageState extends State<KasirPage> {
                 onMethod: (m) => setState(() => _method = m),
                 onQty: _changeQty,
                 onRemove: _removeItem,
+                onEdit: _editCartItem,
                 onBayar: _bayar,
                 onHold: _holdCart,
                 onShowHeld: _showHeldOrders,
@@ -765,6 +808,10 @@ class _KasirPageState extends State<KasirPage> {
                                   _removeItem(i);
                                   refreshSheet();
                                 },
+                                onEdit: (i) async {
+                                  await _editCartItem(i);
+                                  refreshSheet();
+                                },
                                 // Tutup sheet dulu baru proses bayar, supaya struk
                                 // tidak ketumpuk di atas sheet berisi item lama.
                                 onBayar: () {
@@ -837,6 +884,8 @@ class _MenuSection extends StatelessWidget {
     required this.onCategory,
     required this.onQuickAdd,
     required this.onOptions,
+    required this.cartQty,
+    required this.showCategoryChips,
   });
 
   final List<Product> visible;
@@ -846,6 +895,16 @@ class _MenuSection extends StatelessWidget {
   final ValueChanged<String> onCategory;
   final ValueChanged<Product> onQuickAdd;
   final ValueChanged<Product> onOptions;
+
+  /// Total qty per produk di keranjang (semua varian digabung) —
+  /// untuk badge angka di kartu produk (Batch C5).
+  final Map<String, int> cartQty;
+
+  /// false di mode wide: chip kategori horizontal disembunyikan
+  /// karena rail vertikal kiri sudah menampilkannya (Batch C5 —
+  /// duplikat dihapus; mode tablet + portrait tetap pakai baris
+  /// horizontal).
+  final bool showCategoryChips;
 
   /// Rentang harga kartu (FigCraft frame 01): "Rp8.000 – Rp10.000".
   /// Produk 1 varian / harga sama = harga tunggal.
@@ -889,23 +948,26 @@ class _MenuSection extends StatelessWidget {
             ),
           ),
         ),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            children: [
-              for (final c in _categories)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(c),
-                    selected: category == c,
-                    onSelected: (_) => onCategory(c),
+        // Baris chip kategori horizontal — hanya bila tidak ada rail
+        // vertikal (mode wide menyembunyikannya, Batch C5).
+        if (showCategoryChips)
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                for (final c in _categories)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text(c),
+                      selected: category == c,
+                      onSelected: (_) => onCategory(c),
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
-        ),
         Expanded(
           child: visible.isEmpty
               ? const Center(
@@ -929,7 +991,15 @@ class _MenuSection extends StatelessWidget {
                   itemCount: visible.length,
                   itemBuilder: (context, i) {
                     final p = visible[i];
-                    return InkWell(
+                    // Badge qty keranjang (Batch C5): total qty produk
+                    // ini di keranjang (semua varian digabung), pill
+                    // emerald di pojok kanan atas kartu. IgnorePointer
+                    // supaya tap badge tetap jatuh ke kartu di bawahnya.
+                    final qty = cartQty[p.id] ?? 0;
+                    return Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        InkWell(
                       onTap: p.isActive ? () => onOptions(p) : null,
                       borderRadius: BorderRadius.circular(20),
                       child: Card(
@@ -1054,6 +1124,37 @@ class _MenuSection extends StatelessWidget {
                           ),
                         ),
                       ),
+                    ),
+                        if (qty > 0)
+                          Positioned(
+                            top: 0,
+                            right: 0,
+                            child: IgnorePointer(
+                              child: Container(
+                                constraints: const BoxConstraints(
+                                  minWidth: 20,
+                                  minHeight: 20,
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                ),
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: SukaTeaColors.emerald,
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  '$qty',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     );
                   },
                 ),
@@ -1076,6 +1177,7 @@ class _CartPanel extends StatelessWidget {
     required this.onMethod,
     required this.onQty,
     required this.onRemove,
+    required this.onEdit,
     required this.onBayar,
     required this.onHold,
     required this.onShowHeld,
@@ -1105,6 +1207,10 @@ class _CartPanel extends StatelessWidget {
   final ValueChanged<PaymentMethod> onMethod;
   final void Function(int, int) onQty;
   final void Function(int) onRemove;
+
+  /// Buka sheet opsi untuk EDIT baris keranjang [index] (Batch C5).
+  final void Function(int) onEdit;
+
   final VoidCallback onBayar;
 
   /// Simpan keranjang saat ini sebagai order Pending.
@@ -1145,6 +1251,38 @@ class _CartPanel extends StatelessWidget {
             icon,
             size: 16,
             color: filled ? Colors.white : SukaTeaColors.ink,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Tombol pensil edit 28x28 radius 8 (Batch C5): ikon pensil
+  /// Lucide emerald di #EAF6EF, di kiri tombol "×" — baris stepper
+  /// jadi [✎][×][−][angka][+]. Tap = buka sheet opsi dengan pilihan
+  /// baris itu terisi.
+  Widget _editButton({required VoidCallback onTap}) {
+    return TapFeedback(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: SukaTeaColors.tint,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Center(
+            child: SvgPicture.asset(
+              AppIcons.edit,
+              width: 16,
+              height: 16,
+              colorFilter: const ColorFilter.mode(
+                SukaTeaColors.emerald,
+                BlendMode.srcIn,
+              ),
+            ),
           ),
         ),
       ),
@@ -1196,15 +1334,19 @@ class _CartPanel extends StatelessWidget {
   };
 
   /// Payment sheet ala FigCraft frame 02 (Stripe pattern): satu kartu
-  /// putih berisi 6 baris metode (Batch C2 menambah Split) — tile ikon
-  /// mint 32x32 r10 + nama 14 SemiBold + sublabel 12 muted + radio 22
-  /// di kanan; baris terpilih tint #EAF6EF + centang emerald; divider
+  /// putih berisi 4 baris metode (Batch C5: Transfer + E-Wallet
+  /// dihapus dari pilihan, tinggal Tunai / QRIS / QRIS manual /
+  /// Split — lihat selectablePaymentMethods di lib/data/models.dart.
+  /// Enum lengkap tetap ada; transaksi lama Transfer / E-Wallet
+  /// tetap tampil di riwayat / laporan / keuangan) — tile ikon mint
+  /// 32x32 r10 + nama 14 SemiBold + sublabel 12 muted + radio 22 di
+  /// kanan; baris terpilih tint #EAF6EF + centang emerald; divider
   /// inset antar baris.
   /// Baris dibuat ramping (tile 32, padding vertikal 2, tinggi teks
   /// 1.2): baris ke-6 Split bikin panel overflow 26px di viewport
   /// tes 800x600 (ketangkep CI v27.2) — hemat ~6px/baris x 6.
   /// Mode pendek (<430dp) TIDAK pakai kartu ini (230px tidak muat) —
-  /// tetap chip 1 baris scroll (perbaikan overflow 22 Nov 22:19).
+  /// chip Wrap 2 baris (Batch C5, perbaikan overflow 22 Nov 22:19).
   Widget _methodCard() {
     return Container(
       decoration: BoxDecoration(
@@ -1215,14 +1357,14 @@ class _CartPanel extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (var i = 0; i < PaymentMethod.values.length; i++) ...[
+          for (var i = 0; i < selectablePaymentMethods.length; i++) ...[
             if (i > 0)
               const Divider(
                 height: 1,
                 indent: 60,
                 color: SukaTeaColors.border,
               ),
-            _methodRow(PaymentMethod.values[i]),
+            _methodRow(selectablePaymentMethods[i]),
           ],
         ],
       ),
@@ -1436,6 +1578,8 @@ class _CartPanel extends StatelessWidget {
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          _editButton(onTap: () => onEdit(i)),
+                          const SizedBox(width: 8),
                           _deleteButton(onTap: () => onRemove(i)),
                           const SizedBox(width: 8),
                           _stepButton(
@@ -1531,24 +1675,25 @@ class _CartPanel extends StatelessWidget {
               const Divider(height: 1),
               const SizedBox(height: 8),
               short
-                  ? SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          for (final m in PaymentMethod.values)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: ChoiceChip(
-                                label: Text(m.label),
-                                selected: method == m,
-                                onSelected: (_) => onMethod(m),
-                                visualDensity: VisualDensity.compact,
-                                materialTapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                              ),
-                            ),
-                        ],
-                      ),
+                  // Mode pendek (Batch C5): Wrap 2 baris, bukan 1 baris
+                  // scroll — 4 chip (Transfer + E-Wallet sudah dihapus
+                  // dari pilihan) muat tanpa terpotong ("QRIS (manu..."
+                  // di screenshot Sendy 21:15). Total + Bayar selalu
+                  // terlihat di bawahnya.
+                  ? Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final m in selectablePaymentMethods)
+                          ChoiceChip(
+                            label: Text(m.label),
+                            selected: method == m,
+                            onSelected: (_) => onMethod(m),
+                            visualDensity: VisualDensity.compact,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                      ],
                     )
                   : Column(
                       crossAxisAlignment: CrossAxisAlignment.start,

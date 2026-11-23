@@ -44,6 +44,10 @@ void main() {
     await OutletService.instance.init();
   });
 
+  // URUTAN TEST DI GRUP INI PENTING (Batch C5): CashierSessionService
+  // adalah singleton — sesudah satu test berhasil masuk, nama kasir
+  // tersimpan di memori dan test berikutnya ter-prefill. Jadi test
+  // "nama kosong" HARUS jalan sebelum test pertama yang sukses masuk.
   group('Langkah 1 — pilih gerai', () {
     testWidgets('tampil 4 gerai + 2 tombol, TANPA keypad', (tester) async {
       await tester.pumpWidget(
@@ -64,6 +68,21 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('nama kasir kosong = error, tidak masuk', (tester) async {
+      LoginResult? got;
+      await tester.pumpWidget(
+        MaterialApp(home: LoginPage(onSuccess: (r) => got = r)),
+      );
+      await tester.pump();
+      await tester.ensureVisible(find.text('Masuk sebagai Kasir'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Masuk sebagai Kasir'));
+      await tester.pump();
+      expect(find.text('Isi nama kasir dulu.'), findsOneWidget);
+      expect(got, isNull);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets(
         'tap Masuk sebagai Kasir tanpa Supabase = langsung masuk (fail-open)',
         (tester) async {
@@ -71,6 +90,9 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(home: LoginPage(onSuccess: (r) => got = r)),
       );
+      await tester.pump();
+      // Batch C5: nama kasir wajib diisi dulu.
+      await tester.enterText(find.byType(TextField), 'Budi');
       await tester.pump();
       // Tombol ada di bawah lipatan layar tes 800x600 (halaman
       // login pakai SingleChildScrollView) — scroll dulu supaya
@@ -92,6 +114,9 @@ void main() {
       );
       await tester.pump();
       await tester.tap(find.text('Gerai 3'));
+      await tester.pump();
+      // Batch C5: nama kasir wajib diisi dulu.
+      await tester.enterText(find.byType(TextField), 'Budi');
       await tester.pump();
       await tester.ensureVisible(find.text('Masuk sebagai Kasir'));
       await tester.pumpAndSettle();

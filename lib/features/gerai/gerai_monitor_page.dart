@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
+import '../../core/utils/roles.dart';
 import '../../core/widgets/screen_title.dart';
 import '../../data/models.dart';
 import '../../data/outlet_service.dart';
 import '../../data/sale_history.dart';
 import '../../data/stock_service.dart';
+import '../riwayat/riwayat_page.dart';
 import 'gerai_edit_page.dart';
 
 /// Pantau Gerai (Batch C4, FigCraft v29 frame 15): transaksi berjalan,
@@ -135,8 +137,12 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
                   'Belum ada transaksi hari ini di gerai ini.',
                   style: TextStyle(color: SukaTeaColors.muted),
                 )
-              else
-                for (final sale in todaySales)
+              else ...[
+                // Batch C5 (perintah Sendy 23 Nov 21:29): maks 3
+                // transaksi terbaru di sini; total transaksi ketuk
+                // tombol di bawah → daftar lengkap gerai ini
+                // (RiwayatPage dengan filter outletId).
+                for (final sale in todaySales.take(3))
                   Card(
                     child: ListTile(
                       title: Text(
@@ -155,6 +161,28 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
                       ),
                     ),
                   ),
+                if (todaySales.length > 3)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => RiwayatPage(
+                            role: AppRole.owner,
+                            outletId: outlet.id,
+                          ),
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 48),
+                      ),
+                      child: Text(
+                        'Lihat semua transaksi (${todaySales.length})',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+              ],
               const SizedBox(height: 16),
               const Text(
                 'Stok menipis',

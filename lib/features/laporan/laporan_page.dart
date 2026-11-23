@@ -20,9 +20,13 @@ import '../riwayat/riwayat_page.dart';
 /// (bukan angka contoh). Bila belum ada transaksi hari ini, tampil
 /// state kosong yang jujur.
 class LaporanPage extends StatefulWidget {
-  const LaporanPage({super.key, required this.role});
+  const LaporanPage({super.key, required this.role, required this.onExitGerai});
 
   final AppRole role;
+
+  /// Keluar gerai (hapus sesi kasir + kembali ke layar pilih gerai).
+  /// Diteruskan dari _LoginGate lewat SukaTeaShell.
+  final VoidCallback onExitGerai;
 
   @override
   State<LaporanPage> createState() => _LaporanPageState();
@@ -46,6 +50,33 @@ class _LaporanPageState extends State<LaporanPage> {
     _openingController.dispose();
     _countedController.dispose();
     super.dispose();
+  }
+
+  /// Konfirmasi keluar gerai (Batch C5): sesi kasir dihapus — buka
+  /// app lagi harus pilih gerai + isi nama + PIN lagi. Keranjang
+  /// yang belum dibayar ikut hilang (shell dibuat ulang per login).
+  Future<void> _confirmExitGerai() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Ganti gerai?'),
+        content: const Text(
+          'Sesi kasir di gerai ini dihapus. Untuk masuk lagi harus '
+          'pilih gerai, isi nama kasir, dan PIN gerai.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Ya, keluar gerai'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) widget.onExitGerai();
   }
 
   @override
@@ -258,6 +289,23 @@ class _LaporanPageState extends State<LaporanPage> {
                   ),
                 ),
               ),
+            // Ganti Gerai (Batch C5): keluar dari gerai aktif — sesi
+            // kasir dihapus, kembali ke layar pilih gerai. Buka app
+            // lagi langsung masuk gerai selama sesi belum dihapus.
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: TapFeedback(
+                child: OutlinedButton.icon(
+                  onPressed: _confirmExitGerai,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
+                  icon: const Icon(Icons.swap_horiz),
+                  label: const Text('Ganti Gerai'),
+                ),
+              ),
+            ),
           ],
         );
       },

@@ -145,6 +145,21 @@ class Outlets extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Sesi kasir persisten (Batch C5): satu baris id 'current' — outlet
+/// + nama kasir yang terakhir masuk. Buka app lagi = langsung masuk
+/// gerai itu tanpa login ulang. Sesi Owner TIDAK PERNAH disimpan.
+/// Keluar gerai = hapus baris ini.
+class CashierSessions extends Table {
+  TextColumn get id => text()();
+  TextColumn get outletId => text()();
+  TextColumn get cashierName => text()();
+  DateTimeColumn get savedAt =>
+      dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 @DriftDatabase(tables: [
   OutboxEntries,
   LocalProducts,
@@ -154,12 +169,13 @@ class Outlets extends Table {
   HeldOrders,
   Toppings,
   Outlets,
+  CashierSessions,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -208,6 +224,12 @@ class AppDatabase extends _$AppDatabase {
           if (from < 7) {
             await m.addColumn(saleHistory, saleHistory.qrisAmount);
             await m.addColumn(saleHistory, saleHistory.cashAmount);
+          }
+          // v7 -> v8 (23 Nov 2026, Batch C5 sesi kasir): tabel baru
+          // CashierSessions (satu baris id 'current'). Tabel lama
+          // TIDAK dihapus.
+          if (from < 8) {
+            await m.createTable(cashierSessions);
           }
         },
       );

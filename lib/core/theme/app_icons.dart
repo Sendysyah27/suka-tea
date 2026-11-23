@@ -11,6 +11,7 @@ class AppIcons {
   static const String laporan = 'assets/icons/laporan.svg';
   static const String pengaturan = 'assets/icons/pengaturan.svg';
   static const String tambah = 'assets/icons/tambah.svg';
+  static const String edit = 'assets/icons/edit.svg';
   static const String cari = 'assets/icons/cari.svg';
   static const String keranjang = 'assets/icons/keranjang.svg';
   static const String bayar = 'assets/icons/bayar.svg';

@@ -22,6 +22,22 @@ extension PaymentMethodX on PaymentMethod {
   bool get isSplit => this == PaymentMethod.split;
 }
 
+/// Metode yang BOLEH DIPILIH kasir saat bayar (Batch C5, perintah
+/// Sendy 23 Nov 21:29): Transfer + E-Wallet dihapus dari pilihan
+/// karena sudah ada QRIS.
+///
+/// Enum lengkap TETAP ADA — transaksi lama Transfer / E-Wallet yang
+/// sudah tercatat harus tetap tampil + terhitung di riwayat /
+/// laporan / keuangan. Hanya titik PEMILIHAN yang memakai daftar ini
+/// (KasirPage); semua tempat lain (riwayat, laporan, keuangan,
+/// SaleHistory.fromJson) tetap memakai PaymentMethod.values.
+const List<PaymentMethod> selectablePaymentMethods = [
+  PaymentMethod.tunai,
+  PaymentMethod.qris,
+  PaymentMethod.qrisManual,
+  PaymentMethod.split,
+];
+
 class ProductVariant {
   const ProductVariant({
     required this.id,

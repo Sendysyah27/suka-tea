@@ -23,17 +23,42 @@ class ProductSelection {
 /// dipakai seed (toppingOptions) supaya widget test tetap jalan.
 /// Harga live = harga varian + delta topping.
 /// Mengembalikan ProductSelection atau null bila batal.
+///
+/// [initial] (Batch C5, mode edit): pilihan baris keranjang yang
+/// sedang diedit — varian, gula, es, dan topping terisi dari baris
+/// itu. Topping dicocokkan BERDASARKAN NAMA ke topping aktif saat
+/// ini (hargaDelta ikut topping aktif, bukan yang tersimpan);
+/// topping yang sudah tidak aktif lagi TIDAK ikut (dihapus Owner).
+/// Tombol konfirmasi jadi "Simpan" (bukan "Tambah") di mode ini.
 Future<ProductSelection?> showProductOptionsSheet(
   BuildContext context,
-  Product product,
-) async {
-  var variant = product.variants.first;
-  var gula = gulaOptions.first;
-  var es = esOptions.first;
+  Product product, {
+  ProductSelection? initial,
+}) async {
+  final initialModifiers = initial?.modifiers ?? const <Modifier>[];
+  // Gula/es dicari berdasarkan kind (nama bisa berubah-ubah, kind
+  // tetap: 'gula' / 'es').
+  Modifier _pickKind(String kind, List<Modifier> defaults) {
+    for (final m in initialModifiers) {
+      if (m.kind == kind) return m;
+    }
+    return defaults.first;
+  }
+
+  var variant = initial?.variant ?? product.variants.first;
+  var gula = _pickKind('gula', gulaOptions);
+  var es = _pickKind('es', esOptions);
   final toppings = <Modifier>{};
   // Snapshot saat sheet dibuka (tidak me-rebuild bila Owner mengubah
   // topping di halaman lain selagi sheet terbuka).
   final toppingChoices = ToppingService.instance.activeModifiers;
+  // Topping awal: cocokkan berdasarkan nama ke topping aktif.
+  for (final m in initialModifiers) {
+    if (m.kind != 'topping') continue;
+    for (final t in toppingChoices) {
+      if (t.name == m.name) toppings.add(t);
+    }
+  }
 
   final result = await showModalBottomSheet<ProductSelection>(
     context: context,
@@ -191,7 +216,9 @@ Future<ProductSelection?> showProductOptionsSheet(
                     minimumSize: const Size(0, 56),
                   ),
                   child: Text(
-                    'Tambah • ${formatRupiah(unitPrice)}',
+                    initial != null
+                        ? 'Simpan • ${formatRupiah(unitPrice)}'
+                        : 'Tambah • ${formatRupiah(unitPrice)}',
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),

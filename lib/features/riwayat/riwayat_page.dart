@@ -12,15 +12,20 @@ import '../kasir/receipt.dart';
 
 /// Riwayat transaksi — daftar penjualan selesai, terbaru dulu.
 /// Tap satu transaksi = buka lagi struknya (halaman penuh).
-/// Dibuka dari tab Laporan ("Lihat Riwayat").
+/// Dibuka dari tab Laporan ("Lihat Riwayat") dan dari Pantau Gerai
+/// ("Lihat semua transaksi (N)").
+/// [outletId] (Batch C5): bila diisi, hanya transaksi gerai itu yang
+/// tampil; null = semua gerai (perilaku lama dari Laporan).
 /// Void (Batch C1): HANYA Owner (tombol ⋮ di kartu, konfirmasi dulu).
 /// Void mengembalikan stok bahan (termasuk topping) dan transaksi
 /// tidak lagi dihitung di omzet/Keuangan/Laporan — tapi tetap tampil
 /// di sini dengan label VOID.
 class RiwayatPage extends StatelessWidget {
-  const RiwayatPage({super.key, required this.role});
+  const RiwayatPage({super.key, required this.role, this.outletId});
 
   final AppRole role;
+
+  final String? outletId;
 
   String _timeText(DateTime t) {
     return '${t.day}/${t.month}/${t.year} '
@@ -77,13 +82,18 @@ class RiwayatPage extends StatelessWidget {
       body: ListenableBuilder(
         listenable: SaleHistoryService.instance,
         builder: (context, _) {
-          final sales = SaleHistoryService.instance.sales;
+          final allSales = SaleHistoryService.instance.sales;
+          final sales = outletId == null
+              ? allSales
+              : allSales.where((s) => s.outletId == outletId).toList();
           if (sales.isEmpty) {
-            return const Center(
+            return Center(
               child: Text(
-                'Belum ada transaksi.\nPenjualan yang sudah dibayar muncul di sini.',
+                outletId == null
+                    ? 'Belum ada transaksi.\nPenjualan yang sudah dibayar muncul di sini.'
+                    : 'Belum ada transaksi di gerai ini.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: SukaTeaColors.muted),
+                style: const TextStyle(color: SukaTeaColors.muted),
               ),
             );
           }

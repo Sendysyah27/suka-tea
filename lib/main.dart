@@ -9,6 +9,7 @@ import 'data/sale_history.dart';
 import 'data/stock_service.dart';
 import 'data/supabase_client.dart';
 import 'data/topping_service.dart';
+import 'features/login/cashier_session.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,6 +27,10 @@ Future<void> main() async {
   // Daftar gerai dari Drift (seed 4 gerai placeholder kalau tabel
   // masih kosong). Halaman Login membaca dari sini.
   await OutletService.instance.init();
+  // Sesi kasir terakhir dari Drift (Batch C5) — _LoginGate membaca
+  // dari sini untuk langsung masuk gerai tanpa login ulang. Harus
+  // sesudah OutletService (sesi menunjuk ke outletId yang ada).
+  await CashierSessionService.instance.init();
   // Stok + resep dari Drift (seed kalau tabel masih kosong). Kasir
   // memakai StockService saat cek shortage + potong stok.
   await StockService.instance.init();

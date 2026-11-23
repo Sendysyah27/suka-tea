@@ -12,6 +12,8 @@ import '../data/outlet_service.dart';
 import '../features/kasir/kasir_page.dart';
 import '../features/katalog/katalog_page.dart';
 import '../features/keuangan/keuangan_page.dart';
+import '../features/login/cashier_session.dart';
+import '../features/login/kasir_pin_page.dart';
 import '../features/login/login_page.dart';
 import '../features/login/login_result.dart';
 import '../features/pin/pin_dialog.dart';
@@ -39,6 +41,13 @@ class SukaTeaApp extends StatelessWidget {
 /// LoginPage (pilih gerai + PIN Kasir / PIN Owner). Sesudah login
 /// sukses, shell dibuka dengan peran hasil login. Tutup app =
 /// login lagi (peran hanya di memori sesi — sama seperti sebelum C4).
+///
+/// Batch C5: sesi KASIR disimpan lokal (CashierSessionService) —
+/// buka app lagi langsung masuk gerai itu tanpa login ulang. Sesi
+/// Owner TIDAK PERNAH disimpan. Kasir yang idle 15 menit dikunci
+/// otomatis ke layar PIN Kasir gerai aktif (Timer.periodic 30 detik
+/// + cek saat app resume; lock hanya bila shell adalah route
+/// teratas, supaya sheet/dialog bayar tidak tertutup paksa).
 class _LoginGate extends StatefulWidget {
   const _LoginGate();
 
@@ -46,30 +55,164 @@ class _LoginGate extends StatefulWidget {
   State<_LoginGate> createState() => _LoginGateState();
 }
 
-class _LoginGateState extends State<_LoginGate> {
+class _LoginGateState extends State<_LoginGate>
+    with WidgetsBindingObserver {
   LoginResult? _login;
+  Timer? _idleTimer;
+  bool _locked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Restore sesi kasir (Batch C5): outlet + nama kasir sudah
+    // disimpan di Drift oleh LoginPage._handleSuccess. Outlet tidak
+    // ditemukan (dihapus Owner) = sesi dianggap tidak ada.
+    final session = CashierSessionService.instance;
+    final outletId = session.outletId;
+    if (outletId != null &&
+        OutletService.instance.outletById(outletId) != null) {
+      OutletService.instance.selectOutlet(outletId);
+      QrisSettingsService.instance.currentOutletId = outletId;
+      unawaited(QrisSettingsService.instance.load());
+      _login = LoginResult(outletId: outletId, role: AppRole.kasir);
+      session.touch();
+      _startIdleTimer();
+    }
+  }
+
+  @override
+  void dispose() {
+    _stopIdleTimer();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Kembali dari background: cek idle (kasir bisa saja
+    // meninggalkan app > 15 menit di background).
+    if (state == AppLifecycleState.resumed) _checkIdleLock();
+  }
+
+  void _startIdleTimer() {
+    _stopIdleTimer();
+    _idleTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _checkIdleLock(),
+    );
+  }
+
+  void _stopIdleTimer() {
+    _idleTimer?.cancel();
+    _idleTimer = null;
+  }
+
+  /// Satu-satunya jalur sukses login (LoginPage langkah 1 fail-open,
+  /// langkah 2 PIN, dan PIN Owner). Sesi kasir sudah disimpan oleh
+  /// LoginPage._handleSuccess sebelum onSuccess dipanggil.
+  void _applyLogin(LoginResult result) {
+    // Gerai aktif baru diketahui di sini (bukan di main) —
+    // QRIS merchant dibaca dari Supabase untuk gerai ini.
+    // load() jalan tanpa ditunggu supaya login tidak tertahan;
+    // halaman QRIS membaca dari memori sesudah load selesai.
+    QrisSettingsService.instance.currentOutletId = result.outletId;
+    unawaited(QrisSettingsService.instance.load());
+    setState(() => _login = result);
+    if (result.role == AppRole.kasir) {
+      CashierSessionService.instance.touch();
+      _startIdleTimer();
+    }
+  }
+
+  /// Keluar gerai: hapus sesi kasir + kembali ke layar pilih gerai.
+  /// Dipakai tombol "Ganti Gerai" di Laporan dan tombol kembali di
+  /// layar kunci.
+  Future<void> _logout() async {
+    _stopIdleTimer();
+    await CashierSessionService.instance.clear();
+    if (mounted) setState(() => _login = null);
+  }
+
+  /// Cek apakah sudah waktunya auto-lock. Lock HANYA saat ada sesi
+  /// kasir aktif dan tidak ada modal/route di atas shell
+  /// (ModalRoute.of(...).isCurrent == false saat sheet bayar,
+  /// dialog PIN Owner, struk, atau halaman Pengaturan sedang
+  /// terbuka — lock ditunda sampai tick berikutnya).
+  void _checkIdleLock() {
+    if (!mounted || _locked) return;
+    final login = _login;
+    if (login == null || login.role != AppRole.kasir) return;
+    if (!shouldAutoLock(
+      lastActive: CashierSessionService.instance.lastActive,
+      now: DateTime.now(),
+    )) {
+      return;
+    }
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+    _lock();
+  }
+
+  /// Kunci ke layar PIN Kasir gerai aktif. Shell tetap ter-mount di
+  /// bawah route kunci, jadi keranjang + tab yang terbuka TIDAK
+  /// hilang. PIN benar = pop + jam idle direset. Tombol kembali =
+  /// keluar gerai (sesi dihapus, balik ke layar pilih gerai).
+  /// PIN Kasir belum diatur = masuk langsung (fail-open, jalur yang
+  /// sama seperti login awal).
+  Future<void> _lock() async {
+    if (_locked || !mounted) return;
+    final login = _login;
+    if (login == null) return;
+    _locked = true;
+    final outlet = OutletService.instance.outletById(login.outletId) ??
+        OutletService.instance.currentOutlet;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => PopScope(
+          canPop: false,
+          child: Scaffold(
+            appBar: AppBar(title: const ScreenTitle('Gerai Terkunci')),
+            body: SafeArea(
+              child: KasirPinPage(
+                outlet: outlet,
+                onBack: () {
+                  // Kembali = keluar gerai.
+                  unawaited(_logout());
+                  Navigator.of(context).pop();
+                },
+                onSuccess: (_) {
+                  Navigator.of(context).pop();
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    _locked = false;
+    // Masih login (bukan logout dari tombol kembali): reset jam idle.
+    if (_login != null) CashierSessionService.instance.touch();
+  }
 
   @override
   Widget build(BuildContext context) {
     final login = _login;
     if (login == null) {
-      return LoginPage(
-        onSuccess: (result) {
-          // Gerai aktif baru diketahui di sini (bukan di main) —
-          // QRIS merchant dibaca dari Supabase untuk gerai ini.
-          // load() jalan tanpa ditunggu supaya login tidak tertahan;
-          // halaman QRIS membaca dari memori sesudah load selesai.
-          QrisSettingsService.instance.currentOutletId = result.outletId;
-          unawaited(QrisSettingsService.instance.load());
-          setState(() => _login = result);
-        },
-      );
+      return LoginPage(onSuccess: _applyLogin);
     }
     // Key per login supaya shell + semua halaman dibuat ulang segar
     // tiap login (keranjang/riwayat tidak bocor antar sesi).
-    return SukaTeaShell(
-      key: ValueKey(login.outletId + login.role.name),
-      initialRole: login.role,
+    // Listener PointerDown: tiap tap di mana pun di shell mereset
+    // jam idle auto-lock (transaksi selesai juga memanggil touch()
+    // lewat _selesaikanBayar di KasirPage).
+    return Listener(
+      onPointerDown: (_) => CashierSessionService.instance.touch(),
+      child: SukaTeaShell(
+        key: ValueKey(login.outletId + login.role.name),
+        initialRole: login.role,
+        onExitGerai: _logout,
+      ),
     );
   }
 }
@@ -80,10 +223,18 @@ class _LoginGateState extends State<_LoginGate> {
 /// Kasir tidak perlu PIN.
 /// Pengaturan (PIN, outlet) juga hanya bisa dibuka sesudah PIN benar.
 class SukaTeaShell extends StatefulWidget {
-  const SukaTeaShell({super.key, this.initialRole = AppRole.kasir});
+  const SukaTeaShell({
+    super.key,
+    this.initialRole = AppRole.kasir,
+    required this.onExitGerai,
+  });
 
   /// Peran dari halaman Login (Kasir / Owner).
   final AppRole initialRole;
+
+  /// Keluar gerai (hapus sesi kasir + kembali ke layar pilih gerai).
+  /// Dipanggil tombol "Ganti Gerai" di LaporanPage.
+  final VoidCallback onExitGerai;
 
   @override
   State<SukaTeaShell> createState() => _SukaTeaShellState();
@@ -106,7 +257,7 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
         KatalogPage(role: _role),
         StokPage(role: _role),
         KeuanganPage(role: _role),
-        LaporanPage(role: _role),
+        LaporanPage(role: _role, onExitGerai: widget.onExitGerai),
       ];
 
   /// Minta PIN Owner gerai aktif. true = PIN benar, peran jadi Owner.
@@ -154,10 +305,23 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
             ScreenTitle(_titles[_index]),
             const SizedBox(height: 2),
             ListenableBuilder(
-              listenable: OutletService.instance,
+              listenable: Listenable.merge([
+                OutletService.instance,
+                CashierSessionService.instance,
+              ]),
               builder: (context, _) {
+                // Batch C5: nama kasir dari sesi tampil di bawah
+                // judul (Owner tidak punya nama kasir — hanya nama
+                // gerai).
+                final cashier = _role == AppRole.kasir
+                    ? CashierSessionService.instance.cashierName
+                    : null;
+                final outletName =
+                    OutletService.instance.currentOutlet.name;
                 return Text(
-                  OutletService.instance.currentOutlet.name,
+                  cashier == null || cashier.isEmpty
+                      ? outletName
+                      : '$outletName • Kasir: $cashier',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
