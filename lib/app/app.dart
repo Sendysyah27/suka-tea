@@ -13,6 +13,7 @@ import '../features/kasir/kasir_page.dart';
 import '../features/katalog/katalog_page.dart';
 import '../features/keuangan/keuangan_page.dart';
 import '../features/login/login_page.dart';
+import '../features/login/login_result.dart';
 import '../features/pin/pin_dialog.dart';
 import '../features/pin/settings_page.dart';
 import '../features/qris/qris_settings_page.dart';

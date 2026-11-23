@@ -39,6 +39,7 @@ flutter:
     - assets/icons/nav/
     - assets/icons/pay/
     - assets/products/
+    - assets/splash/
   fonts:
     - family: PlusJakartaSans
       fonts:

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app/app.dart';
+import 'app/splash_screen.dart';
 import 'data/held_order_service.dart';
 import 'data/menu_service.dart';
 import 'data/outlet_service.dart';
@@ -11,6 +12,15 @@ import 'data/topping_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Splash tampil DULU (frame pertama langsung foto gerai, bukan
+  // layar putih) — init service jalan di belakangnya, lalu runApp
+  // kedua mengganti splash dengan app begitu semua init selesai.
+  runApp(
+    const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: SplashScreen(),
+    ),
+  );
   // Tanpa SUPABASE_URL/ANON_KEY app tetap jalan offline (menu seed).
   await SupabaseService.instance.init();
   // Daftar gerai dari Drift (seed 4 gerai placeholder kalau tabel

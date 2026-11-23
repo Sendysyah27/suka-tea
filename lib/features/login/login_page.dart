@@ -8,32 +8,35 @@ import '../../core/widgets/tap_feedback.dart';
 import '../../data/outlet_service.dart';
 import '../pin/kasir_pin_service.dart';
 import '../pin/pin_dialog.dart';
-import '../pin/pin_keypad.dart';
-import '../pin/pin_service.dart';
+import 'kasir_pin_page.dart';
+import 'login_result.dart';
 
-/// Hasil login: gerai yang dipilih + peran sesi ini.
-class LoginResult {
-  const LoginResult({required this.outletId, required this.role});
+enum _LoginStep { select, pin }
 
-  final String outletId;
-  final AppRole role;
-}
-
-/// Halaman Login (Batch C4, FigCraft v30 frame 13 "00 Login"):
-/// pilih gerai + PIN Kasir -> "Masuk sebagai Kasir", atau
-/// "Masuk sebagai Owner" (PIN Owner gerai terpilih -> menu Owner).
+/// Halaman Login (Batch C4, FigCraft v30 frame 13 "00 Login") —
+/// DUA LANGKAH (redesain 23 Nov 2026, perintah Sendy: keypad PIN
+/// Kasir lama terlalu besar di layar depan):
+///
+/// Langkah 1 (depan): pilih gerai + "Masuk sebagai Kasir" +
+/// "Masuk sebagai Owner" (PIN Owner tetap di sini, dialog seperti
+/// sebelumnya). Keypad PIN Kasir TIDAK ADA di layar ini.
+/// - Tap "Masuk sebagai Kasir": cek KasirPinService.isPinSet(gerai) —
+///   belum diatur / tidak bisa dicek -> langsung masuk Kasir
+///   (fail-open, seperti sebelumnya); sudah diatur -> pindah ke
+///   langkah 2 (layar PIN, keypad kecil).
+/// - Tap "Masuk sebagai Owner": dialog PIN Owner gerai terpilih.
+///
+/// Langkah 2 (KasirPinPage): nama gerai + 6 dot + keypad compact
+/// 72px + tombol "Masuk sebagai Kasir" 56px. Ganti gerai = kembali
+/// ke langkah 1, PIN yang diketik dibuang (state KasirPinPage ikut
+/// terbuang — dibangun ulang per gerai lewat ValueKey).
 ///
 /// Sebelum C4, app langsung masuk Kasir tanpa login. Sekarang login
 /// adalah gerbang sesi: tutup app = login lagi. Peran default
 /// sesudah login = Kasir (fail closed); Owner hanya lewat PIN.
 ///
-/// PIN Kasir: bila PIN Kasir gerai itu BELUM diatur (atau Edge
-/// Function verify-kasir-pin belum di-deploy / offline), kasir masuk
-/// langsung — perilaku app sebelum C4, supaya kasir tetap bisa
-/// jualan offline. PIN Kasir hanya mengunci bila sudah diatur DAN
-/// fungsinya sudah di-deploy. PIN Owner TIDAK ikut pola ini
-/// (fail closed — PIN Owner salah / tidak bisa dicek = tetap di
-/// halaman login).
+/// PIN Owner TIDAK ikut pola fail-open kasir (fail closed — PIN
+/// Owner salah / tidak bisa dicek = tetap di halaman login).
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.onSuccess});
 
@@ -45,22 +48,8 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   String _selectedOutletId = defaultOutletId;
-  String _entered = '';
-  String? _error;
+  _LoginStep _step = _LoginStep.select;
   bool _busy = false;
-
-  void _onDigit(String digit) {
-    if (_busy || _entered.length >= PinService.pinLength) return;
-    setState(() {
-      _entered += digit;
-      _error = null;
-    });
-  }
-
-  void _onBackspace() {
-    if (_busy || _entered.isEmpty) return;
-    setState(() => _entered = _entered.substring(0, _entered.length - 1));
-  }
 
   void _finish(AppRole role) {
     OutletService.instance.selectOutlet(_selectedOutletId);
@@ -69,48 +58,24 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  /// Masuk sebagai Kasir: PIN Kasir gerai terpilih (bila sudah diatur).
-  Future<void> _enterKasir() async {
-    if (_entered.length != PinService.pinLength || _busy) return;
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    final outletId = _selectedOutletId;
-    final pin = _entered;
-    final set = await KasirPinService.instance.isPinSet(outletId);
+  /// Tap "Masuk sebagai Kasir" di langkah 1: PIN Kasir sudah diatur
+  /// -> layar PIN; belum diatur / tidak bisa dicek -> masuk langsung
+  /// (fail-open, perilaku app sebelum C4, supaya kasir tetap bisa
+  /// jualan offline).
+  Future<void> _onKasirTap() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final set =
+        await KasirPinService.instance.isPinSet(_selectedOutletId);
     if (!mounted) return;
-    // Belum diatur / tidak bisa dicek (EF belum di-deploy / offline):
-    // masuk langsung — perilaku app sebelum C4 (offline-first).
     if (set != true) {
       _finish(AppRole.kasir);
       return;
     }
-    final result = await KasirPinService.instance.verify(outletId, pin);
-    if (!mounted) return;
-    switch (result) {
-      case PinVerifyResult.ok:
-        _finish(AppRole.kasir);
-      case PinVerifyResult.notSet:
-        // PIN dihapus di tengah jalan (balapan) — masuk langsung.
-        _finish(AppRole.kasir);
-      case PinVerifyResult.wrong:
-        setState(() {
-          _entered = '';
-          _busy = false;
-          _error = 'PIN Kasir salah — sisa '
-              '${KasirPinService.instance.remainingAttempts} percobaan.';
-        });
-      case PinVerifyResult.locked:
-        setState(() {
-          _entered = '';
-          _busy = false;
-          _error = 'Terlalu banyak percobaan salah. Coba lagi 5 menit lagi.';
-        });
-      case PinVerifyResult.unavailable:
-        // Offline di tengah jalan — kasir tetap boleh masuk (offline-first).
-        _finish(AppRole.kasir);
-    }
+    setState(() {
+      _busy = false;
+      _step = _LoginStep.pin;
+    });
   }
 
   /// Masuk sebagai Owner: dialog PIN Owner gerai terpilih (sudah
@@ -133,61 +98,35 @@ class _LoginPageState extends State<LoginPage> {
           listenable: OutletService.instance,
           builder: (context, _) {
             final outlets = OutletService.instance.outlets;
+            if (_step == _LoginStep.pin) {
+              final outlet = outlets.firstWhere(
+                (o) => o.id == _selectedOutletId,
+                orElse: () => outlets.isNotEmpty
+                    ? outlets.first
+                    : seedOutlets().first,
+              );
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const _LoginHeader(),
+                  Expanded(
+                    child: KasirPinPage(
+                      key: ValueKey(_selectedOutletId),
+                      outlet: outlet,
+                      onBack: () =>
+                          setState(() => _step = _LoginStep.select),
+                      onSuccess: widget.onSuccess,
+                    ),
+                  ),
+                ],
+              );
+            }
             return SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SizedBox(height: 16),
-                  // Wordmark + tagline (FigCraft frame 13).
-                  const Text(
-                    'SUKA TEA',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 26,
-                      color: SukaTeaColors.emerald,
-                      letterSpacing: 2.6,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Center(
-                    child: Container(
-                      width: 28,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: SukaTeaColors.emerald,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Es Teh Kekinian — Kasir',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: SukaTeaColors.muted),
-                  ),
-                  const SizedBox(height: 16),
-                  Center(
-                    child: Container(
-                      width: 88,
-                      height: 88,
-                      decoration: BoxDecoration(
-                        color: SukaTeaColors.tint,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      alignment: Alignment.center,
-                      child: SvgPicture.asset(
-                        AppIcons.navKasir,
-                        width: 64,
-                        height: 64,
-                        colorFilter: const ColorFilter.mode(
-                          SukaTeaColors.emerald,
-                          BlendMode.srcIn,
-                        ),
-                      ),
-                    ),
-                  ),
+                  const _LoginHeader(),
                   const SizedBox(height: 20),
                   const Text(
                     'Pilih Gerai',
@@ -199,56 +138,6 @@ class _LoginPageState extends State<LoginPage> {
                   const SizedBox(height: 8),
                   for (var i = 0; i < outlets.length; i++)
                     _outletCard(outlets[i], i + 1),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'PIN Kasir',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      for (int i = 0; i < PinService.pinLength; i++)
-                        Container(
-                          width: 16,
-                          height: 16,
-                          margin: const EdgeInsets.symmetric(horizontal: 6),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: i < _entered.length
-                                ? SukaTeaColors.emerald
-                                : SukaTeaColors.border,
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  PinKeypad(
-                    onDigit: _onDigit,
-                    onBackspace: _onBackspace,
-                    enabled: !_busy,
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      _error!,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: SukaTeaColors.danger),
-                    ),
-                  ],
-                  if (_busy) ...[
-                    const SizedBox(height: 12),
-                    const Center(
-                      child: SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    ),
-                  ],
                   const SizedBox(height: 16),
                   const Text(
                     'Masuk sebagai Owner butuh PIN Owner gerai ini.',
@@ -270,13 +159,9 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 12),
                   TapFeedback(
-                    enabled: !_busy &&
-                        _entered.length == PinService.pinLength,
+                    enabled: !_busy,
                     child: FilledButton(
-                      onPressed: _entered.length == PinService.pinLength &&
-                              !_busy
-                          ? _enterKasir
-                          : null,
+                      onPressed: _busy ? null : _onKasirTap,
                       style: FilledButton.styleFrom(
                         minimumSize: const Size(0, 56),
                       ),
@@ -300,6 +185,16 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                     ),
                   ),
+                  if (_busy) ...[
+                    const SizedBox(height: 12),
+                    const Center(
+                      child: SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                 ],
               ),
@@ -319,8 +214,6 @@ class _LoginPageState extends State<LoginPage> {
             ? null
             : () => setState(() {
                   _selectedOutletId = outlet.id;
-                  _entered = '';
-                  _error = null;
                 }),
         borderRadius: BorderRadius.circular(20),
         child: Container(
@@ -400,6 +293,70 @@ class _LoginPageState extends State<LoginPage> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Wordmark + tagline + logo (FigCraft frame 13) — dipakai langkah
+/// 1 dan langkah 2 supaya identitas layar login tetap sama.
+class _LoginHeader extends StatelessWidget {
+  const _LoginHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        const SizedBox(height: 16),
+        // Wordmark + tagline (FigCraft frame 13).
+        const Text(
+          'SUKA TEA',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 26,
+            color: SukaTeaColors.emerald,
+            letterSpacing: 2.6,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Center(
+          child: Container(
+            width: 28,
+            height: 4,
+            decoration: BoxDecoration(
+              color: SukaTeaColors.emerald,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Es Teh Kekinian — Kasir',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: SukaTeaColors.muted),
+        ),
+        const SizedBox(height: 16),
+        Center(
+          child: Container(
+            width: 88,
+            height: 88,
+            decoration: BoxDecoration(
+              color: SukaTeaColors.tint,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            alignment: Alignment.center,
+            child: SvgPicture.asset(
+              AppIcons.navKasir,
+              width: 64,
+              height: 64,
+              colorFilter: const ColorFilter.mode(
+                SukaTeaColors.emerald,
+                BlendMode.srcIn,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
