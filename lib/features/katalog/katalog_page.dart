@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../core/theme/app_icons.dart';
 import '../../core/theme/app_theme.dart';
@@ -9,9 +12,12 @@ import '../../core/widgets/product_photo.dart';
 import '../../core/widgets/tap_feedback.dart';
 import '../../data/menu_service.dart';
 import '../../data/models.dart';
+import '../../data/outlet_service.dart';
 import '../../data/seed_menu.dart';
+import '../pin/pin_dialog.dart';
 import '../resep/resep_page.dart';
 import '../topping/topping_page.dart';
+import 'product_photo_service.dart';
 
 /// Kelola Menu — HANYA Owner. Menu, harga, dan foto produk di-custom di
 /// dalam app (bukan hardcode). Kasir read-only. Desain v2: thumb 56px
@@ -23,11 +29,16 @@ import '../topping/topping_page.dart';
 /// - tambah produk baru (form nyata: nama, kategori, harga R/J, foto)
 /// - ubah nama, kategori, harga Reguler, harga Jumbo (_editProduct)
 /// - ganti foto dari 20 foto poster bawaan (_changePhoto)
+/// - ganti foto dari kamera/galeri (Batch C3): upload ke Supabase
+///   Storage lewat Edge Function + bukti PIN Owner; hanya untuk produk
+///   yang sudah ada (id dipakai sebagai nama file di Storage).
 /// - hapus foto → kembali ke ikon placeholder
 /// - hapus produk (dengan konfirmasi)
 /// - toggle Aktif/Habis (produk habis tidak bisa ditambah ke keranjang)
 /// - cari produk lewat TextField
-/// Upload foto sendiri dari kamera/galeri masih M1.
+/// Foto custom dari kamera/galeri (Batch C3) hanya untuk produk yang
+/// sudah tersimpan — produk baru pakai foto bawaan dulu, lalu ganti
+/// foto custom lewat thumb / menu ⋮ sesudah disimpan.
 class KatalogPage extends StatefulWidget {
   const KatalogPage({super.key, required this.role});
 
@@ -111,7 +122,10 @@ class _KatalogPageState extends State<KatalogPage> {
                 const SizedBox(height: 8),
                 InkWell(
                   onTap: () async {
-                    final picked = await _pickPhoto(photoUrl);
+                    final picked = await _pickPhotoFor(
+                      product: product,
+                      selected: photoUrl,
+                    );
                     if (picked != null) {
                       setDialogState(() => photoUrl = picked);
                     }
@@ -126,9 +140,10 @@ class _KatalogPageState extends State<KatalogPage> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  photoUrl == null
-                      ? 'Ketuk foto untuk memilih dari 20 foto bawaan.'
-                      : 'Ketuk foto untuk mengganti.',
+                  product == null
+                      ? 'Ketuk foto untuk memilih dari 20 foto bawaan. '
+                          'Foto kamera/galeri bisa diatur sesudah produk disimpan.'
+                      : 'Ketuk foto untuk mengganti (kamera / galeri / foto bawaan).',
                   style: const TextStyle(color: SukaTeaColors.muted),
                 ),
               ],
@@ -287,8 +302,150 @@ class _KatalogPageState extends State<KatalogPage> {
     );
   }
 
+  /// Pilih sumber foto untuk produk yang SUDAH ada (punya id):
+  /// Kamera / Galeri (upload ke Storage) atau Foto bawaan (20 poster).
+  /// Produk baru (product null) belum punya id untuk nama file di
+  /// Storage — langsung ke pemilih foto bawaan saja.
+  /// Mengembalikan URL/path foto baru, '' = hapus foto, null = batal
+  /// (termasuk bila upload gagal — foto lama tetap).
+  Future<String?> _pickPhotoFor({Product? product, String? selected}) async {
+    if (product == null) return _pickPhoto(selected);
+    final source = await _photoSourceDialog();
+    if (source == null) return null;
+    if (source == 'bundled') return _pickPhoto(selected);
+    final url = await _uploadPhoto(
+      product: product,
+      source: source == 'camera' ? ImageSource.camera : ImageSource.gallery,
+    );
+    return url;
+  }
+
+  /// Dialog pilih sumber foto: 'camera' | 'gallery' | 'bundled' | null.
+  Future<String?> _photoSourceDialog() async {
+    return showDialog<String?>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Ganti foto produk'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera),
+              title: const Text('Ambil dari Kamera'),
+              onTap: () => Navigator.of(context).pop('camera'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('Pilih dari Galeri'),
+              onTap: () => Navigator.of(context).pop('gallery'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.grid_view),
+              title: const Text('Foto bawaan (20 poster)'),
+              onTap: () => Navigator.of(context).pop('bundled'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(null),
+            child: const Text('Batal'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Alur upload foto custom (Batch C3): bukti PIN Owner dulu
+  /// (dialog PIN — PIN diteruskan sekali ke server, tidak disimpan),
+  /// lalu pilih foto (diperkecil image_picker: max 1024px, quality
+  /// 85), lalu upload lewat Edge Function. Mengembalikan URL publik
+  /// atau null bila batal/gagal. SnackBar memberi tahu hasilnya.
+  /// Dialog loading tidak bisa ditutup tombol kembali (PopScope) dan
+  /// pasti ditutup di semua jalur sesudah upload selesai.
+  Future<String?> _uploadPhoto({
+    required Product product,
+    required ImageSource source,
+  }) async {
+    // 1. Bukti Owner — PIN diverifikasi server, diteruskan sekali.
+    // ownerPin di-assign di dalam closure onPinVerified, jadi TIDAK
+    // ter-promote: cek null + `!` wajib di tiap pemakaian (pelajaran
+    // CI v27.1).
+    String? ownerPin;
+    final pinOk = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PinEntryDialog(
+        outletId: OutletService.instance.currentOutletId,
+        onPinVerified: (pin) => ownerPin = pin,
+      ),
+    );
+    if (pinOk != true || ownerPin == null || !mounted) return null;
+
+    // 2. Pilih foto (batal = null, foto lama tetap).
+    final picked = await ImagePicker().pickImage(
+      source: source,
+      maxWidth: 1024,
+      maxHeight: 1024,
+      imageQuality: 85,
+    );
+    if (picked == null || !mounted) return null;
+
+    // 3. Upload dengan dialog loading (pasti ditutup di semua jalur).
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const PopScope(
+          canPop: false,
+          child: AlertDialog(
+            content: Row(
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(width: 16),
+                Expanded(child: Text('Mengunggah foto…')),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    String? url;
+    try {
+      final bytes = await picked.readAsBytes();
+      url = await ProductPhotoService.instance.uploadPhoto(
+        outletId: OutletService.instance.currentOutletId,
+        productId: product.id,
+        bytes: bytes,
+        ownerPin: ownerPin!,
+      );
+    } catch (e) {
+      debugPrint('Upload foto gagal: $e');
+      url = null;
+    }
+    if (!mounted) return null;
+    Navigator.of(context).pop(); // tutup dialog loading
+    if (url == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Foto gagal diunggah — periksa koneksi / Edge Function belum di-deploy.',
+          ),
+        ),
+      );
+      return null;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Foto ${product.name} diperbarui.')),
+    );
+    return url;
+  }
+
   Future<void> _changePhoto(Product product) async {
-    final picked = await _pickPhoto(product.photoUrl);
+    final picked = await _pickPhotoFor(
+      product: product,
+      selected: product.photoUrl,
+    );
     if (picked == null || !mounted) return;
     await MenuService.instance.updateProduct(
       Product(

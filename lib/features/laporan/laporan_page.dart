@@ -6,6 +6,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/tap_feedback.dart';
+import '../../data/outlet_service.dart';
 import '../../data/sale_history.dart';
 import '../../data/sheets_export.dart';
 import '../riwayat/riwayat_page.dart';
@@ -191,30 +192,32 @@ class _LaporanPageState extends State<LaporanPage> {
             // Export Sheets bukan bagian frame FigCraft 07, tapi
             // fungsinya dipertahankan (bukan dihapus): tombol
             // outline full-width di bawah baris utama.
-            SizedBox(
-              width: double.infinity,
-              child: TapFeedback(
-                child: OutlinedButton.icon(
-                  onPressed: () async {
-                    final ok =
-                        await exportShiftToSheets(shiftId: 'demo-shift');
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(ok
-                            ? 'Export Sheets terkirim.'
-                            : 'Export Sheets belum tersedia (Supabase/secret belum dikonfigurasi).'),
-                      ),
-                    );
-                  },
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(0, 56),
+            // HANYA Owner (Batch C3): Kasir tidak melihat tombolnya.
+            // shiftId = tanggal hari ini (tutup kasir = harian; app
+            // tidak punya konsep shift).
+            if (widget.role.canExportSheets)
+              SizedBox(
+                width: double.infinity,
+                child: TapFeedback(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      final result = await exportShiftToSheets(
+                        outletId: OutletService.instance.currentOutletId,
+                        shiftId: shiftIdForToday(),
+                      );
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(result.message)),
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 56),
+                    ),
+                    icon: const Icon(Icons.table_chart),
+                    label: const Text('Export Sheets'),
                   ),
-                  icon: const Icon(Icons.table_chart),
-                  label: const Text('Export Sheets'),
                 ),
               ),
-            ),
             if (_selisih != null)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
