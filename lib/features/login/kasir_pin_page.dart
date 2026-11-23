@@ -61,6 +61,12 @@ class _KasirPinPageState extends State<KasirPinPage> {
   }
 
   void _finish() {
+    // Reset _busy DULU: spinner CircularProgressIndicator tidak
+    // pernah berhenti sendiri — kalau _finish dipanggil dengan
+    // _busy masih true, pumpAndSettle di test (dan frame di app
+    // bila onSuccess tidak langsung unmount) tidak pernah selesai
+    // (ketangkep CI v27.3: pumpAndSettle timed out).
+    if (_busy) setState(() => _busy = false);
     OutletService.instance.selectOutlet(widget.outlet.id);
     widget.onSuccess(
       LoginResult(outletId: widget.outlet.id, role: AppRole.kasir),

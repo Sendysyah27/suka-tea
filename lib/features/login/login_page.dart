@@ -52,6 +52,10 @@ class _LoginPageState extends State<LoginPage> {
   bool _busy = false;
 
   void _finish(AppRole role) {
+    // Sama seperti KasirPinPage._finish: reset _busy dulu supaya
+    // spinner tidak muter selamanya bila onSuccess tidak langsung
+    // unmount halaman ini (ketangkep CI v27.3).
+    if (_busy) setState(() => _busy = false);
     OutletService.instance.selectOutlet(_selectedOutletId);
     widget.onSuccess(
       LoginResult(outletId: _selectedOutletId, role: role),

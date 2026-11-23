@@ -72,6 +72,11 @@ void main() {
         MaterialApp(home: LoginPage(onSuccess: (r) => got = r)),
       );
       await tester.pump();
+      // Tombol ada di bawah lipatan layar tes 800x600 (halaman
+      // login pakai SingleChildScrollView) — scroll dulu supaya
+      // tap kena (ketangkep CI v27.3: tap di Offset y=639 miss).
+      await tester.ensureVisible(find.text('Masuk sebagai Kasir'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Masuk sebagai Kasir'));
       await tester.pumpAndSettle();
       expect(got, isNotNull);
@@ -88,6 +93,8 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('Gerai 3'));
       await tester.pump();
+      await tester.ensureVisible(find.text('Masuk sebagai Kasir'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Masuk sebagai Kasir'));
       await tester.pumpAndSettle();
       expect(got, isNotNull);
@@ -180,6 +187,8 @@ void main() {
         find.widgetWithText(FilledButton, 'Masuk sebagai Kasir'),
       );
       expect(button.onPressed, isNotNull);
+      await tester.ensureVisible(find.text('Masuk sebagai Kasir'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Masuk sebagai Kasir'));
       await tester.pumpAndSettle();
       expect(got, isNotNull);
