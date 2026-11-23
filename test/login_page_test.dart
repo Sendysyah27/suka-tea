@@ -53,7 +53,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(got, isNotNull);
       expect(got!.role, AppRole.kasir);
-      expect(got.outletId, defaultOutletId);
+      expect(got!.outletId, defaultOutletId);
       expect(tester.takeException(), isNull);
     });
 
@@ -69,7 +69,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(got, isNotNull);
       expect(got!.outletId, '00000000-0000-0000-0000-000000000003');
-      expect(got.role, AppRole.kasir);
+      expect(got!.role, AppRole.kasir);
       expect(tester.takeException(), isNull);
     });
   });
@@ -161,7 +161,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(got, isNotNull);
       expect(got!.role, AppRole.kasir);
-      expect(got.outletId, '00000000-0000-0000-0000-000000000002');
+      expect(got!.outletId, '00000000-0000-0000-0000-000000000002');
       expect(tester.takeException(), isNull);
     });
 

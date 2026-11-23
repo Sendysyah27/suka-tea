@@ -226,6 +226,11 @@ class _KasirPageState extends State<KasirPage> {
         // atau batalkan split dengan sadar.
         int? cashReceived;
         while (cashReceived == null) {
+          // Guard mounted di tiap putaran: context dipakai sesudah
+          // await (push QRIS / showDialog putaran sebelumnya) — tanpa
+          // ini analyzer menandai use_build_context_synchronously
+          // (CI v27.1).
+          if (!mounted) return;
           cashReceived = await showCashReceivedSheet(
             context,
             remainder,
