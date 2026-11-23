@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
+import '../../core/widgets/tap_feedback.dart';
 import '../../data/models.dart';
 import '../../data/seed_menu.dart';
 
@@ -171,19 +172,21 @@ Future<ProductSelection?> showProductOptionsSheet(
                 ],
               ),
               const SizedBox(height: 12),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(
-                  ProductSelection(
-                    variant: variant,
-                    modifiers: [gula, es, ...toppings],
+              TapFeedback(
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).pop(
+                    ProductSelection(
+                      variant: variant,
+                      modifiers: [gula, es, ...toppings],
+                    ),
                   ),
-                ),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size(0, 56),
-                ),
-                child: Text(
-                  'Tambah • ${formatRupiah(unitPrice)}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
+                  child: Text(
+                    'Tambah • ${formatRupiah(unitPrice)}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
               ),
             ],

@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
 import '../../core/widgets/screen_title.dart';
+import '../../core/widgets/tap_feedback.dart';
 import '../../data/models.dart';
 import 'receipt_pdf.dart';
 
@@ -286,20 +287,22 @@ class DigitalReceiptPage extends StatelessWidget {
                     Expanded(
                       child: SizedBox(
                         height: 44,
-                        child: OutlinedButton(
-                          onPressed: () => _share(context),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size(0, 44),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                        child: TapFeedback(
+                          child: OutlinedButton(
+                            onPressed: () => _share(context),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
                             ),
-                          ),
-                          child: const Text(
-                            'Bagikan',
-                            style: TextStyle(
-                              color: SukaTeaColors.emerald,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
+                            child: const Text(
+                              'Bagikan',
+                              style: TextStyle(
+                                color: SukaTeaColors.emerald,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
                             ),
                           ),
                         ),
@@ -309,20 +312,22 @@ class DigitalReceiptPage extends StatelessWidget {
                     Expanded(
                       child: SizedBox(
                         height: 44,
-                        child: OutlinedButton(
-                          onPressed: () => _savePdf(context),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size(0, 44),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                        child: TapFeedback(
+                          child: OutlinedButton(
+                            onPressed: () => _savePdf(context),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
                             ),
-                          ),
-                          child: const Text(
-                            'Simpan PDF',
-                            style: TextStyle(
-                              color: SukaTeaColors.emerald,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
+                            child: const Text(
+                              'Simpan PDF',
+                              style: TextStyle(
+                                color: SukaTeaColors.emerald,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
                             ),
                           ),
                         ),
@@ -331,12 +336,14 @@ class DigitalReceiptPage extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size(0, 56),
+                TapFeedback(
+                  child: FilledButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 56),
+                    ),
+                    child: const Text('Selesai'),
                   ),
-                  child: const Text('Selesai'),
                 ),
                 const SizedBox(height: 12),
                 const Text(

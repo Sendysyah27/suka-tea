@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/roles.dart';
+import '../../core/widgets/tap_feedback.dart';
 import '../../data/models.dart';
 import '../../data/stock_service.dart';
 
@@ -190,12 +191,14 @@ class _StokPageState extends State<StokPage> {
     return Scaffold(
       // FAB hanya Owner; Kasir read-only.
       floatingActionButton: _canEdit
-          ? FloatingActionButton(
-              onPressed: _addStock,
-              tooltip: 'Tambah bahan baru',
-              backgroundColor: SukaTeaColors.emerald,
-              foregroundColor: Colors.white,
-              child: const Icon(Icons.add),
+          ? TapFeedback(
+              child: FloatingActionButton(
+                onPressed: _addStock,
+                tooltip: 'Tambah bahan baru',
+                backgroundColor: SukaTeaColors.emerald,
+                foregroundColor: Colors.white,
+                child: const Icon(Icons.add),
+              ),
             )
           : null,
       body: ListenableBuilder(

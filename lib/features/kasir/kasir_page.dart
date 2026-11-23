@@ -7,6 +7,7 @@ import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/product_photo.dart';
 import '../../core/widgets/screen_title.dart';
+import '../../core/widgets/tap_feedback.dart';
 import '../../data/local/outbox_service.dart';
 import '../../data/menu_service.dart';
 import '../../data/models.dart';
@@ -587,25 +588,29 @@ class _MenuSection extends StatelessWidget {
                                   Positioned(
                                     right: 0,
                                     bottom: -12,
-                                    child: InkWell(
-                                      onTap: p.isActive
-                                          ? () => onQuickAdd(p)
-                                          : null,
-                                      borderRadius: BorderRadius.circular(10),
-                                      child: Container(
-                                        width: 36,
-                                        height: 36,
-                                        decoration: BoxDecoration(
-                                          color: p.isActive
-                                              ? SukaTeaColors.emerald
-                                              : SukaTeaColors.border,
-                                          borderRadius:
-                                              BorderRadius.circular(10),
-                                        ),
-                                        child: const Icon(
-                                          Icons.add,
-                                          size: 20,
-                                          color: Colors.white,
+                                    child: TapFeedback(
+                                      enabled: p.isActive,
+                                      child: InkWell(
+                                        onTap: p.isActive
+                                            ? () => onQuickAdd(p)
+                                            : null,
+                                        borderRadius:
+                                            BorderRadius.circular(10),
+                                        child: Container(
+                                          width: 36,
+                                          height: 36,
+                                          decoration: BoxDecoration(
+                                            color: p.isActive
+                                                ? SukaTeaColors.emerald
+                                                : SukaTeaColors.border,
+                                            borderRadius:
+                                                BorderRadius.circular(10),
+                                          ),
+                                          child: const Icon(
+                                            Icons.add,
+                                            size: 20,
+                                            color: Colors.white,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -692,23 +697,25 @@ class _CartPanel extends StatelessWidget {
     required IconData icon,
     required VoidCallback onTap,
   }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        width: 28,
-        height: 28,
-        decoration: BoxDecoration(
-          color: filled ? SukaTeaColors.emerald : SukaTeaColors.card,
-          borderRadius: BorderRadius.circular(8),
-          border: filled
-              ? null
-              : Border.all(color: SukaTeaColors.border, width: 1.5),
-        ),
-        child: Icon(
-          icon,
-          size: 16,
-          color: filled ? Colors.white : SukaTeaColors.ink,
+    return TapFeedback(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: filled ? SukaTeaColors.emerald : SukaTeaColors.card,
+            borderRadius: BorderRadius.circular(8),
+            border: filled
+                ? null
+                : Border.all(color: SukaTeaColors.border, width: 1.5),
+          ),
+          child: Icon(
+            icon,
+            size: 16,
+            color: filled ? Colors.white : SukaTeaColors.ink,
+          ),
         ),
       ),
     );
@@ -718,23 +725,25 @@ class _CartPanel extends StatelessWidget {
   /// glyph × merah #D64545 di #FCECEC, di kiri tombol "−" — baris
   /// stepper jadi [×][−][angka][+].
   Widget _deleteButton({required VoidCallback onTap}) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        width: 28,
-        height: 28,
-        decoration: BoxDecoration(
-          color: SukaTeaColors.deleteBg,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: const Center(
-          child: Text(
-            '×',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: SukaTeaColors.danger,
+    return TapFeedback(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: SukaTeaColors.deleteBg,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Center(
+            child: Text(
+              '×',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: SukaTeaColors.danger,
+              ),
             ),
           ),
         ),
@@ -866,9 +875,11 @@ class _CartPanel extends StatelessWidget {
   }
 
   Widget _bayarButton() {
-    return FilledButton(
-      onPressed: (cart.isEmpty || isProcessing) ? null : onBayar,
-      style: FilledButton.styleFrom(
+    return TapFeedback(
+      enabled: cart.isNotEmpty && !isProcessing,
+      child: FilledButton(
+        onPressed: (cart.isEmpty || isProcessing) ? null : onBayar,
+        style: FilledButton.styleFrom(
         minimumSize: const Size(0, 56),
         // Padding horizontal M3 default (24) + ikon + label panjang
         // ("Bayar • Rp8.000") overflow 0,5px di panel 320dp (test 23 Nov
@@ -915,6 +926,7 @@ class _CartPanel extends StatelessWidget {
             ),
           ],
         ],
+      ),
       ),
     );
   }
@@ -1130,78 +1142,84 @@ class _BottomBar extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: TextButton(
-                onPressed: onCart,
-                style: TextButton.styleFrom(
-                  alignment: Alignment.centerLeft,
-                  padding: EdgeInsets.zero,
-                ),
-                child: Row(
-                  children: [
-                    SvgPicture.asset(
-                      AppIcons.keranjang,
-                      width: 20,
-                      height: 20,
-                      colorFilter: const ColorFilter.mode(
-                        SukaTeaColors.muted,
-                        BlendMode.srcIn,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Keranjang ($count) • ${formatRupiah(total)}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                          color: SukaTeaColors.ink,
+              child: TapFeedback(
+                child: TextButton(
+                  onPressed: onCart,
+                  style: TextButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                    padding: EdgeInsets.zero,
+                  ),
+                  child: Row(
+                    children: [
+                      SvgPicture.asset(
+                        AppIcons.keranjang,
+                        width: 20,
+                        height: 20,
+                        colorFilter: const ColorFilter.mode(
+                          SukaTeaColors.muted,
+                          BlendMode.srcIn,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Keranjang ($count) • ${formatRupiah(total)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                            color: SukaTeaColors.ink,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
             const SizedBox(width: 12),
-            FilledButton(
-              onPressed: (count == 0 || isProcessing) ? null : onBayar,
-              style: FilledButton.styleFrom(minimumSize: const Size(0, 56)),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (isProcessing) ...[
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
+            TapFeedback(
+              enabled: count != 0 && !isProcessing,
+              child: FilledButton(
+                onPressed: (count == 0 || isProcessing) ? null : onBayar,
+                style:
+                    FilledButton.styleFrom(minimumSize: const Size(0, 56)),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isProcessing) ...[
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'Memproses…',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ] else ...[
-                    SvgPicture.asset(
-                      AppIcons.bayar,
-                      width: 20,
-                      height: 20,
-                      colorFilter: const ColorFilter.mode(
-                        Colors.white,
-                        BlendMode.srcIn,
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Memproses…',
+                        style: TextStyle(fontWeight: FontWeight.w700),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'Bayar',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
+                    ] else ...[
+                      SvgPicture.asset(
+                        AppIcons.bayar,
+                        width: 20,
+                        height: 20,
+                        colorFilter: const ColorFilter.mode(
+                          Colors.white,
+                          BlendMode.srcIn,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Bayar',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ],

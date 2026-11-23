@@ -6,6 +6,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/product_photo.dart';
+import '../../core/widgets/tap_feedback.dart';
 import '../../data/menu_service.dart';
 import '../../data/models.dart';
 import '../../data/seed_menu.dart';
@@ -391,21 +392,23 @@ class _KatalogPageState extends State<KatalogPage> {
                           ),
                           const SizedBox(height: 12),
                           if (_canEdit)
-                            FilledButton.icon(
-                              onPressed: _addProduct,
-                              style: FilledButton.styleFrom(
-                                minimumSize: const Size(0, 56),
-                              ),
-                              icon: SvgPicture.asset(
-                                AppIcons.tambah,
-                                width: 20,
-                                height: 20,
-                                colorFilter: const ColorFilter.mode(
-                                  Colors.white,
-                                  BlendMode.srcIn,
+                            TapFeedback(
+                              child: FilledButton.icon(
+                                onPressed: _addProduct,
+                                style: FilledButton.styleFrom(
+                                  minimumSize: const Size(0, 56),
                                 ),
+                                icon: SvgPicture.asset(
+                                  AppIcons.tambah,
+                                  width: 20,
+                                  height: 20,
+                                  colorFilter: const ColorFilter.mode(
+                                    Colors.white,
+                                    BlendMode.srcIn,
+                                  ),
+                                ),
+                                label: const Text('+ Tambah menu'),
                               ),
-                              label: const Text('+ Tambah menu'),
                             )
                           else
                             const Chip(label: Text('Kasir: lihat saja')),

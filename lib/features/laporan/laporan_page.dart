@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../core/theme/app_icons.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
+import '../../core/widgets/tap_feedback.dart';
 import '../../data/models.dart';
 import '../../data/sale_history.dart';
 import '../../data/sheets_export.dart';
@@ -139,37 +140,41 @@ class _LaporanPageState extends State<LaporanPage> {
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _hitungSelisih(tunaiSales),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 56),
-                    ),
-                    icon: SvgPicture.asset(
-                      AppIcons.tutupKasir,
-                      width: 20,
-                      height: 20,
-                      colorFilter: const ColorFilter.mode(
-                        SukaTeaColors.emerald,
-                        BlendMode.srcIn,
+                  child: TapFeedback(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _hitungSelisih(tunaiSales),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 56),
                       ),
+                      icon: SvgPicture.asset(
+                        AppIcons.tutupKasir,
+                        width: 20,
+                        height: 20,
+                        colorFilter: const ColorFilter.mode(
+                          SukaTeaColors.emerald,
+                          BlendMode.srcIn,
+                        ),
+                      ),
+                      label: const Text('Hitung Selisih'),
                     ),
-                    label: const Text('Hitung Selisih'),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: FilledButton(
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const RiwayatPage(),
-                        ),
-                      );
-                    },
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size(0, 56),
+                  child: TapFeedback(
+                    child: FilledButton(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const RiwayatPage(),
+                          ),
+                        );
+                      },
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(0, 56),
+                      ),
+                      child: const Text('Lihat Riwayat'),
                     ),
-                    child: const Text('Lihat Riwayat'),
                   ),
                 ),
               ],
@@ -180,24 +185,26 @@ class _LaporanPageState extends State<LaporanPage> {
             // outline full-width di bawah baris utama.
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () async {
-                  final ok =
-                      await exportShiftToSheets(shiftId: 'demo-shift');
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(ok
-                          ? 'Export Sheets terkirim.'
-                          : 'Export Sheets belum tersedia (Supabase/secret belum dikonfigurasi).'),
-                    ),
-                  );
-                },
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(0, 56),
+              child: TapFeedback(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final ok =
+                        await exportShiftToSheets(shiftId: 'demo-shift');
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(ok
+                            ? 'Export Sheets terkirim.'
+                            : 'Export Sheets belum tersedia (Supabase/secret belum dikonfigurasi).'),
+                      ),
+                    );
+                  },
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
+                  icon: const Icon(Icons.table_chart),
+                  label: const Text('Export Sheets'),
                 ),
-                icon: const Icon(Icons.table_chart),
-                label: const Text('Export Sheets'),
               ),
             ),
             if (_selisih != null)

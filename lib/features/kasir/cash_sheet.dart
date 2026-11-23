@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/cash.dart';
 import '../../core/utils/money.dart';
+import '../../core/widgets/tap_feedback.dart';
 
 /// Sheet "Uang diterima" untuk bayar tunai: chip nominal cepat
 /// (Uang pas + pecahan >= total), input manual, kembalian live.
@@ -122,16 +123,19 @@ Future<int?> showCashReceivedSheet(
                   ),
                 ),
               const SizedBox(height: 16),
-              FilledButton(
-                onPressed: received < total
-                    ? null
-                    : () => Navigator.of(context).pop(received),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size(0, 56),
-                ),
-                child: Text(
-                  'Konfirmasi • ${formatRupiah(received)}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+              TapFeedback(
+                enabled: received >= total,
+                child: FilledButton(
+                  onPressed: received < total
+                      ? null
+                      : () => Navigator.of(context).pop(received),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
+                  child: Text(
+                    'Konfirmasi • ${formatRupiah(received)}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
               ),
             ],

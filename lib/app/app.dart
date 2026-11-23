@@ -5,6 +5,7 @@ import '../core/theme/app_icons.dart';
 import '../core/theme/app_theme.dart';
 import '../core/utils/roles.dart';
 import '../core/widgets/screen_title.dart';
+import '../core/widgets/tap_feedback.dart';
 import '../features/kasir/kasir_page.dart';
 import '../features/katalog/katalog_page.dart';
 import '../features/keuangan/keuangan_page.dart';
@@ -130,7 +131,31 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
           ),
         ],
       ),
-      body: _pages[_index],
+      // Ganti menu: fade + slide halus (250ms, easeInOut), bukan ganti
+      // kasar. KeyedSubtree per tab supaya AnimatedSwitcher membedakan
+      // tiap halaman (kelima halaman tipenya memang beda, kunci ini
+      // membuat niatnya eksplisit). Halaman lama tetap di-unmount
+      // sesudah transisi — sama seperti sebelum animasi (pindah tab
+      // memang membuat ulang halaman, mis. keranjang Kasir).
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 250),
+        switchInCurve: Curves.easeInOut,
+        switchOutCurve: Curves.easeInOut,
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0.02, 0),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        ),
+        child: KeyedSubtree(
+          key: ValueKey<int>(_index),
+          child: _pages[_index],
+        ),
+      ),
       // Navbar 2026 (FigCraft v26): bar putih 63px + hairline di atas,
       // 5 tab ikon garis Lucide 24px + label 11px. Tab aktif: pill
       // tint #EAF6EF 48x32 r16 di belakang ikon + ikon/label emerald
@@ -166,44 +191,52 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
   Widget _navTab(String asset, String label, int index) {
     final active = _index == index;
     return Expanded(
-      child: InkWell(
-        onTap: () => setState(() => _index = index),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 48,
-              height: 32,
-              decoration: BoxDecoration(
-                color:
-                    active ? SukaTeaColors.tint : Colors.transparent,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Center(
-                child: SvgPicture.asset(
-                  asset,
-                  width: 24,
-                  height: 24,
-                  colorFilter: ColorFilter.mode(
-                    active ? SukaTeaColors.emerald : SukaTeaColors.muted,
-                    BlendMode.srcIn,
+      child: TapFeedback(
+        child: InkWell(
+          onTap: () => setState(() => _index = index),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Pill aktif: AnimatedContainer supaya tint muncul halus
+              // (200ms), bukan pop. Ikon + label ikut berubah warna.
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeInOut,
+                width: 48,
+                height: 32,
+                decoration: BoxDecoration(
+                  color:
+                      active ? SukaTeaColors.tint : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Center(
+                  child: SvgPicture.asset(
+                    asset,
+                    width: 24,
+                    height: 24,
+                    colorFilter: ColorFilter.mode(
+                      active ? SukaTeaColors.emerald : SukaTeaColors.muted,
+                      BlendMode.srcIn,
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight:
-                    active ? FontWeight.w600 : FontWeight.w500,
-                color: active
-                    ? SukaTeaColors.emerald
-                    : SukaTeaColors.muted,
+              const SizedBox(height: 4),
+              AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeInOut,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight:
+                      active ? FontWeight.w600 : FontWeight.w500,
+                  color: active
+                      ? SukaTeaColors.emerald
+                      : SukaTeaColors.muted,
+                ),
+                child: Text(label),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
