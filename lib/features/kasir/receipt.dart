@@ -186,10 +186,16 @@ class _DigitalReceiptPageState extends State<DigitalReceiptPage> {
                 // di dalam boundary: JPG tidak punya transparansi, jadi
                 // latar harus dicat putih eksplisit (kalau tidak, sudut
                 // transparan jadi hitam di JPG).
+                // PENTING: padding 24 HARUS di dalam boundary — padding
+                // Card (20) + padding halaman (16) ada DI LUAR boundary,
+                // jadi tanpa padding ini teks di JPG nempel ke tepi gambar
+                // dan tidak kelihatan seperti struk (ketahuan 23 Nov 14:01:
+                // "terlalu mepet ke teks").
                 RepaintBoundary(
                   key: _receiptKey,
                   child: Container(
                     color: Colors.white,
+                    padding: const EdgeInsets.all(24),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
