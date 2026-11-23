@@ -1112,7 +1112,7 @@ class _CartPanel extends StatelessWidget {
           color: selected ? SukaTeaColors.tint : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
         child: Row(
           children: [
             Container(
@@ -1356,7 +1356,7 @@ class _CartPanel extends StatelessWidget {
                     child: OutlinedButton(
                       onPressed: heldCount == 0 ? null : onShowHeld,
                       style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(0, 36),
+                        minimumSize: const Size(0, 32),
                         padding:
                             const EdgeInsets.symmetric(horizontal: 12),
                         shape: RoundedRectangleBorder(
@@ -1374,10 +1374,10 @@ class _CartPanel extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               if (shrink) list else Expanded(child: list),
               const Divider(height: 1),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               short
                   ? SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
@@ -1390,6 +1390,9 @@ class _CartPanel extends StatelessWidget {
                                 label: Text(m.label),
                                 selected: method == m,
                                 onSelected: (_) => onMethod(m),
+                                visualDensity: VisualDensity.compact,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
                               ),
                             ),
                         ],
@@ -1409,10 +1412,13 @@ class _CartPanel extends StatelessWidget {
                         _methodCard(),
                       ],
                     ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               // Diskon manual (Batch C1): subtotal + baris diskon hanya
-              // tampil bila diskon > 0; tombol Diskon selalu ada
-              // (nonaktif bila keranjang kosong).
+              // tampil bila diskon > 0. Tombol Diskon digabung ke baris
+              // Total (bukan baris sendiri) — panel overflow 45px di
+              // viewport tes 800x600 dan 30px di landscape 1000x300
+              // (ketangkep CI v23): satu baris penuh hilang, tombol +
+              // Total tetap kelihatan tanpa scroll.
               if (discount > 0) ...[
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1424,6 +1430,26 @@ class _CartPanel extends StatelessWidget {
                     Text(
                       formatRupiah(subtotal),
                       style: const TextStyle(color: SukaTeaColors.muted),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Diskon',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: SukaTeaColors.danger,
+                      ),
+                    ),
+                    Text(
+                      '-${formatRupiah(discount)}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: SukaTeaColors.danger,
+                      ),
                     ),
                   ],
                 ),
@@ -1441,26 +1467,14 @@ class _CartPanel extends StatelessWidget {
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                       style: TextButton.styleFrom(
+                        minimumSize: const Size(0, 32),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         padding:
                             const EdgeInsets.symmetric(horizontal: 8),
                       ),
                     ),
                   ),
                   const Spacer(),
-                  if (discount > 0)
-                    Text(
-                      '-${formatRupiah(discount)}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: SukaTeaColors.danger,
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
                   const Text(
                     'Total',
                     style: TextStyle(
@@ -1468,16 +1482,22 @@ class _CartPanel extends StatelessWidget {
                       fontSize: 16,
                     ),
                   ),
-                  Text(
-                    formatRupiah(total),
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 22,
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      formatRupiah(total),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 22,
+                      ),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               // Tahan + Bayar berdampingan (Batch C1): Tahan outline
               // flex 1, Bayar flex 2. Label Bayar tetap "Bayar • RpX"
               // dengan X = total sesudah diskon.
