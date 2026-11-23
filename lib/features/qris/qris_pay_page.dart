@@ -7,6 +7,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/cash.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
+import '../../core/widgets/screen_title.dart';
 import 'qris_service.dart';
 import 'qris_settings_page.dart';
 import 'qris_settings_service.dart';
@@ -129,7 +130,7 @@ class _QrisPayPageState extends State<QrisPayPage> {
   Widget build(BuildContext context) {
     final merchantReady = _merchantPayload != null;
     return Scaffold(
-      appBar: AppBar(title: const Text('Bayar QRIS')),
+      appBar: AppBar(title: const ScreenTitle('Bayar QRIS')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -194,7 +195,7 @@ class _QrisPayPageState extends State<QrisPayPage> {
               style: const TextStyle(
                 fontSize: 32,
                 fontWeight: FontWeight.bold,
-                color: SukaTeaColors.emeraldDark,
+                color: SukaTeaColors.emerald,
               ),
             ),
             const SizedBox(height: 12),
@@ -285,6 +286,9 @@ class _QrisPayPageState extends State<QrisPayPage> {
               Expanded(
                 child: OutlinedButton(
                   onPressed: () => Navigator.of(context).pop(),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
                   child: const Text('Batal'),
                 ),
               ),
@@ -294,6 +298,9 @@ class _QrisPayPageState extends State<QrisPayPage> {
                   onPressed: _payload == null
                       ? null
                       : () => Navigator.of(context).pop(_nominal),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
                   child: const Text('Sudah Dibayar'),
                 ),
               ),

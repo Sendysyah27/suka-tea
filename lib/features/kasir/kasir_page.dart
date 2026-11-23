@@ -6,6 +6,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/product_photo.dart';
+import '../../core/widgets/screen_title.dart';
 import '../../data/local/outbox_service.dart';
 import '../../data/menu_service.dart';
 import '../../data/models.dart';
@@ -345,30 +346,45 @@ class _KasirPageState extends State<KasirPage> {
                       builder: (context, setSheetState) {
                         void refreshSheet() => setSheetState(() {});
                         return SingleChildScrollView(
-                          child: _CartPanel(
-                            shrink: true,
-                            cart: _cart,
-                            total: _total,
-                            method: _method,
-                            isProcessing: _isProcessing,
-                            onMethod: (m) {
-                              setState(() => _method = m);
-                              refreshSheet();
-                            },
-                            onQty: (i, d) {
-                              _changeQty(i, d);
-                              refreshSheet();
-                            },
-                            onRemove: (i) {
-                              _removeItem(i);
-                              refreshSheet();
-                            },
-                            // Tutup sheet dulu baru proses bayar, supaya struk
-                            // tidak ketumpuk di atas sheet berisi item lama.
-                            onBayar: () {
-                              Navigator.of(sheetContext).pop();
-                              _bayar();
-                            },
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Drag handle 30x4 (FigCraft frame 02).
+                              const SizedBox(height: 12),
+                              Container(
+                                width: 30,
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFC9D6CE),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                              _CartPanel(
+                                shrink: true,
+                                cart: _cart,
+                                total: _total,
+                                method: _method,
+                                isProcessing: _isProcessing,
+                                onMethod: (m) {
+                                  setState(() => _method = m);
+                                  refreshSheet();
+                                },
+                                onQty: (i, d) {
+                                  _changeQty(i, d);
+                                  refreshSheet();
+                                },
+                                onRemove: (i) {
+                                  _removeItem(i);
+                                  refreshSheet();
+                                },
+                                // Tutup sheet dulu baru proses bayar, supaya struk
+                                // tidak ketumpuk di atas sheet berisi item lama.
+                                onBayar: () {
+                                  Navigator.of(sheetContext).pop();
+                                  _bayar();
+                                },
+                              ),
+                            ],
                           ),
                         );
                       },
@@ -431,6 +447,17 @@ class _MenuSection extends StatelessWidget {
   final ValueChanged<Product> onQuickAdd;
   final ValueChanged<Product> onOptions;
 
+  /// Rentang harga kartu (FigCraft frame 01): "Rp8.000 – Rp10.000".
+  /// Produk 1 varian / harga sama = harga tunggal.
+  static String _priceRange(Product p) {
+    final first = p.variants.first.price;
+    final last = p.variants.last.price;
+    if (p.variants.length < 2 || first == last) {
+      return formatRupiah(first);
+    }
+    return '${formatRupiah(first)} – ${formatRupiah(last)}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -490,14 +517,14 @@ class _MenuSection extends StatelessWidget {
                     maxCrossAxisExtent: 230,
                     mainAxisSpacing: 12,
                     crossAxisSpacing: 12,
-                    // Tinggi sel tetap (bukan rasio): isi kartu mockup
-                    // frame 01 — foto 80 + nama 15 + kategori 12 +
-                    // harga 14 + tombol "+" 36 + padding ≈ 166dp isi,
-                    // + margin Card 4+4 = 174; sel 196 kasih slack 2dp
-                    // (186 ternyata overflow 8px — ketangkep flutter
-                    // test 23 Nov 00:44). Rasio 0.72 dulu bikin tombol
-                    // overflow 34px (ketangkep screenshot 22 Nov 21:49).
-                    mainAxisExtent: 196,
+                    // Tinggi sel tetap (bukan rasio): port presisi dari
+                    // FigCraft frame 01 (kartu 171x164) — foto 72 + 8 +
+                    // nama 15 + kategori 12 + 4 + harga 14 + padding 20
+                    // ≈ 161dp isi + margin Card 4+4; sel 172 kasih
+                    // slack ~5dp. (186 pernah overflow 8px — ketangkep
+                    // flutter test 23 Nov 00:44; 196 kebanyakan ruang
+                    // kosong di bawah harga — keluhan screenshot v16.)
+                    mainAxisExtent: 172,
                   ),
                   itemCount: visible.length,
                   itemBuilder: (context, i) {
@@ -511,15 +538,25 @@ class _MenuSection extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // Foto produk 80px blok mint radius 12.
+                              // Foto produk 72px blok mint radius 12
+                              // (FigCraft frame 01) + tombol "+" yang
+                              // mengambang di pojok kanan-bawah foto:
+                              // Positioned bottom -12 (12px menjorok ke
+                              // bawah foto, sama seperti FigCraft) —
+                              // Stack pakai Clip.none supaya tidak
+                              // terpotong; ujung bawah tombol hanya
+                              // menyentuh 4px atas baris nama (sama
+                              // seperti geometri FigCraft) dan nama
+                              // pendek tidak pernah mencapai tombol.
                               // Produk habis: label "Habis" di foto +
                               // tombol "+" nonaktif.
                               Stack(
+                                clipBehavior: Clip.none,
                                 children: [
                                   ProductPhoto(
                                     photoUrl: p.photoUrl,
                                     width: double.infinity,
-                                    height: 80,
+                                    height: 72,
                                     borderRadius: 12,
                                     iconSize: 28,
                                   ),
@@ -547,6 +584,32 @@ class _MenuSection extends StatelessWidget {
                                         ),
                                       ),
                                     ),
+                                  Positioned(
+                                    right: 0,
+                                    bottom: -12,
+                                    child: InkWell(
+                                      onTap: p.isActive
+                                          ? () => onQuickAdd(p)
+                                          : null,
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: Container(
+                                        width: 36,
+                                        height: 36,
+                                        decoration: BoxDecoration(
+                                          color: p.isActive
+                                              ? SukaTeaColors.emerald
+                                              : SukaTeaColors.border,
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                        ),
+                                        child: const Icon(
+                                          Icons.add,
+                                          size: 20,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                 ],
                               ),
                               const SizedBox(height: 8),
@@ -567,46 +630,21 @@ class _MenuSection extends StatelessWidget {
                                 ),
                               ),
                               const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    // Harga awal (Reguler, harga poster) —
-                                    // satu harga seperti mockup; Jumbo ada
-                                    // di sheet pilihan. Rentang "Rp8.000 –
-                                    // Rp10.000" kepotong di kartu 186px.
-                                    child: Text(
-                                      formatRupiah(p.variants.first.price),
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  InkWell(
-                                    onTap: p.isActive
-                                        ? () => onQuickAdd(p)
-                                        : null,
-                                    borderRadius: BorderRadius.circular(18),
-                                    child: Container(
-                                      width: 36,
-                                      height: 36,
-                                      decoration: BoxDecoration(
-                                        color: p.isActive
-                                            ? SukaTeaColors.emerald
-                                            : SukaTeaColors.border,
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: const Icon(
-                                        Icons.add,
-                                        size: 20,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ],
+                              // Harga RENTANG satu baris penuh (FigCraft
+                              // frame 01: "Rp8.000 – Rp10.000", 14 Bold
+                              // emerald) — tombol "+" sudah pindah ke
+                              // foto, jadi harga tidak lagi berebut
+                              // lebar dengan tombol. Produk 1 varian =
+                              // harga tunggal.
+                              Text(
+                                _priceRange(p),
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: SukaTeaColors.emerald,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
@@ -647,20 +685,22 @@ class _CartPanel extends StatelessWidget {
   /// (bukan Expanded + tinggi tetap 75%).
   final bool shrink;
 
-  Widget _circleButton({
+  /// Tombol stepper −/+ 28x28 radius 8 (FigCraft frame 02, v22):
+  /// bukan lingkaran lagi. "+" emerald terisi, "−" outline.
+  Widget _stepButton({
     required bool filled,
     required IconData icon,
     required VoidCallback onTap,
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(8),
       child: Container(
         width: 28,
         height: 28,
         decoration: BoxDecoration(
           color: filled ? SukaTeaColors.emerald : SukaTeaColors.card,
-          shape: BoxShape.circle,
+          borderRadius: BorderRadius.circular(8),
           border: filled
               ? null
               : Border.all(color: SukaTeaColors.border, width: 1.5),
@@ -669,6 +709,157 @@ class _CartPanel extends StatelessWidget {
           icon,
           size: 16,
           color: filled ? Colors.white : SukaTeaColors.ink,
+        ),
+      ),
+    );
+  }
+
+  /// Tombol × hapus langsung 28x28 radius 8 (FigCraft frame 02, v24):
+  /// glyph × merah #D64545 di #FCECEC, di kiri tombol "−" — baris
+  /// stepper jadi [×][−][angka][+].
+  Widget _deleteButton({required VoidCallback onTap}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: SukaTeaColors.deleteBg,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Center(
+          child: Text(
+            '×',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: SukaTeaColors.danger,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Ikon + sublabel tiap cara bayar (FigCraft frame 02). Label
+  /// memakai method.label dari model (logika tidak diubah); sublabel
+  /// + ikon hanya presentasi, jadi peta ini tinggal di sini, bukan
+  /// di lib/data.
+  static const Map<PaymentMethod, (String, String)> _methodMeta = {
+    PaymentMethod.tunai: ('Bayar di kasir', AppIcons.payTunai),
+    PaymentMethod.transfer: ('BCA / Mandiri', AppIcons.payTransfer),
+    PaymentMethod.qris: ('Scan kode QR', AppIcons.payQris),
+    PaymentMethod.qrisManual:
+        ('Masukkan kode manual', AppIcons.payQrisManual),
+    PaymentMethod.ewallet: ('GoPay / OVO / DANA', AppIcons.payEwallet),
+  };
+
+  /// Payment sheet ala FigCraft frame 02 (Stripe pattern): satu kartu
+  /// putih berisi 5 baris metode — tile ikon mint 36x36 r10 + nama 14
+  /// SemiBold + sublabel 12 muted + radio 22 di kanan; baris terpilih
+  /// tint #EAF6EF + centang emerald; divider inset antar baris.
+  /// Mode pendek (<430dp) TIDAK pakai kartu ini (230px tidak muat) —
+  /// tetap chip 1 baris scroll (perbaikan overflow 22 Nov 22:19).
+  Widget _methodCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: SukaTeaColors.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: SukaTeaColors.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < PaymentMethod.values.length; i++) ...[
+            if (i > 0)
+              const Divider(
+                height: 1,
+                indent: 60,
+                color: SukaTeaColors.border,
+              ),
+            _methodRow(PaymentMethod.values[i]),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _methodRow(PaymentMethod m) {
+    final selected = method == m;
+    final (sub, iconAsset) = _methodMeta[m]!;
+    return InkWell(
+      onTap: () => onMethod(m),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        decoration: BoxDecoration(
+          color: selected ? SukaTeaColors.tint : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: SukaTeaColors.mint,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Center(
+                child: SvgPicture.asset(
+                  iconAsset,
+                  width: 24,
+                  height: 24,
+                  colorFilter: const ColorFilter.mode(
+                    SukaTeaColors.emerald,
+                    BlendMode.srcIn,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    m.label,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Text(
+                    sub,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: SukaTeaColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: selected
+                    ? SukaTeaColors.emerald
+                    : Colors.transparent,
+                border: selected
+                    ? null
+                    : Border.all(
+                        color: SukaTeaColors.border,
+                        width: 1.5,
+                      ),
+              ),
+              child: selected
+                  ? const Icon(Icons.check, size: 14, color: Colors.white)
+                  : null,
+            ),
+          ],
         ),
       ),
     );
@@ -777,6 +968,7 @@ class _CartPanel extends StatelessWidget {
                               style: const TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.bold,
+                                color: SukaTeaColors.emerald,
                               ),
                             ),
                           ],
@@ -785,13 +977,15 @@ class _CartPanel extends StatelessWidget {
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _circleButton(
+                          _deleteButton(onTap: () => onRemove(i)),
+                          const SizedBox(width: 8),
+                          _stepButton(
                             filled: false,
                             icon: Icons.remove,
                             onTap: () => onQty(i, -1),
                           ),
                           SizedBox(
-                            width: 28,
+                            width: 24,
                             child: Center(
                               child: Text(
                                 '${item.qty}',
@@ -801,23 +995,12 @@ class _CartPanel extends StatelessWidget {
                               ),
                             ),
                           ),
-                          _circleButton(
+                          _stepButton(
                             filled: true,
                             icon: Icons.add,
                             onTap: () => onQty(i, 1),
                           ),
                         ],
-                      ),
-                      const SizedBox(width: 4),
-                      IconButton(
-                        tooltip: 'Hapus item',
-                        icon: const Icon(Icons.close, size: 18),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 28,
-                          minHeight: 28,
-                        ),
-                        onPressed: () => onRemove(i),
                       ),
                     ],
                   ),
@@ -842,13 +1025,7 @@ class _CartPanel extends StatelessWidget {
             mainAxisSize: shrink ? MainAxisSize.min : MainAxisSize.max,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                'Keranjang',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
+              const ScreenTitle('Keranjang'),
               const SizedBox(height: 12),
               if (shrink) list else Expanded(child: list),
               const Divider(height: 1),
@@ -870,16 +1047,18 @@ class _CartPanel extends StatelessWidget {
                         ],
                       ),
                     )
-                  : Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        for (final m in PaymentMethod.values)
-                          ChoiceChip(
-                            label: Text(m.label),
-                            selected: method == m,
-                            onSelected: (_) => onMethod(m),
+                        const Text(
+                          'Cara bayar',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
                           ),
+                        ),
+                        const SizedBox(height: 8),
+                        _methodCard(),
                       ],
                     ),
               const SizedBox(height: 12),
@@ -904,6 +1083,17 @@ class _CartPanel extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               _bayarButton(),
+              if (!short) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  'Tombol terkunci saat memproses • anti double-tap',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: SukaTeaColors.muted,
+                  ),
+                ),
+              ],
             ],
           );
         },

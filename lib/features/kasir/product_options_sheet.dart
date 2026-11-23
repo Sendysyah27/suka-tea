@@ -45,6 +45,18 @@ Future<ProductSelection?> showProductOptionsSheet(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // Drag handle 30x4 (FigCraft frame 10).
+              Center(
+                child: Container(
+                  width: 30,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFC9D6CE),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               Text(
                 product.name,
                 style: const TextStyle(
@@ -136,6 +148,29 @@ Future<ProductSelection?> showProductOptionsSheet(
                 ],
               ),
               const SizedBox(height: 20),
+              // Total live (FigCraft frame 10): label kiri, nominal
+              // emerald kanan — sebelum tombol Tambah.
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Total',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
+                    ),
+                  ),
+                  Text(
+                    formatRupiah(unitPrice),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
+                      color: SukaTeaColors.emerald,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
               FilledButton(
                 onPressed: () => Navigator.of(context).pop(
                   ProductSelection(

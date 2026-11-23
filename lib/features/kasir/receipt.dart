@@ -3,6 +3,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
+import '../../core/widgets/screen_title.dart';
 import '../../data/models.dart';
 import 'receipt_pdf.dart';
 
@@ -131,7 +132,7 @@ class DigitalReceiptPage extends StatelessWidget {
     final timeText =
         '${now.day}/${now.month}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     return Scaffold(
-      appBar: AppBar(title: const Text('Struk Digital')),
+      appBar: AppBar(title: const ScreenTitle('Struk Digital')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Card(
@@ -226,7 +227,47 @@ class DigitalReceiptPage extends StatelessWidget {
                 const SizedBox(height: 2),
                 _hairline(),
                 const SizedBox(height: 12),
-                _row('Total', formatRupiah(total), bold: true, size: 18),
+                // TOTAL 17 Bold + pill "LUNAS" emerald di samping label
+                // (FigCraft frame 03, v23): pill solid 56x22, teks
+                // putih 11 Bold; nominal emerald (bukan ink).
+                Row(
+                  children: [
+                    const Text(
+                      'TOTAL',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 17,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      width: 56,
+                      height: 22,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: SukaTeaColors.emerald,
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                      child: const Text(
+                        'LUNAS',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      formatRupiah(total),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 17,
+                        color: SukaTeaColors.emerald,
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 6),
                 _row('Bayar (${method.label})', formatRupiah(paid)),
                 const SizedBox(height: 6),

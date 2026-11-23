@@ -161,7 +161,11 @@ class _PinEntryDialogState extends State<PinEntryDialog> {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
       ),
-      title: Text(_title),
+      // Judul di tengah (FigCraft frame 09).
+      title: Text(
+        _title,
+        textAlign: TextAlign.center,
+      ),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -221,11 +225,34 @@ class _PinEntryDialogState extends State<PinEntryDialog> {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    const Expanded(child: SizedBox.shrink()),
+                    // Lingkaran kosong kiri-bawah (FigCraft frame 09)
+                    // — placeholder visual, tanpa aksi.
+                    Expanded(
+                      child: AspectRatio(
+                        aspectRatio: 1,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: SukaTeaColors.leafBg,
+                            border: Border.all(
+                              color: SukaTeaColors.border,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                     const SizedBox(width: 8),
                     Expanded(child: _keyButton(label: '0', onTap: locked ? null : () => _onDigit('0'))),
                     const SizedBox(width: 8),
-                    Expanded(child: _keyButton(icon: Icons.backspace_outlined, onTap: _onBackspace)),
+                    // Tombol hapus bertuliskan "Hapus" (FigCraft
+                    // frame 09) — bukan ikon backspace.
+                    Expanded(
+                      child: _keyButton(
+                        label: 'Hapus',
+                        labelSize: 14,
+                        onTap: _onBackspace,
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -260,7 +287,7 @@ class _PinEntryDialogState extends State<PinEntryDialog> {
 
   Widget _keyButton({
     String? label,
-    IconData? icon,
+    double labelSize = 22,
     VoidCallback? onTap,
   }) {
     return AspectRatio(
@@ -275,15 +302,13 @@ class _PinEntryDialogState extends State<PinEntryDialog> {
             border: Border.all(color: SukaTeaColors.border),
           ),
           child: Center(
-            child: label != null
-                ? Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  )
-                : Icon(icon, color: SukaTeaColors.ink),
+            child: Text(
+              label ?? '',
+              style: TextStyle(
+                fontSize: labelSize,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
         ),
       ),

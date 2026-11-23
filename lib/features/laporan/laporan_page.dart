@@ -132,6 +132,7 @@ class _LaporanPageState extends State<LaporanPage> {
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
                 labelText: 'Hitung kas tunai di laci (Rp)',
+                hintText: 'Masukkan hasil hitungan…',
               ),
             ),
             const SizedBox(height: 12),
@@ -157,36 +158,47 @@ class _LaporanPageState extends State<LaporanPage> {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: FilledButton.icon(
-                    onPressed: () async {
-                      final ok =
-                          await exportShiftToSheets(shiftId: 'demo-shift');
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(ok
-                              ? 'Export Sheets terkirim.'
-                              : 'Export Sheets belum tersedia (Supabase/secret belum dikonfigurasi).'),
+                  child: FilledButton(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const RiwayatPage(),
                         ),
                       );
                     },
-                    icon: const Icon(Icons.table_chart),
-                    label: const Text('Export Sheets'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 56),
+                    ),
+                    child: const Text('Lihat Riwayat'),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const RiwayatPage()),
-                );
-              },
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(0, 56),
+            // Export Sheets bukan bagian frame FigCraft 07, tapi
+            // fungsinya dipertahankan (bukan dihapus): tombol
+            // outline full-width di bawah baris utama.
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final ok =
+                      await exportShiftToSheets(shiftId: 'demo-shift');
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(ok
+                          ? 'Export Sheets terkirim.'
+                          : 'Export Sheets belum tersedia (Supabase/secret belum dikonfigurasi).'),
+                    ),
+                  );
+                },
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 56),
+                ),
+                icon: const Icon(Icons.table_chart),
+                label: const Text('Export Sheets'),
               ),
-              child: const Text('Lihat Riwayat'),
             ),
             if (_selisih != null)
               Padding(

@@ -8,6 +8,12 @@ class SukaTeaColors {
   static const Color emerald = Color(0xFF0A9B6C);
   static const Color emeraldDark = Color(0xFF067A55);
   static const Color emeraldSoft = Color(0xFFE3F5EE);
+  // FigCraft v23/v26: tint sangat muda untuk baris terpilih (payment
+  // sheet) + pill tab aktif navbar; tile ikon cara bayar; bg tombol ×.
+  static const Color tint = Color(0xFFEAF6EF);
+  static const Color mint = Color(0xFFD9EFE4);
+  static const Color deleteBg = Color(0xFFFCECEC);
+  static const Color pillAmberBg = Color(0xFFFDF3E0);
   static const Color lime = Color(0xFFA3E635);
   static const Color leafBg = Color(0xFFF2F7F2);
   static const Color card = Colors.white;

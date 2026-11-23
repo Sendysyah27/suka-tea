@@ -193,6 +193,8 @@ class _StokPageState extends State<StokPage> {
           ? FloatingActionButton(
               onPressed: _addStock,
               tooltip: 'Tambah bahan baru',
+              backgroundColor: SukaTeaColors.emerald,
+              foregroundColor: Colors.white,
               child: const Icon(Icons.add),
             )
           : null,
@@ -268,14 +270,15 @@ class _StokPageState extends State<StokPage> {
                               child: Text(
                                 item.name,
                                 style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
                             Chip(
                               label: Text(item.isLow ? 'Menipis' : 'Aman'),
                               backgroundColor: item.isLow
-                                  ? const Color(0xFFFDF3E0)
+                                  ? SukaTeaColors.pillAmberBg
                                   : SukaTeaColors.emeraldSoft,
                               labelStyle: TextStyle(
                                 color: item.isLow

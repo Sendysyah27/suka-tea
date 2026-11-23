@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/screen_title.dart';
 import '../../data/supabase_client.dart';
 import 'pin_dialog.dart';
 import 'pin_service.dart';
@@ -54,7 +55,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final supabaseOn = SupabaseService.instance.isConfigured;
     return Scaffold(
-      appBar: AppBar(title: const Text('Pengaturan')),
+      appBar: AppBar(title: const ScreenTitle('Pengaturan')),
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [

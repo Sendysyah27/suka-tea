@@ -357,54 +357,59 @@ class _KatalogPageState extends State<KatalogPage> {
                 itemCount: products.length + 1,
                 itemBuilder: (context, index) {
                   if (index == 0) {
+                    // Header "Kelola Menu" + tombol "+ Tambah menu"
+                    // full-width 56px di bawahnya (FigCraft frame 04).
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 12),
-                      child: Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Row(
-                            children: [
-                              const Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Kelola Menu',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: 18,
-                                      ),
-                                    ),
-                                    SizedBox(height: 4),
-                                    Text(
-                                      'Nama, kategori, harga, dan foto di-custom di sini. '
-                                      'Perubahan langsung tampil di Kasir dan tersimpan.',
-                                      style: TextStyle(
-                                        color: SukaTeaColors.muted,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (_canEdit)
-                                FilledButton.icon(
-                                  onPressed: _addProduct,
-                                  icon: SvgPicture.asset(
-                                    AppIcons.tambah,
-                                    width: 20,
-                                    height: 20,
-                                    colorFilter: const ColorFilter.mode(
-                                      Colors.white,
-                                      BlendMode.srcIn,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Card(
+                            child: Padding(
+                              padding: EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Kelola Menu',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 18,
                                     ),
                                   ),
-                                  label: const Text('Tambah'),
-                                )
-                              else
-                                const Chip(label: Text('Kasir: lihat saja')),
-                            ],
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'Nama, kategori, harga, dan foto di-custom di sini. '
+                                    'Perubahan langsung tampil di Kasir dan tersimpan.',
+                                    style: TextStyle(
+                                      color: SukaTeaColors.muted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
+                          const SizedBox(height: 12),
+                          if (_canEdit)
+                            FilledButton.icon(
+                              onPressed: _addProduct,
+                              style: FilledButton.styleFrom(
+                                minimumSize: const Size(0, 56),
+                              ),
+                              icon: SvgPicture.asset(
+                                AppIcons.tambah,
+                                width: 20,
+                                height: 20,
+                                colorFilter: const ColorFilter.mode(
+                                  Colors.white,
+                                  BlendMode.srcIn,
+                                ),
+                              ),
+                              label: const Text('+ Tambah menu'),
+                            )
+                          else
+                            const Chip(label: Text('Kasir: lihat saja')),
+                        ],
                       ),
                     );
                   }
@@ -416,11 +421,12 @@ class _KatalogPageState extends State<KatalogPage> {
                         children: [
                           InkWell(
                             onTap: _canEdit ? () => _changePhoto(p) : null,
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(12),
                             child: ProductPhoto(
                               photoUrl: p.photoUrl,
-                              width: 56,
-                              height: 56,
+                              width: 48,
+                              height: 48,
+                              borderRadius: 12,
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -431,15 +437,19 @@ class _KatalogPageState extends State<KatalogPage> {
                                 Text(
                                   p.name,
                                   style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
                                   ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
-                                  '${p.category} • ${formatRupiah(p.variants.first.price)} / '
+                                  '${formatRupiah(p.variants.first.price)} / '
                                   '${formatRupiah(p.variants.last.price)}'
                                   '${p.isActive ? '' : ' • Habis'}',
                                   style: TextStyle(
+                                    fontSize: 12,
                                     color: p.isActive
                                         ? SukaTeaColors.muted
                                         : SukaTeaColors.danger,
@@ -448,45 +458,79 @@ class _KatalogPageState extends State<KatalogPage> {
                               ],
                             ),
                           ),
-                          IconButton(
-                            tooltip: p.isActive
-                                ? 'Tandai habis'
-                                : 'Tandai aktif lagi',
-                            icon: Icon(
-                              p.isActive
-                                  ? Icons.visibility
-                                  : Icons.visibility_off,
+                          const SizedBox(width: 8),
+                          // Pill "Resep" outline 64x32 (FigCraft 04).
+                          InkWell(
+                            onTap: _canEdit ? () => _openResep(p) : null,
+                            borderRadius: BorderRadius.circular(16),
+                            child: Container(
+                              width: 64,
+                              height: 32,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: SukaTeaColors.emerald,
+                                ),
+                              ),
+                              child: const Text(
+                                'Resep',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: SukaTeaColors.emerald,
+                                ),
+                              ),
                             ),
-                            onPressed: _canEdit
-                                ? () => MenuService.instance.setActive(
-                                      p.id,
-                                      !p.isActive,
-                                    )
-                                : null,
                           ),
-                          IconButton(
-                            tooltip: 'Resep bahan per cup',
-                            icon: const Icon(Icons.menu_book),
-                            onPressed:
-                                _canEdit ? () => _openResep(p) : null,
+                          const SizedBox(width: 4),
+                          // Toggle Aktif/Habis (FigCraft 04: 44x24).
+                          // Switch bawaan ~59px lebar — diskala 0.8
+                          // (~47px) supaya muat di baris tanpa
+                          // mengorbankan kolom nama.
+                          Transform.scale(
+                            scale: 0.8,
+                            child: Switch(
+                              value: p.isActive,
+                              onChanged: _canEdit
+                                  ? (v) => MenuService.instance.setActive(
+                                        p.id,
+                                        v,
+                                      )
+                                  : null,
+                            ),
                           ),
-                          IconButton(
-                            tooltip: 'Ganti foto produk',
-                            icon: const Icon(Icons.photo_camera),
-                            onPressed:
-                                _canEdit ? () => _changePhoto(p) : null,
-                          ),
-                          IconButton(
-                            tooltip: 'Ubah nama / kategori / harga',
-                            icon: const Icon(Icons.edit),
-                            onPressed:
-                                _canEdit ? () => _editProduct(p) : null,
-                          ),
-                          IconButton(
-                            tooltip: 'Hapus produk',
-                            icon: const Icon(Icons.delete),
-                            onPressed:
-                                _canEdit ? () => _deleteProduct(p) : null,
+                          // Aksi lain (Ubah / Ganti foto / Hapus) di
+                          // menu ⋮ — 5 IconButton berjejer membuat
+                          // kolom nama terjepit di layar 390dp.
+                          PopupMenuButton<String>(
+                            tooltip: 'Aksi lainnya',
+                            enabled: _canEdit,
+                            icon: const Icon(Icons.more_vert),
+                            onSelected: (value) {
+                              switch (value) {
+                                case 'edit':
+                                  _editProduct(p);
+                                case 'photo':
+                                  _changePhoto(p);
+                                case 'delete':
+                                  _deleteProduct(p);
+                              }
+                            },
+                            itemBuilder: (context) => [
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: Text('Ubah nama / kategori / harga'),
+                              ),
+                              const PopupMenuItem(
+                                value: 'photo',
+                                child: Text('Ganti foto produk'),
+                              ),
+                              const PopupMenuItem(
+                                value: 'delete',
+                                child: Text('Hapus produk'),
+                              ),
+                            ],
                           ),
                         ],
                       ),

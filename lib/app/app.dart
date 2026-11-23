@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../core/theme/app_icons.dart';
 import '../core/theme/app_theme.dart';
 import '../core/utils/roles.dart';
+import '../core/widgets/screen_title.dart';
 import '../features/kasir/kasir_page.dart';
 import '../features/katalog/katalog_page.dart';
 import '../features/keuangan/keuangan_page.dart';
@@ -81,7 +82,8 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_titles[_index]),
+        // Judul + underline emerald (FigCraft title_block, v23).
+        title: ScreenTitle(_titles[_index]),
         actions: [
           IconButton(
             tooltip: 'Pengaturan',
@@ -104,7 +106,16 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: ChoiceChip(
-              label: Text(_role == AppRole.owner ? 'Owner' : 'Kasir'),
+              // FigCraft frame 01: tombol Owner 74x32 r16 emerald,
+              // label putih 13 SemiBold (bukan label ink dari chipTheme).
+              label: Text(
+                _role == AppRole.owner ? 'Owner' : 'Kasir',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
               selected: true,
               onSelected: (_) async {
                 if (_role == AppRole.owner) {
@@ -120,44 +131,81 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
         ],
       ),
       body: _pages[_index],
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _index,
-        onTap: (i) => setState(() => _index = i),
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: SukaTeaColors.emerald,
-        unselectedItemColor: SukaTeaColors.muted,
-        items: [
-          _item(AppIcons.kasir, 'Kasir'),
-          _item(AppIcons.menu, 'Menu'),
-          _item(AppIcons.stok, 'Stok'),
-          _item(AppIcons.keuangan, 'Keuangan'),
-          _item(AppIcons.laporan, 'Laporan'),
-        ],
+      // Navbar 2026 (FigCraft v26): bar putih 63px + hairline di atas,
+      // 5 tab ikon garis Lucide 24px + label 11px. Tab aktif: pill
+      // tint #EAF6EF 48x32 r16 di belakang ikon + ikon/label emerald
+      // SemiBold; nonaktif: ikon/label muted Medium. BottomNavigationBar
+      // bawaan tidak bisa memberi pill di belakang ikon aktif, jadi
+      // nav kustom (Row + InkWell).
+      // SafeArea di LUAR Container: bar tetap 63px persis, inset gesture
+      // HP (bilah navigasi) jadi padding di bawah bar, bukan memotong
+      // isi tab (SafeArea di dalam Container 63px bisa overflow 2px
+      // bila inset > 14dp).
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Container(
+          height: 63,
+          decoration: const BoxDecoration(
+            color: SukaTeaColors.card,
+            border: Border(top: BorderSide(color: SukaTeaColors.border)),
+          ),
+          child: Row(
+            children: [
+              _navTab(AppIcons.navKasir, 'Kasir', 0),
+              _navTab(AppIcons.navMenu, 'Menu', 1),
+              _navTab(AppIcons.navStok, 'Stok', 2),
+              _navTab(AppIcons.navKeuangan, 'Keuangan', 3),
+              _navTab(AppIcons.navLaporan, 'Laporan', 4),
+            ],
+          ),
+        ),
       ),
     );
   }
 
-  BottomNavigationBarItem _item(String asset, String label) {
-    return BottomNavigationBarItem(
-      icon: SvgPicture.asset(
-        asset,
-        width: 24,
-        height: 24,
-        colorFilter: const ColorFilter.mode(
-          SukaTeaColors.muted,
-          BlendMode.srcIn,
+  Widget _navTab(String asset, String label, int index) {
+    final active = _index == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () => setState(() => _index = index),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 48,
+              height: 32,
+              decoration: BoxDecoration(
+                color:
+                    active ? SukaTeaColors.tint : Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Center(
+                child: SvgPicture.asset(
+                  asset,
+                  width: 24,
+                  height: 24,
+                  colorFilter: ColorFilter.mode(
+                    active ? SukaTeaColors.emerald : SukaTeaColors.muted,
+                    BlendMode.srcIn,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight:
+                    active ? FontWeight.w600 : FontWeight.w500,
+                color: active
+                    ? SukaTeaColors.emerald
+                    : SukaTeaColors.muted,
+              ),
+            ),
+          ],
         ),
       ),
-      activeIcon: SvgPicture.asset(
-        asset,
-        width: 24,
-        height: 24,
-        colorFilter: const ColorFilter.mode(
-          SukaTeaColors.emerald,
-          BlendMode.srcIn,
-        ),
-      ),
-      label: label,
     );
   }
 }

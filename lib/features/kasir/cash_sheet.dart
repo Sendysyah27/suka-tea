@@ -40,6 +40,18 @@ Future<int?> showCashReceivedSheet(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // Drag handle 30x4 (FigCraft frame 11).
+              Center(
+                child: Container(
+                  width: 30,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFC9D6CE),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               const Text(
                 'Uang diterima',
                 style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
@@ -96,7 +108,7 @@ Future<int?> showCashReceivedSheet(
                       fontSize: 18,
                       color: change < 0
                           ? SukaTeaColors.danger
-                          : SukaTeaColors.emeraldDark,
+                          : SukaTeaColors.emerald,
                     ),
                   ),
                 ],

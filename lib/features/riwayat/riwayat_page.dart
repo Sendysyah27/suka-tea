@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
+import '../../core/widgets/screen_title.dart';
 import '../../data/models.dart';
 import '../../data/sale_history.dart';
 import '../kasir/receipt.dart';
@@ -21,7 +22,7 @@ class RiwayatPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Riwayat Transaksi')),
+      appBar: AppBar(title: const ScreenTitle('Riwayat Transaksi')),
       body: ListenableBuilder(
         listenable: SaleHistoryService.instance,
         builder: (context, _) {
@@ -87,7 +88,24 @@ class RiwayatPage extends StatelessWidget {
                                 ),
                               ),
                             ),
-                            Chip(label: Text(sale.method.label)),
+                            // Pill metode outline (FigCraft frame 08)
+                            // — bukan Chip tinted.
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                  color: SukaTeaColors.border,
+                                ),
+                              ),
+                              child: Text(
+                                sale.method.label,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
                           ],
                         ),
                         const SizedBox(height: 4),
@@ -114,6 +132,7 @@ class RiwayatPage extends StatelessWidget {
                               style: const TextStyle(
                                 fontWeight: FontWeight.w800,
                                 fontSize: 16,
+                                color: SukaTeaColors.emerald,
                               ),
                             ),
                           ],
