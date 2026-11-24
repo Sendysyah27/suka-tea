@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/theme/app_theme.dart';
-import '../../core/utils/cash.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/utils/split_payment.dart';
@@ -13,9 +12,11 @@ import 'qris_service.dart';
 import 'qris_settings_page.dart';
 import 'qris_settings_service.dart';
 
-/// Layar Bayar QRIS — generate QR dinamis dengan nominal custom.
+/// Layar Bayar QRIS — generate QR dinamis.
 ///
-/// Nominal default = total keranjang, bisa diedit manual atau pakai preset.
+/// Mode FULL (default): nominal QRIS DIKUNCI = total keranjang, kasir
+/// TIDAK BISA mengubah nominal (Sendy 24 Nov 2026 — rawan disalahgunakan
+/// kasir). Tidak ada field custom, preset, atau bulatkan di mode ini.
 /// QR berlaku 5 menit (timer). Konfirmasi bayar masih MANUAL di MVP:
 /// kasir mengecek mutasi/rekening dulu, baru tap "Sudah Dibayar".
 /// Page ini mengembalikan nominal yang dibayar (int) atau null bila batal.
@@ -48,7 +49,6 @@ class QrisPayPage extends StatefulWidget {
 class _QrisPayPageState extends State<QrisPayPage> {
   late final TextEditingController _nominalController;
   late int _nominal;
-  late final int _roundedUp;
 
   String? _payload;
   String? _merchantName;
@@ -61,13 +61,12 @@ class _QrisPayPageState extends State<QrisPayPage> {
     super.initState();
     // Mode split: nominal awal = bagian QRIS default (di bawah total),
     // bukan total — total bukan nilai split yang valid.
+    // Mode full: nominal DIKUNCI = total, tidak ada jalan mengubahnya
+    // (field custom + preset + bulatkan tidak dirender — lihat build).
     _nominal = widget.splitMode
         ? defaultSplitQrisAmount(widget.total)
         : widget.total;
     _nominalController = TextEditingController(text: _nominal.toString());
-    // Pembulatan ke Rp500 (dulu Rp1.000).
-    final rounded = roundUpTo500(widget.total);
-    _roundedUp = rounded;
     _merchantName = QrisSettingsService.instance.merchantName;
   }
 
@@ -107,6 +106,16 @@ class _QrisPayPageState extends State<QrisPayPage> {
   }
 
   void _generate() {
+    // Validasi split dipegang DI SINI juga, bukan cuma di tombol
+    // (tombol nonaktif saat error) — supaya tidak ada jalur apa pun
+    // (ketik, preset) yang bisa generate QR bagian >= total.
+    final splitError = _splitError;
+    if (splitError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(splitError)),
+      );
+      return;
+    }
     final payload = _merchantPayload;
     if (payload == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -227,26 +236,41 @@ class _QrisPayPageState extends State<QrisPayPage> {
               ),
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _nominalController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Nominal custom (Rp)',
-                border: OutlineInputBorder(),
+            // Mode FULL: nominal DIKUNCI = total keranjang. Tidak ada
+            // field custom / preset / bulatkan — kasir tidak bisa
+            // generate QR dengan nominal lain (Sendy 24 Nov 2026).
+            if (!widget.splitMode) ...[
+              const Text(
+                'Nominal QRIS = total keranjang — tidak bisa diubah.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: SukaTeaColors.muted),
               ),
-              onChanged: (text) {
-                final value = int.tryParse(text.replaceAll(RegExp(r'[^0-9]'), ''));
-                if (value != null && value > 0) {
-                  setState(() {
-                    _nominal = value;
-                    _payload = null;
-                    _timer?.cancel();
-                  });
-                }
-              },
-            ),
-            const SizedBox(height: 8),
+              const SizedBox(height: 12),
+            ],
+            // Mode SPLIT: nominal bagian QRIS BOLEH diatur custom
+            // (min Rp1.000, harus kurang dari total — lihat
+            // split_payment.dart). Semua kontrol tetap seperti dulu.
             if (widget.splitMode) ...[
+              TextField(
+                controller: _nominalController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Nominal custom (Rp)',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (text) {
+                  final value =
+                      int.tryParse(text.replaceAll(RegExp(r'[^0-9]'), ''));
+                  if (value != null && value > 0) {
+                    setState(() {
+                      _nominal = value;
+                      _payload = null;
+                      _timer?.cancel();
+                    });
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
               const Text(
                 'Bagian QRIS — sisanya dibayar tunai.',
                 style: TextStyle(color: SukaTeaColors.muted),
@@ -263,38 +287,19 @@ class _QrisPayPageState extends State<QrisPayPage> {
                 ),
               ),
               const SizedBox(height: 8),
-            ],
-            // Chip "Total" + "Bulatkan" (>= total) tidak ada artinya
-            // di mode split — bagian QRIS harus kurang dari total.
-            if (!widget.splitMode)
               Wrap(
                 spacing: 8,
                 children: [
-                  ChoiceChip(
-                    label: Text('Total ${formatRupiah(widget.total)}'),
-                    selected: _nominal == widget.total,
-                    onSelected: (_) => _setNominal(widget.total),
-                  ),
-                  ChoiceChip(
-                    label: Text('Bulatkan ${formatRupiah(_roundedUp)}'),
-                    selected: _nominal == _roundedUp,
-                    onSelected: (_) => _setNominal(_roundedUp),
-                  ),
+                  for (final preset in [5000, 10000, 20000, 50000, 100000])
+                    ChoiceChip(
+                      label: Text(formatRupiah(preset)),
+                      selected: _nominal == preset,
+                      onSelected: (_) => _setNominal(preset),
+                    ),
                 ],
               ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final preset in [5000, 10000, 20000, 50000, 100000])
-                  ChoiceChip(
-                    label: Text(formatRupiah(preset)),
-                    selected: _nominal == preset,
-                    onSelected: (_) => _setNominal(preset),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 12),
+            ],
             FilledButton.icon(
               onPressed: _splitError != null ? null : _generate,
               icon: const Icon(Icons.qr_code),

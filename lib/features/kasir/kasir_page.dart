@@ -311,12 +311,11 @@ class _KasirPageState extends State<KasirPage> {
         return;
       }
       if (_method == PaymentMethod.qris) {
-        // QRIS dinamis: nominal bisa di-custom di layar QRIS, konfirmasi
-        // bayar manual oleh kasir (cek mutasi dulu).
+        // QRIS dinamis: nominal DIKUNCI = total keranjang (Sendy
+        // 24 Nov 2026 — kasir tidak boleh custom nominal di QRIS full).
+        // Konfirmasi bayar manual oleh kasir (cek mutasi dulu).
         // Total penjualan = total keranjang SESUDAH diskon; paid =
-        // nominal QRIS yang dibayar (bisa beda karena custom/bulatkan)
-        // — selisihnya tercatat sebagai kembalian, omzet tidak ikut
-        // membengkak.
+        // nominal QRIS yang dibayar = total (tidak ada selisih).
         final items = List<CartItem>.from(_cart);
         final total = _total;
         final discount = _discount;
