@@ -4,12 +4,14 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'local/app_database.dart';
+import 'local/app_database.dart' hide Expense;
 import 'local/outbox_service.dart';
 import 'cash_shift_service.dart';
+import 'expense_service.dart';
 import 'models.dart';
 import 'outlet_service.dart';
 import 'sale_history.dart';
+import 'stock_service.dart';
 import 'supabase_client.dart';
 import 'sync_payload.dart';
 
@@ -176,39 +178,71 @@ Map<String, dynamic> _normalizeEntry(
 /// - Tanpa Supabase terkonfigurasi, semua sync dilewati diam-diam
 ///   (mode offline) tapi hitungan pending tetap diperbarui untuk UI.
 /// - Batch C8.2 WS6: timer berkala juga menarik shift terbuka gerai
-///   ini ([refreshShifts]) supaya gate POS di device lain tahu shift
-///   sudah dibuka; push shift yang kalah dedupe server diadopsi
-///   (lihat CashShiftService.adoptServerShift).
+///   ini supaya gate POS di device lain tahu shift sudah dibuka;
+///   push shift yang kalah dedupe server diadopsi (lihat
+///   CashShiftService.adoptServerShift). Batch C9: [refreshShifts]
+///   = alias [refreshSales] (pull lengkap).
+/// - Batch C9: timer jadi 10 DETIK dan menarik SEMUA data gerai
+///   ([refreshSales] — penjualan + pengeluaran + stok + shift
+///   terbuka/tutup + mutasi) supaya HP lain melihat perubahan
+///   dalam hitungan detik, bukan menit. Satu pull per tick
+///   (guard [_pullingSales]).
 class SyncService extends ChangeNotifier {
-  SyncService._({SyncTransport? transport, OutboxService? outbox})
-      : _transport = transport ?? _defaultTransport,
-        _outbox = outbox ?? OutboxService.instance;
+  SyncService._({
+    SyncTransport? transport,
+    OutboxService? outbox,
+    bool? configured,
+  })  : _transport = transport ?? _defaultTransport,
+        _outbox = outbox ?? OutboxService.instance,
+        _configuredOverride = configured;
 
   static final SyncService instance = SyncService._();
 
   /// Instance terpisah buat test (transport palsu, tanpa Supabase).
+  /// [configured] = paksa [isConfigured] (test: Supabase tidak
+  /// terkonfigurasi di test env, jadi tanpa seam ini refreshSales
+  /// selalu no-op).
   static SyncService createForTest({
     required SyncTransport transport,
     OutboxService? outbox,
+    bool? configured,
   }) =>
-      SyncService._(transport: transport, outbox: outbox);
+      SyncService._(
+        transport: transport,
+        outbox: outbox,
+        configured: configured,
+      );
 
   final SyncTransport _transport;
   final OutboxService _outbox;
+  final bool? _configuredOverride;
 
   Timer? _timer;
   bool _syncing = false;
+  bool _pullingSales = false;
   int _pendingCount = 0;
   DateTime? _lastSyncAt;
+  DateTime? _lastPullAt;
   String? _lastError;
 
-  bool get isConfigured => SupabaseService.instance.isConfigured;
+  /// Mutasi stok terakhir hasil pull + mutasi lokal pending (untuk
+  /// riwayat keluar-masuk barang di tab Stok, Batch C9 WS6).
+  /// Terbaru dulu. Kosong = belum pernah pull berhasil.
+  List<StockMovement> _lastMovements = [];
+
+  List<StockMovement> get lastMovements => List.unmodifiable(_lastMovements);
+
+  bool get isConfigured =>
+      _configuredOverride ?? SupabaseService.instance.isConfigured;
   bool get isSyncing => _syncing;
 
   /// Jumlah antrean belum terkirim (cache lokal — untuk indikator UI).
   int get pendingCount => _pendingCount;
 
   DateTime? get lastSyncAt => _lastSyncAt;
+
+  /// Waktu pull terakhir yang berhasil (null = belum pernah).
+  DateTime? get lastPullAt => _lastPullAt;
   String? get lastError => _lastError;
 
   static Future<Map<String, dynamic>> _defaultTransport(
@@ -242,19 +276,22 @@ class SyncService extends ChangeNotifier {
   }
 
   /// Mulai sync: sekali jalan saat app start + retry berkala tiap
-  /// 60 dtk. Aman dipanggil berkali-kali (timer hanya dibuat sekali).
-  /// Timer juga menarik shift terbuka gerai ini (Batch C8.2 WS6)
-  /// supaya gate POS tahu shift sudah dibuka di device lain.
-  void start() {
+  /// 10 DETIK (Batch C9 — sebelumnya 60 detik, terlalu lambat untuk
+  /// "sinkronisasi realtime"). Aman dipanggil berkali-kali (timer
+  /// hanya dibuat sekali). Tiap tick: kirim antrean pending
+  /// ([syncNow]) + tarik semua data gerai ([refreshSales] — satu
+  /// pull per tick, guard di refreshSales). [period] default 10 detik;
+  /// test boleh memendekkannya (produksi SELALU pakai default).
+  void start({Duration period = const Duration(seconds: 10)}) {
     _timer ??= Timer.periodic(
-      const Duration(seconds: 60),
+      period,
       (_) {
         unawaited(syncNow());
-        unawaited(refreshShifts());
+        unawaited(refreshSales());
       },
     );
     unawaited(syncNow());
-    unawaited(refreshShifts());
+    unawaited(refreshSales());
   }
 
   /// Hentikan timer berkala (dipakai test).
@@ -323,12 +360,18 @@ class SyncService extends ChangeNotifier {
   /// tanggal (zona lokal) untuk transaksi; server memotong hari
   /// dalam WIB. Stok = level gerai yang diminta (Batch C8.2 WS5);
   /// shift = shift TERBUKA gerai itu (Batch C8.2 WS6, untuk gate
-  /// POS antar device). Throw bila Supabase belum dikonfigurasi /
+  /// POS antar device). Batch C9: + [expenses] (pengeluaran gerai
+  /// itu), [closedShifts] (shift yang sudah ditutup di jendela),
+  /// [movements] (mutasi stok gerai itu di jendela — riwayat
+  /// keluar-masuk barang). Throw bila Supabase belum dikonfigurasi /
   /// jawaban server tidak valid.
   Future<({
     List<SaleRecord> sales,
     List<StockItem> stock,
     List<ShiftSummary> shifts,
+    List<Expense> expenses,
+    List<ShiftSummary> closedShifts,
+    List<StockMovement> movements,
   })> pullOutlet({
     required String outletId,
     required DateTime from,
@@ -365,31 +408,138 @@ class SyncService extends ChangeNotifier {
           ),
         )
         .toList();
-    return (sales: sales, stock: stock, shifts: parsed.shifts);
+    final expenses =
+        parsed.expenses.map(Expense.fromServer).toList();
+    return (
+      sales: sales,
+      stock: stock,
+      shifts: parsed.shifts,
+      expenses: expenses,
+      closedShifts: parsed.closedShifts,
+      movements: parsed.movements,
+    );
   }
 
-  /// Tarik shift terbuka gerai ini dari server + adopsi bila perlu
-  /// (Batch C8.2 WS6 — visibilitas antar device). Dipanggil saat
-  /// login/app start + berkala tiap 60 dtk (lihat start()). No-op
-  /// bila offline / gagal (gate memakai data lokal terakhir).
-  /// Tidak pernah throw.
-  Future<void> refreshShifts({String? outletId}) async {
+  /// Tarik SEMUA data gerai ini dari server + gabungkan ke data
+  /// lokal (Batch C9 — jantung sinkronisasi realtime):
+  /// penjualan -> SaleHistory (merge, void sticky),
+  /// pengeluaran -> ExpenseService (merge, hapus yang dihapus
+  /// server), stok -> StockLevels (merge, qty delta-driven),
+  /// shift terbuka -> adopsi bila perlu, shift tutup -> riwayat,
+  /// mutasi -> [_lastMovements] (riwayat keluar-masuk barang).
+  /// Satu pull per tick (guard [_pullingSales] — pemanggilan
+  /// bersamaan, mis. timer + tombol refresh, tidak dobel pull).
+  /// Dipanggil saat app start, login/restore, buka Laporan/Riwayat,
+  /// tombol refresh manual, + tiap 10 detik (lihat [start]).
+  /// No-op bila offline / sedang pull / gagal. Tidak pernah throw.
+  Future<void> refreshSales({String? outletId}) async {
+    if (_pullingSales) return;
     if (!isConfigured) return;
     final outlet = outletId ?? OutletService.instance.currentOutletId;
+    _pullingSales = true;
     try {
       final now = DateTime.now();
+      final from = now.subtract(const Duration(days: 30));
       final pulled = await pullOutlet(
         outletId: outlet,
-        from: now.subtract(const Duration(days: 30)),
+        from: from,
         to: now,
+      );
+      await SaleHistoryService.instance.mergePulledSales(
+        pulled.sales,
+        outletId: outlet,
+      );
+      await ExpenseService.instance.mergePulledExpenses(
+        pulled.expenses,
+        outletId: outlet,
+        from: from,
+        to: now,
+      );
+      await StockService.instance.mergePulledStock(
+        outlet,
+        pulled.stock,
       );
       await CashShiftService.instance.applyPulledShifts(
         outletId: outlet,
         serverOpens: pulled.shifts,
       );
+      await CashShiftService.instance.applyPulledClosedShifts(
+        outlet,
+        pulled.closedShifts,
+      );
+      // Mutasi: server (30 hari) + lokal pending (belum terkirim) —
+      // dedupe kunci clientUuid+nama (satu event bisa multi-bahan).
+      final pending = await _pendingMovements(outlet);
+      final seen = <String>{};
+      final merged = <StockMovement>[];
+      for (final m in [...pending, ...pulled.movements]) {
+        if (seen.add('${m.clientUuid}|${m.name}')) merged.add(m);
+      }
+      merged.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      _lastMovements = merged;
+      _lastPullAt = DateTime.now();
+      notifyListeners();
     } catch (e) {
-      debugPrint('Refresh shift gagal: $e');
+      debugPrint('Refresh penjualan gagal: $e');
+    } finally {
+      _pullingSales = false;
     }
+  }
+
+  /// Mutasi stok lokal yang masih pending di outbox (belum terkirim)
+  /// — tampil di riwayat keluar-masuk barang dengan label
+  /// 'menunggu kirim' sampai server mengonfirmasi.
+  Future<List<StockMovement>> _pendingMovements(String outletId) async {
+    final list = <StockMovement>[];
+    try {
+      final pending = await _outbox.pendingEntries();
+      for (final entry in pending) {
+        if (entry.kind != 'stock_movement') continue;
+        final raw = jsonDecode(entry.payload);
+        if (raw is! Map) continue;
+        final outlet = raw['outlet_id'];
+        if (outlet is String && outlet.isNotEmpty && outlet != outletId) {
+          continue;
+        }
+        final clientUuid = raw['client_uuid'];
+        if (clientUuid is! String || clientUuid.isEmpty) continue;
+        final items = raw['items'];
+        if (items is! List) continue;
+        final reason = raw['reason'];
+        for (final it in items) {
+          if (it is! Map) continue;
+          final name = it['name'];
+          final delta = it['delta'];
+          if (name is! String || name.isEmpty) continue;
+          if (delta is! num) continue;
+          list.add((
+            clientUuid: clientUuid,
+            outletId: outletId,
+            name: name,
+            qtyDelta: delta.toDouble(),
+            reason:
+                reason is String && reason.isNotEmpty ? reason : 'penjualan',
+            createdAt: entry.createdAt,
+            pending: true,
+          ));
+        }
+      }
+    } catch (e) {
+      debugPrint('Baca mutasi pending gagal: $e');
+    }
+    return list;
+  }
+
+  /// Tarik shift terbuka gerai ini dari server + adopsi bila perlu
+  /// (Batch C8.2 WS6 — visibilitas antar device). Batch C9: alias
+  /// ke [refreshSales] (pull lengkap — penjualan + pengeluaran +
+  /// stok + shift) supaya semua pemanggil lama (login/restore,
+  /// gate POS, Laporan) ikut mendapat data yang digabung, bukan
+  /// cuma shift. Dipanggil saat login/app start + berkala
+  /// (lihat start()). No-op bila offline / gagal (gate memakai
+  /// data lokal terakhir). Tidak pernah throw.
+  Future<void> refreshShifts({String? outletId}) async {
+    await refreshSales(outletId: outletId);
   }
 
   /// Expected kas dari SERVER (Batch C8.2 WS6): cash_in (semua
@@ -408,8 +558,10 @@ class SyncService extends ChangeNotifier {
       final res = await _transport({
         'action': 'shift_expected',
         'outlet_id': outletId,
-        'from': from.toIso8601String(),
-        'to': to.toIso8601String(),
+        // Batch C9: kirim UTC (...Z) — string lokal tanpa offset
+        // dibaca server sebagai +00 (bug jam +7 jam).
+        'from': toUtcIsoString(from),
+        'to': toUtcIsoString(to),
       });
       return parseShiftExpectedResponse(res);
     } catch (e) {

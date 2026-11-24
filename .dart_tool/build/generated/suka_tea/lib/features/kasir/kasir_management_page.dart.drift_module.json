@@ -1,0 +1,13 @@
+{
+  "elements": {},
+  "imports": [
+    "package:flutter/material.dart",
+    "package:flutter/services.dart",
+    "package:suka_tea/core/theme/app_theme.dart",
+    "package:suka_tea/core/widgets/screen_title.dart",
+    "package:suka_tea/core/widgets/tap_feedback.dart",
+    "package:suka_tea/features/pin/pin_dialog.dart",
+    "package:suka_tea/features/pin/pin_service.dart",
+    "package:suka_tea/features/kasir/cashier_service.dart"
+  ]
+}

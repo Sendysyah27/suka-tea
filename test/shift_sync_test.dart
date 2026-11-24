@@ -25,6 +25,9 @@ void main() {
         closedAt: null,
         closedByCashierId: '',
         closedByCashierName: '',
+        countedCash: null,
+        expectedCash: null,
+        difference: null,
       );
 
   group('parseShiftSummaries', () {

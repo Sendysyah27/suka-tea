@@ -733,7 +733,7 @@ class _KasirPageState extends State<KasirPage> {
         // Owner tidak kena gate. Shift yang dibuka kasir mana pun
         // berlaku untuk semua kasir gerai itu (SATU shift per gerai,
         // laci satu) — termasuk yang dibuka di device lain (ditarik
-        // berkala via refreshShifts + tombol "Periksa lagi").
+        // berkala via refreshSales + tombol "Periksa lagi").
         if (widget.role == AppRole.kasir &&
             CashShiftService.instance.openShift == null) {
           return const _ShiftGateScreen();

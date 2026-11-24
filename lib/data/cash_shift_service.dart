@@ -379,6 +379,100 @@ class CashShiftService extends ChangeNotifier {
     }
   }
 
+  /// Terapkan shift yang SUDAH DITUTUP dari server sesudah pull
+  /// (Batch C9 — riwayat shift antar device). Aturan:
+  /// - shift tutup yang id-nya sudah ada lokal dan masih OPEN ->
+  ///   ganti jadi versi tutupnya (penutup + hitungan laci ikut).
+  /// - shift tutup yang id-nya belum ada lokal -> sisipkan (tanpa
+  ///   antre outbox — sudah ada di server).
+  /// - shift lokal yang sudah tutup -> TIDAK di-overwrite (angka
+  ///   tutup lokal — counted/expected/difference — bisa lebih baru
+  ///   dari snapshot server bila event tutupnya masih pending).
+  /// Tidak pernah throw; no-op bila belum init.
+  Future<void> applyPulledClosedShifts(
+    String outletId,
+    List<ShiftSummary> serverClosed,
+  ) async {
+    if (!_initialized) return;
+    try {
+      var changed = false;
+      final updated = List<CashShift>.of(_shifts);
+      for (final s in serverClosed) {
+        if (s.status != 'closed') continue;
+        if (s.outletId != outletId) continue;
+        final i = updated.indexWhere((l) => l.id == s.clientUuid);
+        if (i < 0) {
+          updated.add(CashShift(
+            id: s.clientUuid,
+            outletId: outletId,
+            cashierId: s.cashierId,
+            cashierName: s.cashierName,
+            closedByCashierId: s.closedByCashierId,
+            closedByCashierName: s.closedByCashierName,
+            openedAt: s.openedAt,
+            openingFloat: s.openingFloat,
+            closedAt: s.closedAt,
+            countedCash: s.countedCash,
+            expectedCash: s.expectedCash,
+            difference: s.difference,
+            status: 'closed',
+          ));
+          changed = true;
+        } else if (updated[i].isOpen) {
+          updated[i] = updated[i].copyWith(
+            closedByCashierId: s.closedByCashierId,
+            closedByCashierName: s.closedByCashierName,
+            closedAt: s.closedAt,
+            countedCash: s.countedCash,
+            expectedCash: s.expectedCash,
+            difference: s.difference,
+            status: 'closed',
+          );
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      updated.sort((a, b) => b.openedAt.compareTo(a.openedAt));
+      _shifts = updated;
+      notifyListeners();
+      for (final s in serverClosed) {
+        if (s.status != 'closed' || s.outletId != outletId) continue;
+        try {
+          final local = _shifts.firstWhere((l) => l.id == s.clientUuid);
+          await _database.into(_database.cashShifts).insert(
+                CashShiftsCompanion.insert(
+                  id: local.id,
+                  outletId: local.outletId,
+                  cashierId: Value(
+                    local.cashierId.isEmpty ? null : local.cashierId,
+                  ),
+                  cashierName: local.cashierName,
+                  closedByCashierId: Value(
+                    local.closedByCashierId.isEmpty
+                        ? null
+                        : local.closedByCashierId,
+                  ),
+                  closedByCashierName: Value(local.closedByCashierName),
+                  openedAt: local.openedAt,
+                  openingFloat: local.openingFloat,
+                  closedAt: Value(local.closedAt),
+                  countedCash: Value(local.countedCash),
+                  expectedCash: Value(local.expectedCash),
+                  difference: Value(local.difference),
+                  status: Value(local.status),
+                  note: Value(local.note),
+                ),
+                mode: InsertMode.insertOrReplace,
+              );
+        } catch (e) {
+          debugPrint('Terapkan shift tutup gagal simpan: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('Terapkan shift tutup server gagal: $e');
+    }
+  }
+
   /// Adopsi shift server sesudah push event buka lokal kena dedupe
   /// (Batch C8.2 WS6): shift lokal [adoption.localClientUuid] kalah
   /// awal — buang duplikat lokalnya (baris shift + event outbox-nya)
@@ -403,6 +497,9 @@ class CashShiftService extends ChangeNotifier {
           closedAt: null,
           closedByCashierId: '',
           closedByCashierName: '',
+          countedCash: null,
+          expectedCash: null,
+          difference: null,
         ),
         outletId: local.first.outletId,
         discardLocalId: adoption.localClientUuid,
@@ -511,5 +608,8 @@ class CashShiftService extends ChangeNotifier {
         closedAt: s.closedAt,
         closedByCashierId: s.closedByCashierId,
         closedByCashierName: s.closedByCashierName,
+        countedCash: s.countedCash,
+        expectedCash: s.expectedCash,
+        difference: s.difference,
       );
 }

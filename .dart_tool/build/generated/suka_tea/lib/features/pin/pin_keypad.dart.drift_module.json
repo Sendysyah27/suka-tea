@@ -1,0 +1,7 @@
+{
+  "elements": {},
+  "imports": [
+    "package:flutter/material.dart",
+    "package:suka_tea/core/theme/app_theme.dart"
+  ]
+}

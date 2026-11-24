@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'dart:math';
+
+import 'package:crypto/crypto.dart';
 
 /// Pembentuk + penafsir payload sinkronisasi Supabase (Batch C6).
 /// MURNI (tanpa Supabase / Drift) supaya bisa di-unit-test.
@@ -23,6 +26,17 @@ import 'dart:math';
 /// pull mengembalikan stok + shift terbuka gerai itu (WS5/WS6) —
 /// dedupe shift antar device diputuskan fungsi pure di bawah
 /// ([resolveShiftWinner] / [pickAdoptedShift]).
+///
+/// Batch C9 (sinkronisasi database):
+/// - SEMUA timestamp ke server lewat [toUtcIsoString] /
+///   [normalizeCreatedAtToUtc] (...Z) — perbaikan bug jam +7 jam.
+/// - Pull-merge: [planSaleMerge] ada di sale_history.dart,
+///   [planExpenseMerge] di expense_service.dart, [planStockMerge]
+///   di stock_service.dart (fungsi murni, dekat tipenya — supaya
+///   tidak ada import melingkar dengan file ini).
+/// - Mutasi stok reason 'koreksi' + 'tambah' (harga / koreksi
+///   jumlah / bahan baru) ikut tersinkron sebagai event
+///   'stock_movement' (lihat [normalizeStockEvent]).
 
 /// Cara bayar yang dikenal server (migrasi 001 + 002 + 008).
 const Set<String> serverPaymentMethods = {
@@ -39,6 +53,59 @@ String dateOnly(DateTime d) {
   final m = d.month.toString().padLeft(2, '0');
   final day = d.day.toString().padLeft(2, '0');
   return '${d.year}-$m-$day';
+}
+
+/// Jam ke string ISO UTC (`...Z`) — PERBAIKAN JAM Batch C9.
+///
+/// BUG LAMA: app mengirim `DateTime.toIso8601String()` untuk waktu
+/// lokal — string itu TANPA offset, server menyimpannya sebagai
+/// +00 (UTC), jadi jam WIB tampil +7 jam di mana-mana (mis.
+/// penjualan 15:40 WIB tampil 22:40). SEMUA timestamp yang dikirim
+/// ke server WAJIB lewat helper ini (atau [normalizeCreatedAtToUtc]
+/// untuk string mentah): `.toUtc()` dulu, baru `toIso8601String()`
+/// — hasilnya selalu berakhiran `Z`. Penyimpanan Drift lokal TIDAK
+/// disentuh (tetap waktu lokal).
+String toUtcIsoString(DateTime d) => d.toUtc().toIso8601String();
+
+/// Normalisasi string ISO mentah ke UTC (`...Z`). String TANPA
+/// offset diparse sebagai waktu LOKAL (perilaku DateTime.tryParse)
+/// lalu diubah ke UTC — jadi string lama '2026-11-24T15:40:00.000'
+/// (yang ditulis app sebelum C9) menjadi '2026-11-24T08:40:00.000Z'
+/// (benar: 15:40 WIB = 08:40 UTC). String ber-offset / berakhiran
+/// Z diparse apa adanya lalu diubah ke UTC (hasil sama). String
+/// kosong / tidak bisa diparse -> [fallback] (juga ke UTC).
+String normalizeCreatedAtToUtc(String? raw, DateTime fallback) {
+  final parsed = raw != null && raw.isNotEmpty
+      ? DateTime.tryParse(raw)
+      : null;
+  return (parsed ?? fallback).toUtc().toIso8601String();
+}
+
+/// Pola UUID (dipakai [normalizeLegacyClientUuid] + normalizer
+/// lain — sekali saja, bukan dibuat ulang tiap panggilan).
+final _uuidRegExp = RegExp(
+  r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+);
+
+/// Normalisasi client_uuid legacy — CERMINAN PERSIS fungsi
+/// `normalizeClientUuid` di Edge Function sync-sales (Batch C9).
+/// UUID valid dipakai apa adanya (huruf kecil); string lain (mis.
+/// angka mikROdetik dari outbox lama sebelum C6) dipetakan secara
+/// deterministik ke UUID v5-style dari SHA-256 string itu — string
+/// yang sama selalu menghasilkan UUID yang sama. Dipakai merge
+/// pull (dedupe): record lokal lama (id mikROdetik) + baris server
+/// (client_uuid yang sudah dinormalkan server) dikenali sebagai
+/// SATU transaksi yang sama, bukan dobel.
+String normalizeLegacyClientUuid(String raw) {
+  final s = raw.trim().toLowerCase();
+  if (_uuidRegExp.hasMatch(s)) return s;
+  final hash = sha256.convert(utf8.encode(s)).bytes;
+  final bytes = hash.sublist(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50; // version 5
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant RFC 4122
+  final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+      '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
 }
 
 /// UUID v4 acak (tanpa dep `uuid` — Random.secure + format manual).
@@ -144,9 +211,13 @@ Map<String, dynamic> normalizeSaleEvent({
       ? outletRaw
       : fallbackOutletId;
   final createdRaw = rawPayload['created_at'];
-  final createdAt = (createdRaw is String && createdRaw.isNotEmpty)
-      ? createdRaw
-      : entryCreatedAt.toIso8601String();
+  // Batch C9: kirim UTC (...Z) — string lama tanpa offset diparse
+  // sebagai waktu lokal lalu diubah ke UTC (lihat
+  // [normalizeCreatedAtToUtc]).
+  final createdAt = normalizeCreatedAtToUtc(
+    createdRaw is String ? createdRaw : null,
+    entryCreatedAt,
+  );
   // Batch C8.2 WS4: kasir pencatat ikut tersinkron (struk + Pantau
   // Gerai + expected tutup kas tahu siapa yang jual). Payload lama
   // tanpa kasir -> '' (server menyimpan default '').
@@ -230,12 +301,20 @@ Map<String, dynamic> normalizeStockEvent({
       ? outletRaw
       : fallbackOutletId;
   final createdRaw = rawPayload['created_at'];
-  final createdAt = (createdRaw is String && createdRaw.isNotEmpty)
-      ? createdRaw
-      : entryCreatedAt.toIso8601String();
+  // Batch C9: kirim UTC (...Z) — lihat [normalizeCreatedAtToUtc].
+  final createdAt = normalizeCreatedAtToUtc(
+    createdRaw is String ? createdRaw : null,
+    entryCreatedAt,
+  );
+  // Batch C9: 'koreksi' (ubah harga / koreksi jumlah manual) +
+  // 'tambah' (bahan baru) ikut tersinkron sebagai mutasi stok —
+  // server meneruskannya ke kolom reason (tanpa CHECK constraint).
   final reasonRaw = rawPayload['reason'];
   final reason = reasonRaw is String &&
-          (reasonRaw == 'penjualan' || reasonRaw == 'void')
+          (reasonRaw == 'penjualan' ||
+              reasonRaw == 'void' ||
+              reasonRaw == 'koreksi' ||
+              reasonRaw == 'tambah')
       ? reasonRaw
       : 'penjualan';
   final txnRaw = rawPayload['transaction_client_uuid'];
@@ -289,9 +368,11 @@ Map<String, dynamic> normalizeExpenseEvent({
       ? outletRaw
       : fallbackOutletId;
   final createdRaw = rawPayload['created_at'];
-  final createdAt = (createdRaw is String && createdRaw.isNotEmpty)
-      ? createdRaw
-      : entryCreatedAt.toIso8601String();
+  // Batch C9: kirim UTC (...Z) — lihat [normalizeCreatedAtToUtc].
+  final createdAt = normalizeCreatedAtToUtc(
+    createdRaw is String ? createdRaw : null,
+    entryCreatedAt,
+  );
   if (rawPayload['is_deleted'] == true) {
     return {
       'outbox_id': outboxId,
@@ -351,8 +432,11 @@ Map<String, dynamic> normalizeShiftEvent({
   final statusRaw = rawPayload['status'];
   final status = statusRaw == 'closed' ? 'closed' : 'open';
   final closedRaw = rawPayload['closed_at'];
-  final closedAt =
-      closedRaw is String && closedRaw.isNotEmpty ? closedRaw : null;
+  // Batch C9: opened_at / closed_at / created_at dikirim UTC (...Z)
+  // — lihat [normalizeCreatedAtToUtc]. closed_at kosong = null.
+  final closedAt = closedRaw is String && closedRaw.isNotEmpty
+      ? normalizeCreatedAtToUtc(closedRaw, entryCreatedAt)
+      : null;
   if (status == 'closed' && closedAt == null) {
     throw const FormatException('shift closed tanpa closed_at');
   }
@@ -366,7 +450,7 @@ Map<String, dynamic> normalizeShiftEvent({
     'kind': 'shift',
     'client_uuid': clientUuid,
     'outlet_id': outletId,
-    'created_at': openedRaw,
+    'created_at': normalizeCreatedAtToUtc(openedRaw, entryCreatedAt),
     'payload': {
       'cashier_id': cashierId is String ? cashierId : '',
       'cashier_name': cashierName is String ? cashierName : '',
@@ -374,7 +458,7 @@ Map<String, dynamic> normalizeShiftEvent({
           closedById is String ? closedById : '',
       'closed_by_cashier_name':
           closedByName is String ? closedByName : '',
-      'opened_at': openedRaw,
+      'opened_at': normalizeCreatedAtToUtc(openedRaw, entryCreatedAt),
       'opening_float': openingFloat,
       'closed_at': closedAt,
       'counted_cash':
@@ -395,6 +479,9 @@ Map<String, dynamic> normalizeShiftEvent({
 /// Satu shift dari server (pull) — ringkasan untuk gate POS +
 /// kartu "Kas & Shift" (Batch C8.2 WS6). [cashierName] = PEMBUKA
 /// shift; [closedByCashierName] = PENUTUP (terisi bila closed).
+/// [countedCash]/[expectedCash]/[difference] = hitungan laci saat
+/// tutup (Batch C9 — null selama open; dipakai riwayat shift tutup
+/// antar device supaya tidak tampil Rp0).
 typedef ShiftSummary = ({
   String clientUuid,
   String outletId,
@@ -406,6 +493,9 @@ typedef ShiftSummary = ({
   DateTime? closedAt,
   String closedByCashierId,
   String closedByCashierName,
+  int? countedCash,
+  int? expectedCash,
+  int? difference,
 });
 
 /// Parse daftar shift mentah dari jawaban pull EF — entri rusak
@@ -430,6 +520,9 @@ List<ShiftSummary> parseShiftSummaries(dynamic raw) {
     final closedRaw = entry['closed_at'];
     final closedById = entry['closed_by_cashier_id'];
     final closedByName = entry['closed_by_cashier_name'];
+    final countedCash = entry['counted_cash'];
+    final expectedCash = entry['expected_cash'];
+    final difference = entry['difference'];
     list.add((
       clientUuid: clientUuid,
       outletId: outletId is String ? outletId : '',
@@ -441,6 +534,9 @@ List<ShiftSummary> parseShiftSummaries(dynamic raw) {
       closedAt: closedRaw is String ? DateTime.tryParse(closedRaw) : null,
       closedByCashierId: closedById is String ? closedById : '',
       closedByCashierName: closedByName is String ? closedByName : '',
+      countedCash: countedCash is num ? countedCash.toInt() : null,
+      expectedCash: expectedCash is num ? expectedCash.toInt() : null,
+      difference: difference is num ? difference.toInt() : null,
     ));
   }
   return list;
@@ -513,17 +609,79 @@ typedef ShiftAdoption = ({
   return (cashIn: cashIn.toInt(), cashOut: cashOut.toInt());
 }
 
+/// Satu mutasi stok dari server (pull) — riwayat keluar-masuk
+/// barang per gerai (Batch C9 WS6). [clientUuid] = client_uuid event
+/// asal (satu event bisa punya beberapa item — kunci dedupe =
+/// clientUuid + nama, lihat SyncService.refreshSales).
+/// [pending] = mutasi lokal yang masih antre di outbox (belum
+/// terkirim) — tampil dengan label 'menunggu kirim'.
+typedef StockMovement = ({
+  String clientUuid,
+  String outletId,
+  String name,
+  double qtyDelta,
+  String reason,
+  DateTime createdAt,
+  bool pending,
+});
+
+/// Parse daftar mutasi mentah dari jawaban pull EF — entri rusak
+/// (tanpa client_uuid / nama / qty_delta) dilewati, bukan gagal
+/// total. Bukan list / kosong -> list kosong. Nama diambil dari
+/// `name` atau relasi `stock_items.name` (bentuk join Supabase).
+/// created_at diparse ke waktu LOKAL (server mengirim UTC).
+List<StockMovement> parseStockMovements(dynamic raw, String outletId) {
+  if (raw is! List) return const <StockMovement>[];
+  final list = <StockMovement>[];
+  for (final entry in raw) {
+    if (entry is! Map) continue;
+    final clientUuid = entry['client_uuid'];
+    if (clientUuid is! String || clientUuid.isEmpty) continue;
+    var name = entry['name'];
+    if (name is! String || name.isEmpty) {
+      final joined = entry['stock_items'];
+      if (joined is Map) name = joined['name'];
+    }
+    if (name is! String || name.isEmpty) continue;
+    final delta = entry['qty_delta'];
+    if (delta is! num) continue;
+    final createdRaw = entry['created_at'];
+    final createdAt = createdRaw is String
+        ? DateTime.tryParse(createdRaw)?.toLocal()
+        : null;
+    if (createdAt == null) continue;
+    final reason = entry['reason'];
+    list.add((
+      clientUuid: clientUuid,
+      outletId: outletId,
+      name: name,
+      qtyDelta: delta.toDouble(),
+      reason: reason is String && reason.isNotEmpty ? reason : 'penjualan',
+      createdAt: createdAt,
+      pending: false,
+    ));
+  }
+  return list;
+}
+
 /// Hasil pull yang sudah divalidasi: daftar transaksi mentah (Map)
 /// + item dikelompokkan per client_uuid transaksi + level stok
 /// gerai yang diminta (Batch C8.2 WS5 — mentah, dipetakan pemanggil)
 /// + shift terbuka gerai itu (Batch C8.2 WS6).
-/// 'stock' / 'shifts' yang hilang (EF lama / jawaban lama) = list
-/// kosong, BUKAN error — pull lama tetap jalan.
+/// Batch C9: + [expenses] (pengeluaran mentah gerai itu, WS5),
+/// + [closedShifts] (shift yang sudah ditutup di jendela, WS6),
+/// + [movements] (mutasi stok gerai itu di jendela, WS6).
+/// 'stock' / 'shifts' / 'expenses' / 'closed_shifts' / 'movements'
+/// yang hilang (EF lama / jawaban lama) = list kosong, BUKAN error
+/// — pull lama tetap jalan.
 typedef PullData = ({
   List<Map<String, dynamic>> transactions,
   Map<String, List<Map<String, dynamic>>> itemsByClientUuid,
   List<Map<String, dynamic>> stock,
   List<ShiftSummary> shifts,
+  List<Map<String, dynamic>> expenses,
+  List<ShiftSummary> closedShifts,
+  List<StockMovement> movements,
 });
 
 /// Validasi jawaban pull EF. Throw [FormatException] bila jawaban
@@ -577,11 +735,31 @@ PullData parsePullResponse(dynamic data) {
     }
   }
   final shifts = parseShiftSummaries(data['shifts']);
+  final expensesRaw = data['expenses'];
+  final expenses = <Map<String, dynamic>>[];
+  if (expensesRaw is List) {
+    for (final e in expensesRaw) {
+      if (e is Map<String, dynamic>) {
+        expenses.add(e);
+      } else if (e is Map) {
+        expenses.add(Map<String, dynamic>.from(e));
+      }
+    }
+  }
+  final closedShifts = parseShiftSummaries(data['closed_shifts']);
+  final outletId = data['outlet_id'];
+  final movements = parseStockMovements(
+    data['movements'],
+    outletId is String ? outletId : '',
+  );
   return (
     transactions: transactions,
     itemsByClientUuid: byUuid,
     stock: stock,
     shifts: shifts,
+    expenses: expenses,
+    closedShifts: closedShifts,
+    movements: movements,
   );
 }
 

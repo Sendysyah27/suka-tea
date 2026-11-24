@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
@@ -43,6 +45,22 @@ class Expense {
   final String cashierName;
 
   final DateTime createdAt;
+
+  /// Rekonstruksi dari baris Supabase (jalur pull Batch C9).
+  /// created_at server (UTC) diubah ke waktu lokal supaya filter
+  /// hari di Keuangan/Laporan cocok dengan zona toko (WIB).
+  factory Expense.fromServer(Map<String, dynamic> row) => Expense(
+        id: row['client_uuid'] as String? ?? '',
+        outletId: row['outlet_id'] as String? ?? defaultOutletId,
+        category: row['category'] as String? ?? 'Lainnya',
+        description: row['description'] as String? ?? '',
+        amount: (row['amount'] as num? ?? 0).toInt(),
+        isCash: row['is_cash'] != false,
+        cashierName: row['cashier_name'] as String? ?? '',
+        createdAt: DateTime.tryParse(row['created_at'] as String? ?? '')
+                ?.toLocal() ??
+            DateTime.now(),
+      );
 }
 
 /// Kategori pengeluaran yang ditawarkan di sheet tambah.
@@ -52,6 +70,61 @@ const List<String> expenseCategories = [
   'Gaji',
   'Lainnya',
 ];
+
+/// Hasil rencana merge pengeluaran: yang harus disisipkan + id
+/// lokal yang harus dihapus. Dipakai
+/// [ExpenseService.mergePulledExpenses].
+/// [toInsert]: pengeluaran server yang belum ada lokal (by id =
+/// client_uuid). [toDelete]: id LOKAL yang tidak ada di server.
+typedef ExpenseMergePlan = ({
+  List<Expense> toInsert,
+  List<String> toDelete,
+});
+
+/// Rencana merge pengeluaran server -> lokal (Batch C9, MURNI).
+/// Aturan:
+/// - hanya gerai [outletId] yang digabung.
+/// - server tidak punya -> sisipkan.
+/// - lokal tidak ada di server -> hapus, KECUALI bila:
+///   (a) id-nya masih punya event pending di outbox ([pendingIds] —
+///   event tambah belum terkirim, server memang belum tahu), atau
+///   (b) createdAt-nya DI LUAR jendela pull [from, to) — server
+///   memang tidak mengembalikannya (bukan berarti dihapus).
+///   Jendela dibandingkan tanggal LOKAL (createdAt sudah lokal).
+/// - pengeluaran tidak pernah diedit di app (hanya tambah/hapus),
+///   jadi tidak ada aturan update.
+ExpenseMergePlan planExpenseMerge({
+  required List<Expense> local,
+  required List<Expense> server,
+  required String outletId,
+  required DateTime from,
+  required DateTime to,
+  required Set<String> pendingIds,
+}) {
+  final serverById = <String, Expense>{};
+  for (final e in server) {
+    if (e.outletId == outletId) serverById[e.id] = e;
+  }
+  final localById = <String, Expense>{};
+  for (final e in local) {
+    if (e.outletId == outletId) localById[e.id] = e;
+  }
+  final toInsert = <Expense>[];
+  for (final e in server) {
+    if (e.outletId != outletId) continue;
+    if (!localById.containsKey(e.id)) toInsert.add(e);
+  }
+  final toDelete = <String>[];
+  for (final e in localById.values) {
+    if (serverById.containsKey(e.id)) continue;
+    if (pendingIds.contains(e.id)) continue;
+    if (e.createdAt.isBefore(from) || !e.createdAt.isBefore(to)) {
+      continue;
+    }
+    toDelete.add(e.id);
+  }
+  return (toInsert: toInsert, toDelete: toDelete);
+}
 
 /// Pengeluaran — di memori (ChangeNotifier) dan dicerminkan ke Drift
 /// (tabel Expenses). Semua tulis ke DB dibungkus try/catch (pola
@@ -205,6 +278,88 @@ class ExpenseService extends ChangeNotifier {
       debugPrint('Expense hapus gagal antre outbox: $e');
     }
     return true;
+  }
+
+  /// Gabungkan pengeluaran hasil pull server ke daftar lokal
+  /// (Batch C9). Dipanggil SyncService.refreshSales tiap pull
+  /// (10 detik). Rencana murni lewat [planExpenseMerge]: sisipkan
+  /// yang baru, hapus lokal yang sudah dihapus di server (dalam
+  /// jendela pull + tidak ada event pending). Tidak pernah throw;
+  /// no-op bila belum init.
+  Future<void> mergePulledExpenses(
+    List<Expense> serverExpenses, {
+    String? outletId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    if (!_initialized) return;
+    final outlet = outletId ?? OutletService.instance.currentOutletId;
+    final pendingIds = await _pendingExpenseIds();
+    final plan = planExpenseMerge(
+      local: _expenses,
+      server: serverExpenses,
+      outletId: outlet,
+      from: from,
+      to: to,
+      pendingIds: pendingIds,
+    );
+    if (plan.toInsert.isEmpty && plan.toDelete.isEmpty) return;
+    final updated = List<Expense>.of(_expenses);
+    if (plan.toDelete.isNotEmpty) {
+      final doomed = plan.toDelete.toSet();
+      updated.removeWhere((e) => doomed.contains(e.id));
+    }
+    updated.addAll(plan.toInsert);
+    updated.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _expenses = updated;
+    notifyListeners();
+    for (final expense in plan.toInsert) {
+      try {
+        await _database.into(_database.expenses).insert(
+              ExpensesCompanion.insert(
+                id: expense.id,
+                outletId: expense.outletId,
+                category: expense.category,
+                description: Value(expense.description),
+                amount: expense.amount,
+                isCash: Value(expense.isCash),
+                cashierName: Value(expense.cashierName),
+                createdAt: expense.createdAt,
+              ),
+              mode: InsertMode.insertOrReplace,
+            );
+      } catch (e) {
+        debugPrint('Merge pengeluaran gagal simpan (memori tetap ada): $e');
+      }
+    }
+    for (final id in plan.toDelete) {
+      try {
+        await (_database.delete(_database.expenses)
+              ..where((t) => t.id.equals(id)))
+            .go();
+      } catch (e) {
+        debugPrint('Merge pengeluaran gagal hapus (memori tetap hapus): $e');
+      }
+    }
+  }
+
+  /// Id client_uuid pengeluaran yang masih punya event 'expense'
+  /// pending di outbox (tambah/hapus belum terkirim).
+  Future<Set<String>> _pendingExpenseIds() async {
+    final ids = <String>{};
+    try {
+      final pending = await OutboxService.instance.pendingEntries();
+      for (final entry in pending) {
+        if (entry.kind != 'expense') continue;
+        final raw = jsonDecode(entry.payload);
+        if (raw is Map && raw['client_uuid'] is String) {
+          ids.add(raw['client_uuid'] as String);
+        }
+      }
+    } catch (e) {
+      debugPrint('Cek pending pengeluaran gagal: $e');
+    }
+    return ids;
   }
 
   Map<String, Object?> _expensePayload(Expense e) => {

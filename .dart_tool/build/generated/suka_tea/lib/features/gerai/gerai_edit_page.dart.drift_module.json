@@ -1,0 +1,9 @@
+{
+  "elements": {},
+  "imports": [
+    "package:flutter/material.dart",
+    "package:suka_tea/core/theme/app_theme.dart",
+    "package:suka_tea/core/widgets/screen_title.dart",
+    "package:suka_tea/data/outlet_service.dart"
+  ]
+}

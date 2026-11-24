@@ -1,0 +1,12 @@
+{
+  "elements": {},
+  "imports": [
+    "package:flutter/material.dart",
+    "package:flutter/services.dart",
+    "package:suka_tea/core/theme/app_theme.dart",
+    "package:suka_tea/core/utils/money.dart",
+    "package:suka_tea/core/utils/roles.dart",
+    "package:suka_tea/core/widgets/tap_feedback.dart",
+    "package:suka_tea/data/topping_service.dart"
+  ]
+}

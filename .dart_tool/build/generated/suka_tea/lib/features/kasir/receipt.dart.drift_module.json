@@ -1,0 +1,16 @@
+{
+  "elements": {},
+  "imports": [
+    "package:flutter/material.dart",
+    "package:flutter/rendering.dart",
+    "package:image/image.dart",
+    "package:path_provider/path_provider.dart",
+    "package:share_plus/share_plus.dart",
+    "package:suka_tea/core/theme/app_theme.dart",
+    "package:suka_tea/core/utils/money.dart",
+    "package:suka_tea/core/widgets/screen_title.dart",
+    "package:suka_tea/core/widgets/tap_feedback.dart",
+    "package:suka_tea/data/models.dart",
+    "package:suka_tea/features/kasir/receipt_pdf.dart"
+  ]
+}

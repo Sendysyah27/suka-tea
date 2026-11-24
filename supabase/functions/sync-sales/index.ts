@@ -15,7 +15,10 @@
 //     transactions: [...], items: [{ transaction_client_uuid,
 //     name_snapshot, qty, unit_price, modifiers_json }],
 //     stock: [{ name, unit, qty, low_threshold, cost_per_unit }],
-//     shifts: [shift terbuka gerai itu] }.
+//     shifts: [shift terbuka gerai itu],
+//     expenses: [pengeluaran gerai itu di jendela] (Batch C9),
+//     closed_shifts: [shift yang ditutup di jendela] (Batch C9),
+//     movements: [mutasi stok gerai itu di jendela] (Batch C9) }.
 //   action 'shift_expected': { outlet_id, from, to } (ISO
 //     timestamp) -> { ok, cash_in, cash_out } — expected kas
 //     server (semua kasir + semua device gerai itu, void
@@ -43,6 +46,19 @@
 //   yang tidak ada diabaikan (tidak membuat baris hantu).
 //   Pull mengembalikan shift TERBUKA gerai itu (visibilitas antar
 //   device). Expected dihitung server (aksi 'shift_expected').
+//
+// Batch C9 (sinkronisasi database — FILE SAJA, belum deploy):
+// - PERBAIKAN BUG 23505 di pushStockMovement: client_uuid event
+//   yang SAMA dipakai semua item (unique di stock_movements)
+//   membuat item ke-2 dst SELALU kena 23505 lalu `continue` —
+//   delta-nya TIDAK PERNAH diterapkan (hanya bahan PERTAMA tiap
+//   penjualan yang terpotong di level server). Sekarang per-item:
+//   item pertama tetap memakai client_uuid event (kompatibel retry
+//   event lama), item berikutnya memakai UUID turunan deterministik
+//   `${clientUuid}:${name}` (idempotent di retry, unik per item).
+// - Reason mutasi 'koreksi' + 'tambah' (harga / koreksi jumlah /
+//   bahan baru — Batch C9 WS4) diteruskan ke kolom reason.
+// - Pull + expenses (WS5), closed_shifts + movements (WS6).
 //
 // JALUR TULIS: Edge Function ini (bukan tulis langsung dari app).
 // RLS 001 menuntut auth.uid() membership — anon key tidak punya
@@ -260,7 +276,14 @@ async function pushStockMovement(
   const items = Array.isArray(p.items) ? p.items : [];
   if (items.length === 0) throw new Error("items kosong");
   const reasonRaw = String(p.reason ?? "penjualan");
-  const reason = reasonRaw === "void" ? "void" : "penjualan";
+  // Batch C9: 'koreksi' (ubah harga / koreksi jumlah manual) +
+  // 'tambah' (bahan baru) diteruskan — kolom reason tanpa CHECK.
+  const reason =
+    reasonRaw === "void" ||
+    reasonRaw === "koreksi" ||
+    reasonRaw === "tambah"
+      ? reasonRaw
+      : "penjualan";
 
   // Tautkan ke transaksi asal bila sudah tersinkron (boleh null).
   let transactionId: string | null = null;
@@ -276,10 +299,23 @@ async function pushStockMovement(
   }
 
   let applied = 0;
-  for (const raw of items) {
+  for (let idx = 0; idx < items.length; idx++) {
+    const raw = items[idx];
     const item = raw as Record<string, unknown>;
     const name = String(item.name ?? "");
     if (name === "") throw new Error("item stok tanpa nama");
+    // Batch C9 — BUG 23505: client_uuid event yang SAMA untuk semua
+    // item (unique di stock_movements) membuat item ke-2 dst SELALU
+    // kena 23505 lalu `continue` — delta-nya TIDAK PERNAH
+    // diterapkan (hanya bahan PERTAMA tiap penjualan yang terpotong
+    // di level server). Per-item: item pertama TETAP memakai
+    // client_uuid event (kompatibel retry event lama — barisnya
+    // sudah ada dengan UUID itu), item berikutnya memakai UUID
+    // turunan deterministik `${clientUuid}:${name}` (idempotent di
+    // retry, unik per item).
+    const itemUuid = idx === 0
+      ? clientUuid
+      : await normalizeClientUuid(`${clientUuid}:${name}`);
     const unit =
       typeof item.unit === "string" && item.unit !== ""
         ? item.unit
@@ -359,6 +395,8 @@ async function pushStockMovement(
 
     // 2) Sisip mutasi — duplikat client_uuid (23505) = kirim ulang:
     //    bukan error, lewati penerapan delta (sudah diterapkan dulu).
+    //    Batch C9: client_uuid di sini PER-ITEM (lihat atas) —
+    //    item ke-2 dst tidak lagi tertukar dengan kirim ulang.
     const { data: moved, error: movErr } = await supabase
       .from("stock_movements")
       .insert({
@@ -367,7 +405,7 @@ async function pushStockMovement(
         qty_delta: delta,
         reason,
         transaction_id: transactionId,
-        client_uuid: clientUuid,
+        client_uuid: itemUuid,
       })
       .select("id")
       .single();
@@ -662,6 +700,68 @@ async function pull(
   if (shiftErr) throw new Error(`baca shift gagal: ${shiftErr.message}`);
   const shifts = (shiftRows ?? []) as Record<string, unknown>[];
 
+  // Pengeluaran gerai itu di jendela yang sama (Batch C9 WS5 —
+  // Keuangan/Laporan antar device: pengeluaran HP lain ikut
+  // mengurangi laba bersih di HP ini).
+  const { data: expenseRows, error: expErr } = await supabase
+    .from("expenses")
+    .select(
+      "client_uuid, outlet_id, category, description, amount, is_cash, cashier_name, created_at",
+    )
+    .eq("outlet_id", outletId)
+    .gte("created_at", start.toISOString())
+    .lt("created_at", end.toISOString())
+    .order("created_at", { ascending: false });
+  if (expErr) throw new Error(`baca pengeluaran gagal: ${expErr.message}`);
+  const expenses = (expenseRows ?? []) as Record<string, unknown>[];
+
+  // Shift yang SUDAH DITUTUP di jendela yang sama (Batch C9 WS6 —
+  // riwayat shift antar device; shift TERBUKA tetap di `shifts`).
+  // closed_at di jendela (shift yang dibuka 40 hari lalu tapi
+  // ditutup kemarin tetap ketarik).
+  const { data: closedRows, error: closedErr } = await supabase
+    .from("cash_shifts")
+    .select(
+      "client_uuid, outlet_id, cashier_id, cashier_name, opened_at, opening_float, status, closed_at, closed_by_cashier_id, closed_by_cashier_name, counted_cash, expected_cash, difference",
+    )
+    .eq("outlet_id", outletId)
+    .eq("status", "closed")
+    .gte("closed_at", start.toISOString())
+    .lt("closed_at", end.toISOString())
+    .order("closed_at", { ascending: false })
+    .limit(20);
+  if (closedErr) {
+    throw new Error(`baca shift tutup gagal: ${closedErr.message}`);
+  }
+  const closedShifts = (closedRows ?? []) as Record<string, unknown>[];
+
+  // Mutasi stok gerai itu di jendela yang sama (Batch C9 WS6 —
+  // riwayat keluar-masuk barang di tab Stok). Nama bahan ikut via
+  // join ke stock_items.
+  const { data: movRows, error: movErr } = await supabase
+    .from("stock_movements")
+    .select(
+      "client_uuid, qty_delta, reason, created_at, stock_items(name)",
+    )
+    .eq("outlet_id", outletId)
+    .gte("created_at", start.toISOString())
+    .lt("created_at", end.toISOString())
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (movErr) throw new Error(`baca mutasi gagal: ${movErr.message}`);
+  const movements = ((movRows ?? []) as Record<string, unknown>[]).map(
+    (m) => {
+      const joined = m["stock_items"] as Record<string, unknown> | null;
+      return {
+        client_uuid: m["client_uuid"],
+        name: joined != null ? joined["name"] : null,
+        qty_delta: m["qty_delta"],
+        reason: m["reason"],
+        created_at: m["created_at"],
+      };
+    },
+  );
+
   return {
     ok: true,
     outlet_id: outletId,
@@ -671,6 +771,9 @@ async function pull(
     items,
     stock,
     shifts,
+    expenses,
+    closed_shifts: closedShifts,
+    movements,
   };
 }
 

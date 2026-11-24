@@ -1,0 +1,13 @@
+{
+  "elements": {},
+  "imports": [
+    "package:flutter/material.dart",
+    "package:flutter/services.dart",
+    "package:suka_tea/core/utils/roles.dart",
+    "package:suka_tea/features/pin/pin_dialog.dart",
+    "package:suka_tea/features/qris/qris_scan_logic.dart",
+    "package:suka_tea/features/qris/qris_scan_page.dart",
+    "package:suka_tea/features/qris/qris_service.dart",
+    "package:suka_tea/features/qris/qris_settings_service.dart"
+  ]
+}

@@ -10,6 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  crypto: ^3.0.6 # Batch C9 — SHA-256 untuk normalizeLegacyClientUuid
   drift: ^2.24.0
   drift_flutter: ^0.2.0
   flutter_svg: ^2.0.10

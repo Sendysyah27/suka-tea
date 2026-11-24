@@ -102,7 +102,13 @@ void main() {
         fallbackOutletId: '00000000-0000-0000-0000-000000000001',
       );
       expect(e['outlet_id'], '00000000-0000-0000-0000-000000000001');
-      expect(e['created_at'], '2026-11-23T21:00:00.000');
+      // Batch C9: created_at fallback (entryCreatedAt, waktu lokal)
+      // kini dikirim UTC (...Z) — sebelumnya tanpa offset sehingga
+      // server menyimpan jam WIB sebagai +00 (tampil +7 jam).
+      expect(
+        e['created_at'],
+        DateTime(2026, 11, 23, 21, 0).toUtc().toIso8601String(),
+      );
       final p = e['payload'] as Map<String, dynamic>;
       expect(p['paid'], 14000);
       expect(p['change'], 0);

@@ -36,8 +36,14 @@ import 'shift_sheets.dart';
 /// gerai (yang beda hanya akses/PIN). Expected tutup kas diambil dari
 /// SERVER bila online (semua kasir + semua device gerai itu); bila
 /// offline, hitungan lokal berlabel "perkiraan (offline)". Shift
-/// yang dibuka di device lain ditarik berkala (refreshShifts) supaya
+/// yang dibuka di device lain ditarik berkala (refreshSales) supaya
 /// kartu "Kas & Shift" + gate POS melihatnya.
+///
+/// Batch C9: Laporan + Riwayat ikut menarik SEMUA data gerai
+/// (penjualan + pengeluaran + stok + shift) tiap buka halaman +
+/// tiap 10 detik + tombol "Segarkan data dari server" — angka di
+/// halaman ini (omzet, terlaris, expected shift) memakai data yang
+/// sudah digabung antar device, bukan cuma HP ini.
 class LaporanPage extends StatefulWidget {
   const LaporanPage({super.key, required this.role, required this.onExitGerai});
 
@@ -61,11 +67,41 @@ class _LaporanPageState extends State<LaporanPage> {
   String get _cashierId =>
       CashierSessionService.instance.cashierId ?? '';
 
+  /// true = tombol refresh manual sedang menarik data.
+  bool _refreshing = false;
+
   @override
   void initState() {
     super.initState();
-    // Tarik shift terbuka gerai ini (bisa dibuka di device lain).
+    // Tarik semua data gerai ini (penjualan + pengeluaran + stok +
+    // shift) — bisa dibuka/dicatat di device lain. refreshShifts
+    // Batch C9 = alias refreshSales (pull lengkap).
     unawaited(SyncService.instance.refreshShifts());
+  }
+
+  /// Tarik ulang semua data gerai ini dari server SEKARANG (Batch
+  /// C9) — penjualan + pengeluaran + stok + shift digabung ke data
+  /// lokal. Timer 10 detik juga melakukannya otomatis; tombol ini
+  /// untuk "sekarang juga" sesudah kasir lain mencatat di HP lain.
+  /// Snackbar jujur: sukses hanya bila lastPullAt benar-benar
+  /// berubah (offline = gagal, bukan "disegarkan").
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    final before = SyncService.instance.lastPullAt;
+    await SyncService.instance.refreshSales();
+    if (!mounted) return;
+    setState(() => _refreshing = false);
+    final after = SyncService.instance.lastPullAt;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          after != null && after != before
+              ? 'Data disegarkan dari server.'
+              : 'Gagal menyegarkan — periksa koneksi, coba lagi.',
+        ),
+      ),
+    );
   }
 
   /// Buka shift baru (Batch C7, alur via openShiftFlow C8.2).
@@ -323,6 +359,27 @@ class _LaporanPageState extends State<LaporanPage> {
                     minimumSize: const Size(0, 56),
                   ),
                   child: const Text('Lihat Riwayat'),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Segarkan manual (Batch C9): tarik ulang semua data
+            // gerai ini dari server sekarang juga (timer 10 detik
+            // juga melakukannya otomatis).
+            SizedBox(
+              width: double.infinity,
+              child: TapFeedback(
+                child: OutlinedButton.icon(
+                  onPressed: _refreshing ? null : _refresh,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
+                  icon: const Icon(Icons.refresh_outlined),
+                  label: Text(
+                    _refreshing
+                        ? 'Menyegarkan…'
+                        : 'Segarkan data dari server',
+                  ),
                 ),
               ),
             ),

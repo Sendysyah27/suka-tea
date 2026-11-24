@@ -57,6 +57,17 @@ class OutboxService {
     }
   }
 
+  /// SEMUA entri outbox (pending + terkirim) — dipakai StockService
+  /// Batch C9 untuk memuat kunci "pernah disentuh" (event yang sudah
+  /// terkirim tetap menandai bahan itu pernah dimutasi di HP ini).
+  Future<List<OutboxEntry>> allEntries() async {
+    try {
+      return await _database.select(_database.outboxEntries).get();
+    } catch (_) {
+      return [];
+    }
+  }
+
   /// Tandai satu entri sebagai terkirim. HANYA dipanggil SyncService
   /// sesudah server konfirmasi per-event (results[].ok) — bukan
   /// sesudah request terkirim.

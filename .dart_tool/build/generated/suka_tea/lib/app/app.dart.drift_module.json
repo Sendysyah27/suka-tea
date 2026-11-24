@@ -1,0 +1,28 @@
+{
+  "elements": {},
+  "imports": [
+    "package:flutter/material.dart",
+    "package:flutter_svg/flutter_svg.dart",
+    "package:suka_tea/core/theme/app_icons.dart",
+    "package:suka_tea/core/theme/app_theme.dart",
+    "package:suka_tea/core/utils/roles.dart",
+    "package:suka_tea/core/widgets/screen_title.dart",
+    "package:suka_tea/core/widgets/tap_feedback.dart",
+    "package:suka_tea/data/outlet_service.dart",
+    "package:suka_tea/data/stock_service.dart",
+    "package:suka_tea/data/sync_service.dart",
+    "package:suka_tea/features/kasir/kasir_page.dart",
+    "package:suka_tea/features/katalog/katalog_page.dart",
+    "package:suka_tea/features/keuangan/keuangan_page.dart",
+    "package:suka_tea/features/login/cashier_session.dart",
+    "package:suka_tea/features/login/kasir_pin_page.dart",
+    "package:suka_tea/features/login/login_page.dart",
+    "package:suka_tea/features/login/login_result.dart",
+    "package:suka_tea/features/pin/pin_dialog.dart",
+    "package:suka_tea/features/pin/settings_page.dart",
+    "package:suka_tea/features/qris/qris_settings_page.dart",
+    "package:suka_tea/features/qris/qris_settings_service.dart",
+    "package:suka_tea/features/laporan/laporan_page.dart",
+    "package:suka_tea/features/stok/stok_page.dart"
+  ]
+}

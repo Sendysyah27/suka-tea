@@ -1,0 +1,8 @@
+{
+  "elements": {},
+  "imports": [
+    "package:drift/drift.dart",
+    "package:flutter/foundation.dart",
+    "package:suka_tea/data/local/app_database.dart"
+  ]
+}

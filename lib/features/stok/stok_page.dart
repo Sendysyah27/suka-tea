@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,6 +9,7 @@ import '../../core/utils/roles.dart';
 import '../../core/widgets/tap_feedback.dart';
 import '../../data/models.dart';
 import '../../data/stock_service.dart';
+import '../../data/sync_service.dart';
 
 /// Stok bahan baku — dibaca dari StockService (Drift + seed), bukan lagi
 /// seed statis. Desain v2: progress bar vs ambang + pill status.
@@ -92,6 +95,8 @@ class _StokPageState extends State<StokPage> {
       return;
     }
     await StockService.instance.updateStock(item.name, newQty, newAmbang);
+    // Batch C9: koreksi stok langsung dikirim (bukan nunggu timer).
+    unawaited(SyncService.instance.syncNow());
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Stok ${item.name} diperbarui.')),
@@ -155,6 +160,9 @@ class _StokPageState extends State<StokPage> {
     }
     final ok = await StockService.instance.updateCost(item.name, newCost);
     if (!mounted) return;
+    // Batch C9: harga bahan langsung dikirim (bukan nunggu timer) —
+    // HP lain harus tahu harga baru sebelum menghitung HPP.
+    if (ok) unawaited(SyncService.instance.syncNow());
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -245,6 +253,8 @@ class _StokPageState extends State<StokPage> {
       newAmbang,
     );
     if (!mounted) return;
+    // Batch C9: bahan baru langsung dikirim (bukan nunggu timer).
+    if (ok) unawaited(SyncService.instance.syncNow());
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -272,7 +282,11 @@ class _StokPageState extends State<StokPage> {
             )
           : null,
       body: ListenableBuilder(
-        listenable: StockService.instance,
+        // + SyncService (Batch C9): riwayat mutasi berubah tiap pull.
+        listenable: Listenable.merge([
+          StockService.instance,
+          SyncService.instance,
+        ]),
         builder: (context, _) {
           final allItems = StockService.instance.levels;
           if (allItems.isEmpty) {
@@ -445,10 +459,119 @@ class _StokPageState extends State<StokPage> {
                     },
                   ),
                 ),
+              const Divider(height: 24),
+              _movementHistory(),
             ],
           );
         },
       ),
     );
   }
+
+  /// Riwayat keluar-masuk barang 30 hari terakhir (Batch C9 WS6) —
+  /// dari server (pull) + mutasi lokal yang masih pending.
+  /// Jujur: tampil apa adanya; kosong = belum ada mutasi / belum
+  /// pernah pull berhasil. Delta 0 = perubahan harga (koreksi).
+  Widget _movementHistory() {
+    final movements = SyncService.instance.lastMovements;
+    final lastPull = SyncService.instance.lastPullAt;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Keluar-masuk barang (30 hari)',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            lastPull == null
+                ? 'Belum pernah ditarik dari server — pastikan online, '
+                    'data ditarik otomatis tiap 10 detik.'
+                : 'Terakhir ditarik ${_clock(lastPull)}.',
+            style: const TextStyle(
+              color: SukaTeaColors.muted,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (movements.isEmpty)
+            const Text(
+              'Belum ada mutasi 30 hari terakhir.',
+              style: TextStyle(color: SukaTeaColors.muted),
+            )
+          else
+            SizedBox(
+              height: 180,
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                itemCount: movements.length,
+                itemBuilder: (context, i) {
+                  final m = movements[i];
+                  final delta = m.qtyDelta;
+                  final sign = delta > 0 ? '+' : '';
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                m.name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              Text(
+                                '${_movementReason(m.reason)} • ${_dayTime(m.createdAt)}'
+                                '${m.pending ? ' • menunggu kirim' : ''}',
+                                style: const TextStyle(
+                                  color: SukaTeaColors.muted,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          '$sign${_qtyText(delta)}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: delta < 0
+                                ? SukaTeaColors.danger
+                                : SukaTeaColors.emeraldDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _movementReason(String reason) {
+    switch (reason) {
+      case 'void':
+        return 'Void';
+      case 'koreksi':
+        return 'Koreksi stok';
+      case 'tambah':
+        return 'Tambah stok';
+      default:
+        return 'Penjualan';
+    }
+  }
+
+  String _clock(DateTime d) =>
+      '${d.hour.toString().padLeft(2, '0')}:'
+      '${d.minute.toString().padLeft(2, '0')}';
+
+  String _dayTime(DateTime d) => '${d.day}/${d.month} ${_clock(d)}';
 }

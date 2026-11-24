@@ -8,6 +8,7 @@ import 'local/outbox_service.dart';
 import 'models.dart';
 import 'outlet_service.dart';
 import 'recipe_logic.dart';
+import 'sync_payload.dart';
 
 /// Satu item dalam satu transaksi yang sudah dibayar.
 /// Disimpan sebagai JSON di tabel SaleHistory (itemsJson).
@@ -411,6 +412,53 @@ List<TopProduct> topProducts(List<SaleRecord> sales, {int limit = 3}) {
   return list.take(limit).toList();
 }
 
+/// Hasil rencana merge penjualan: yang harus disisipkan + id lokal
+/// yang harus di-void. Dipakai [SaleHistoryService.mergePulledSales].
+/// [toInsert]: record server yang belum ada lokal (by client_uuid,
+/// sesudah normalisasi id legacy — lihat
+/// [normalizeLegacyClientUuid]). [toVoid]: id LOKAL yang server
+/// tandai void (id asli lokal, bukan hasil normalisasi).
+typedef SaleMergePlan = ({
+  List<SaleRecord> toInsert,
+  List<String> toVoid,
+});
+
+/// Rencana merge penjualan server -> lokal (Batch C9, MURNI).
+/// Aturan:
+/// - hanya gerai [outletId] yang digabung (pull sudah per-gerai,
+///   tapi disaring lagi di sini supaya aman).
+/// - dedupe by client_uuid; id lokal LAMA (angka mikROdetik, sebelum
+///   C6) dinormalkan dulu ([normalizeLegacyClientUuid]) supaya cocok
+///   dengan client_uuid server yang sudah dinormalkan server.
+/// - void STICKY dua arah: server void + lokal belum void ->
+///   void-kan lokal; server completed + lokal SUDAH void -> TETAP
+///   void (jangan balik ke completed — void tidak bisa dibatalkan).
+/// - record server yang id-nya tidak ada lokal -> sisipkan apa
+///   adanya (termasuk yang sudah void — tampil di Riwayat dengan
+///   label VOID).
+SaleMergePlan planSaleMerge({
+  required List<SaleRecord> local,
+  required List<SaleRecord> server,
+  required String outletId,
+}) {
+  final localByKey = <String, SaleRecord>{};
+  for (final s in local) {
+    localByKey[normalizeLegacyClientUuid(s.id)] = s;
+  }
+  final toInsert = <SaleRecord>[];
+  final toVoid = <String>[];
+  for (final s in server) {
+    if (s.outletId != outletId) continue;
+    final existing = localByKey[normalizeLegacyClientUuid(s.id)];
+    if (existing == null) {
+      toInsert.add(s);
+    } else if (s.isVoid && !existing.isVoid) {
+      toVoid.add(existing.id);
+    }
+  }
+  return (toInsert: toInsert, toVoid: toVoid);
+}
+
 /// Riwayat penjualan — di memori (ChangeNotifier) dan dicerminkan ke
 /// Drift (tabel SaleHistory). Semua tulis ke DB dibungkus try/catch
 /// (pola StockService): gagal simpan tidak boleh crash app.
@@ -543,29 +591,84 @@ class SaleHistoryService extends ChangeNotifier {
     notifyListeners();
     try {
       await _database.into(_database.saleHistory).insert(
-            SaleHistoryCompanion.insert(
-              id: record.id,
-              createdAt: record.createdAt,
-              itemsJson: jsonEncode(
-                record.items.map((i) => i.toJson()).toList(),
-              ),
-              total: record.total,
-              method: record.method.name,
-              paid: record.paid,
-              change: record.change,
-              discount: Value(record.discount),
-              isVoid: const Value(false),
-              outletId: Value(record.outletId),
-              qrisAmount: Value(record.qrisAmount),
-              cashAmount: Value(record.cashAmount),
-              cashierId: Value(record.cashierId),
-              cashierName: Value(record.cashierName),
-            ),
+            _companionFor(record),
           );
     } catch (e) {
       debugPrint('SaleHistory simpan gagal (riwayat memori tetap ada): $e');
     }
     return record;
+  }
+
+  /// Companion Drift untuk satu record — dipakai [recordSale] +
+  /// [mergePulledSales] (Batch C9).
+  static SaleHistoryCompanion _companionFor(SaleRecord record) =>
+      SaleHistoryCompanion.insert(
+        id: record.id,
+        createdAt: record.createdAt,
+        itemsJson: jsonEncode(
+          record.items.map((i) => i.toJson()).toList(),
+        ),
+        total: record.total,
+        method: record.method.name,
+        paid: record.paid,
+        change: record.change,
+        discount: Value(record.discount),
+        isVoid: Value(record.isVoid),
+        outletId: Value(record.outletId),
+        qrisAmount: Value(record.qrisAmount),
+        cashAmount: Value(record.cashAmount),
+        cashierId: Value(record.cashierId),
+        cashierName: Value(record.cashierName),
+      );
+
+  /// Gabungkan penjualan hasil pull server ke riwayat lokal (Batch
+  /// C9). Dipanggil SyncService.refreshSales tiap pull (10 detik) +
+  /// saat halaman Laporan/Riwayat dibuka. Rencana murni lewat
+  /// [planSaleMerge]: sisipkan yang baru, void-kan yang server
+  /// tandai void. Record yang SUDAH ada TIDAK di-overwrite (detail
+  /// lokal — productId/variantId — lebih lengkap dari snapshot
+  /// server yang mengosongkannya). Tidak pernah throw; no-op bila
+  /// belum init (init() di main() jalan sebelum sync start).
+  Future<void> mergePulledSales(
+    List<SaleRecord> serverSales, {
+    String? outletId,
+  }) async {
+    if (!_initialized) return;
+    final outlet = outletId ?? OutletService.instance.currentOutletId;
+    final plan = planSaleMerge(
+      local: _sales,
+      server: serverSales,
+      outletId: outlet,
+    );
+    if (plan.toInsert.isEmpty && plan.toVoid.isEmpty) return;
+    final updated = List<SaleRecord>.of(_sales);
+    for (final id in plan.toVoid) {
+      final i = updated.indexWhere((s) => s.id == id);
+      if (i >= 0) updated[i] = updated[i].copyWith(isVoid: true);
+    }
+    updated.addAll(plan.toInsert);
+    updated.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _sales = updated;
+    notifyListeners();
+    for (final record in plan.toInsert) {
+      try {
+        await _database.into(_database.saleHistory).insert(
+              _companionFor(record),
+              mode: InsertMode.insertOrReplace,
+            );
+      } catch (e) {
+        debugPrint('Merge penjualan gagal simpan (memori tetap ada): $e');
+      }
+    }
+    for (final id in plan.toVoid) {
+      try {
+        await (_database.update(_database.saleHistory)
+              ..where((t) => t.id.equals(id)))
+            .write(const SaleHistoryCompanion(isVoid: Value(true)));
+      } catch (e) {
+        debugPrint('Merge penjualan gagal void (memori tetap void): $e');
+      }
+    }
   }
 
   /// Tandai satu transaksi sebagai void (HANYA Owner — dicek di UI).

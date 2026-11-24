@@ -1,0 +1,14 @@
+{
+  "elements": {},
+  "imports": [
+    "package:flutter/material.dart",
+    "package:suka_tea/core/theme/app_theme.dart",
+    "package:suka_tea/core/utils/roles.dart",
+    "package:suka_tea/core/widgets/tap_feedback.dart",
+    "package:suka_tea/data/outlet_service.dart",
+    "package:suka_tea/features/kasir/cashier_service.dart",
+    "package:suka_tea/features/pin/pin_keypad.dart",
+    "package:suka_tea/features/pin/pin_service.dart",
+    "package:suka_tea/features/login/login_result.dart"
+  ]
+}

@@ -23,12 +23,53 @@ import '../kasir/receipt.dart';
 /// Void mengembalikan stok bahan (termasuk topping) dan transaksi
 /// tidak lagi dihitung di omzet/Keuangan/Laporan — tapi tetap tampil
 /// di sini dengan label VOID.
-class RiwayatPage extends StatelessWidget {
+/// Batch C9: StatefulWidget — buka halaman menarik semua data gerai
+/// dari server (refreshSales) + tombol refresh di AppBar; penjualan
+/// HP lain muncul di sini dalam hitungan detik (timer 10 detik).
+class RiwayatPage extends StatefulWidget {
   const RiwayatPage({super.key, required this.role, this.outletId});
 
   final AppRole role;
 
   final String? outletId;
+
+  @override
+  State<RiwayatPage> createState() => _RiwayatPageState();
+}
+
+class _RiwayatPageState extends State<RiwayatPage> {
+  /// true = tombol refresh manual sedang menarik data.
+  bool _refreshing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Tarik semua data gerai ini — penjualan HP lain bisa sudah
+    // masuk server sejak halaman ini terakhir dibuka.
+    unawaited(SyncService.instance.refreshSales());
+  }
+
+  /// Tarik ulang semua data gerai ini dari server SEKARANG (Batch
+  /// C9). Snackbar jujur: sukses hanya bila lastPullAt benar-benar
+  /// berubah (offline = gagal, bukan "disegarkan").
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    final before = SyncService.instance.lastPullAt;
+    await SyncService.instance.refreshSales();
+    if (!mounted) return;
+    setState(() => _refreshing = false);
+    final after = SyncService.instance.lastPullAt;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          after != null && after != before
+              ? 'Data disegarkan dari server.'
+              : 'Gagal menyegarkan — periksa koneksi, coba lagi.',
+        ),
+      ),
+    );
+  }
 
   String _timeText(DateTime t) {
     return '${t.day}/${t.month}/${t.year} '
@@ -88,18 +129,27 @@ class RiwayatPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const ScreenTitle('Riwayat Transaksi')),
+      appBar: AppBar(
+        title: const ScreenTitle('Riwayat Transaksi'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh_outlined),
+            tooltip: 'Segarkan dari server',
+            onPressed: _refreshing ? null : _refresh,
+          ),
+        ],
+      ),
       body: ListenableBuilder(
         listenable: SaleHistoryService.instance,
         builder: (context, _) {
           final allSales = SaleHistoryService.instance.sales;
-          final sales = outletId == null
+          final sales = widget.outletId == null
               ? allSales
-              : allSales.where((s) => s.outletId == outletId).toList();
+              : allSales.where((s) => s.outletId == widget.outletId).toList();
           if (sales.isEmpty) {
             return Center(
               child: Text(
-                outletId == null
+                widget.outletId == null
                     ? 'Belum ada transaksi.\nPenjualan yang sudah dibayar muncul di sini.'
                     : 'Belum ada transaksi di gerai ini.',
                 textAlign: TextAlign.center,
@@ -205,7 +255,7 @@ class RiwayatPage extends StatelessWidget {
                             ),
                             // Aksi Void (HANYA Owner, belum void):
                             // menu ⋮ di kanan kartu.
-                            if (role.canVoidSale && !sale.isVoid)
+                            if (widget.role.canVoidSale && !sale.isVoid)
                               PopupMenuButton<String>(
                                 tooltip: 'Aksi transaksi',
                                 icon: const Icon(Icons.more_vert),

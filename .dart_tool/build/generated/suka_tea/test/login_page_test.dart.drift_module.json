@@ -1,0 +1,12 @@
+{
+  "elements": {},
+  "imports": [
+    "package:flutter/material.dart",
+    "package:flutter/services.dart",
+    "package:flutter_test/flutter_test.dart",
+    "package:suka_tea/data/outlet_service.dart",
+    "package:suka_tea/features/login/kasir_pin_page.dart",
+    "package:suka_tea/features/login/login_page.dart",
+    "package:suka_tea/features/login/login_result.dart"
+  ]
+}
