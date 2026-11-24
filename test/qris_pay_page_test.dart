@@ -99,6 +99,12 @@ void main() {
           await tester.tap(find.text('Generate QR'));
           await tester.pump();
           expect(find.byType(QrImageView), findsOneWidget);
+          // QR menambah ~300px tinggi halaman — tombol konfirmasi di
+          // bawah ListView terdorong keluar viewport, dan child
+          // ListView di luar viewport BELUM dibangun sliver (finder
+          // menemukannya 0). Scroll dulu seperti pengguna asli.
+          await tester.drag(find.byType(ListView), const Offset(0, -600));
+          await tester.pump();
           await tester.tap(find.text('Sudah Dibayar'));
         },
       );
@@ -193,6 +199,12 @@ void main() {
           await tester.tap(find.text('Generate QR'));
           await tester.pump();
           expect(find.byType(QrImageView), findsOneWidget);
+          // QR menambah ~300px tinggi halaman — tombol konfirmasi di
+          // bawah ListView terdorong keluar viewport, dan child
+          // ListView di luar viewport BELUM dibangun sliver (finder
+          // menemukannya 0). Scroll dulu seperti pengguna asli.
+          await tester.drag(find.byType(ListView), const Offset(0, -600));
+          await tester.pump();
           await tester.tap(find.text('Lanjut ke Tunai'));
         },
       );
