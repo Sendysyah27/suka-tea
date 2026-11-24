@@ -213,6 +213,11 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
             const SizedBox(height: 8),
             TextButton(
               onPressed: () async {
+                // Tangkap messenger SEBELUM await pertama: `context`
+                // di sini parameter build(), bukan State.context —
+                // pakai sesudah await kena lint
+                // use_build_context_synchronously (CI v32).
+                final messenger = ScaffoldMessenger.of(context);
                 // Hapus juga butuh bukti Owner (Batch C8: hapus baris
                 // di Supabase lewat `set-qris-payload` delete:true).
                 // ownerPin di-assign di dalam closure onPinVerified,
@@ -228,7 +233,6 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
                   ),
                 );
                 if (pinOk != true || ownerPin == null || !mounted) return;
-                final messenger = ScaffoldMessenger.of(context);
                 final deleted = await QrisSettingsService.instance.clear(
                   ownerPin: ownerPin!,
                 );
