@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'supabase_client.dart';
+import '../features/login/cashier_session.dart';
 
 /// Export laporan ke Google Sheets via Edge Function `export-sheets`.
 /// Sheets HANYA untuk laporan/export — bukan database utama.
@@ -57,10 +58,18 @@ Future<ExportResult> exportShiftToSheets({
       message: 'Export Sheets dilewati: Supabase belum dikonfigurasi.',
     );
   }
+  // SEC-1 R-03: EF sekarang mewajibkan bukti PIN Owner di memori.
+  final proof = CashierSessionService.instance.sessionProof;
+  if (proof['owner_pin'] == null) {
+    return (
+      ok: false,
+      message: 'Export Sheets butuh bukti PIN Owner — buka mode Owner dulu.',
+    );
+  }
   try {
     final res = await SupabaseService.instance.client.functions.invoke(
       'export-sheets',
-      body: {'shift_id': shiftId, 'outlet_id': outletId},
+      body: {'shift_id': shiftId, 'outlet_id': outletId, ...proof},
     );
     return parseExportResponse(res.data);
   } on FunctionException catch (e) {

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../data/supabase_client.dart';
+import '../login/cashier_session.dart';
 
 /// PIN Owner — gerbang mode Owner. Aturan keras (perintah Sendy 22 Nov 2026):
 /// PIN hanya tersimpan di Supabase sebagai hash bcrypt (app_settings, key
@@ -60,6 +61,9 @@ class PinService {
       if (data['ok'] == true) {
         _failedAttempts = 0;
         _lockedUntil = null;
+        // SEC-1 R-02: simpan PIN Owner sesi di MEMORI (bukan storage)
+        // supaya sync-sales/export-sheets bisa membawa bukti.
+        CashierSessionService.instance.rememberOwnerPin(pin);
         return PinVerifyResult.ok;
       }
       switch (data['reason']) {

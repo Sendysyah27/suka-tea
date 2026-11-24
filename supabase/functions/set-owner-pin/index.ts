@@ -7,6 +7,8 @@
 // - Belum ada hash  -> atur langsung (setup pertama kali).
 // - Sudah ada hash -> current_pin wajib dan harus cocok dulu.
 // - PIN baru di-hash bcrypt (cost 10) sebelum disimpan.
+// - Rate limit (SEC-1 R-01): 10x PIN lama salah dalam 10 menit ->
+//   403 reason 'locked' (pola verify-owner-pin, purpose 'owner').
 //
 // Secret yang dibutuhkan (otomatis tersedia di Edge Functions):
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
@@ -28,6 +30,12 @@ const corsHeaders = {
 // Baris PIN Owner GLOBAL — satu PIN untuk semua gerai (koreksi Sendy
 // 24 Nov 2026). PIN yang dulu dibuat di Gerai 1 tersimpan di baris ini.
 const GLOBAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
+
+// Rate limit (SEC-1 R-01): pola SAMA PERSIS dengan verify-owner-pin —
+// 10 gagal dalam 10 menit = terkunci. Tanpa ini jalur ubah PIN
+// melewati lockout verify-owner-pin (brute force PIN lama).
+const MAX_FAILURES = 10;
+const WINDOW_MINUTES = 10;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -74,7 +82,28 @@ Deno.serve(async (req: Request) => {
       if (!/^\d{6}$/.test(currentPin)) {
         return json({ ok: false, error: "PIN lama wajib diisi" }, 400);
       }
+      // Rate limit server (SEC-1 R-01): >=10 gagal dalam 10 menit ->
+      // kunci. Dihitung SEBELUM bcrypt.compare, dicatat SESUDAH —
+      // sama seperti verify-owner-pin. PIN benar sesudah lockout
+      // tetap ditolak sampai jendela 10 menit habis.
+      const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000)
+        .toISOString();
+      const { count } = await supabase
+        .from("pin_attempts")
+        .select("id", { count: "exact", head: true })
+        .eq("outlet_id", outletId)
+        .eq("success", false)
+        .eq("purpose", "owner")
+        .gte("created_at", since);
+      if ((count ?? 0) >= MAX_FAILURES) {
+        return json({ ok: false, reason: "locked" }, 403);
+      }
       const match = await bcrypt.compare(currentPin, hash);
+      await supabase.from("pin_attempts").insert({
+        outlet_id: outletId,
+        success: match,
+        purpose: "owner",
+      });
       if (!match) {
         return json({ ok: false, error: "PIN lama salah" }, 403);
       }

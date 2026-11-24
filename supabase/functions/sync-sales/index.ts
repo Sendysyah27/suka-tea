@@ -32,7 +32,14 @@
 //     dikecualikan). Pemanggil menambahkan opening_float sendiri.
 //   400 input tidak valid / 500 error Supabase.
 //
-// Batch C10 (FILE SAJA, belum deploy — deploy sesudah migrasi 011):
+// STATUS R-10 (SEC-1): bagian C10 di bawah SUDAH di-deploy bersama
+// v37/C10.1 (24 Nov 2026, 1907 baris; `hasCost` di baris ~368) —
+// komentar "FILE SAJA, belum deploy" sudah BASI. Batch SEC-1
+// menambah: bukti PIN per panggilan (R-02), validasi transaksi +
+// shift gate (R-05), RPC kirim stok atomik (R-06), purpose
+// pin_attempts (R-04).
+//
+// Batch C10 (deploy 24 Nov 2026 bersama v37/C10.1):
 // - Kind baru: 'master' (WS0 — perubahan master-data, LWW server
 //   by updated_at), 'stock_in' (WS1 — gudang += qty), 'brew'
 //   (WS4 — Teh Kering −, Teh Masak +), 'stock_send' (WS3 —
@@ -103,6 +110,9 @@
 // tidak kosong, maksimal 200 event per request.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
+// bcryptjs = modul CommonJS — default import (JANGAN `import *`):
+// fungsinya ada di `.default` (pola verify-owner-pin).
+import bcrypt from "npm:bcryptjs@2.4.3";
 
 type Supabase = ReturnType<typeof createClient>;
 
@@ -130,6 +140,11 @@ const GUDANG_ID = "00000000-0000-0000-0000-000000000000";
 /// migrasi 011 + StockService.setRecipe). HARUS sama dengan
 /// defaultOutletId di app.
 const CANONICAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
+/// Baris PIN Owner GLOBAL (Batch C10.1) — hash owner_pin_hash.
+const GLOBAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
+/// Rate limit PIN Owner (SEC-1 R-02) — pola verify-owner-pin.
+const MAX_FAILURES = 10;
+const WINDOW_MINUTES = 10;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -182,6 +197,118 @@ async function normalizeClientUuid(raw: string): Promise<string> {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/// Cek timestamp client (SEC-1 R-05): tolak >5 menit di masa depan
+/// atau >30 hari di masa lalu (batas backdate). Mengembalikan Date.
+function parseClientTime(raw: unknown, field: string): Date {
+  const s = String(raw ?? "");
+  const ms = Date.parse(s);
+  if (!Number.isFinite(ms)) throw new Error(`${field} bukan tanggal`);
+  const now = Date.now();
+  if (ms > now + 5 * 60 * 1000) {
+    throw new Error(`${field} di masa depan (>5 menit)`);
+  }
+  if (ms < now - 30 * 24 * 3600 * 1000) {
+    throw new Error(`${field} terlalu lampau (>30 hari)`);
+  }
+  return new Date(ms);
+}
+
+/// Pastikan outlet ada di tabel `outlets` (SEC-1 R-02 poin 2) —
+/// GUDANG_ID hanya boleh untuk kind yang memang memakai gudang
+/// (stock_in) / aksi pull. Cermin cek outlet yang sudah ada di pull.
+async function ensureOutletExists(
+  supabase: Supabase,
+  outletId: string,
+  allowGudang: boolean,
+): Promise<void> {
+  if (!UUID_RE.test(outletId)) throw new Error("outlet_id bukan UUID");
+  if (allowGudang && outletId === GUDANG_ID) return;
+  const { data, error } = await supabase
+    .from("outlets")
+    .select("id")
+    .eq("id", outletId)
+    .maybeSingle();
+  if (error) throw new Error(`cek outlet gagal: ${error.message}`);
+  if (data == null) throw new Error("outlet_not_found");
+}
+
+/// Bukti PIN untuk sync-sales (SEC-1 R-02 poin 1).
+/// body boleh membawa `owner_pin` (6 digit, diverifikasi ke hash
+/// global + rate limit purpose 'owner') ATAU `cashier_pin` (dicocokkan
+/// ke SEMUA kasir aktif; TIDAK mencatat pin_attempts — bukti sync
+/// tidak boleh mengunci login kasir).
+/// null = bukti sah; Response = tolak (403/400).
+async function verifySyncProof(
+  supabase: Supabase,
+  body: Record<string, unknown>,
+): Promise<Response | null> {
+  const ownerPinRaw = body.owner_pin;
+  const hasOwnerPin = typeof ownerPinRaw === "string" && ownerPinRaw !== "";
+  if (hasOwnerPin) {
+    const pin = String(ownerPinRaw);
+    if (!/^\d{6}$/.test(pin)) {
+      return json({ ok: false, error: "owner_pin 6 digit wajib" }, 400);
+    }
+    const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000)
+      .toISOString();
+    const { count } = await supabase
+      .from("pin_attempts")
+      .select("id", { count: "exact", head: true })
+      .eq("outlet_id", GLOBAL_OUTLET_ID)
+      .eq("success", false)
+      .eq("purpose", "owner")
+      .gte("created_at", since);
+    if ((count ?? 0) >= MAX_FAILURES) {
+      return json({ ok: false, reason: "locked" }, 403);
+    }
+    const { data: row, error: readError } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("outlet_id", GLOBAL_OUTLET_ID)
+      .eq("key", "owner_pin_hash")
+      .maybeSingle();
+    if (readError) {
+      return json({ ok: false, error: readError.message }, 500);
+    }
+    const hash = (row as { value?: string } | null)?.value;
+    if (!hash) {
+      return json({ ok: false, reason: "not_set" }, 403);
+    }
+    const match = await bcrypt.compare(pin, hash);
+    await supabase.from("pin_attempts").insert({
+      outlet_id: GLOBAL_OUTLET_ID,
+      success: match,
+      purpose: "owner",
+    });
+    if (!match) return json({ ok: false, reason: "wrong" }, 403);
+    return null;
+  }
+
+  const cashierPinRaw = body.cashier_pin;
+  if (typeof cashierPinRaw === "string" && cashierPinRaw !== "") {
+    const pin = String(cashierPinRaw);
+    if (!/^\d{6}$/.test(pin)) {
+      return json({ ok: false, error: "cashier_pin 6 digit wajib" }, 400);
+    }
+    const { data: actives, error: readError } = await supabase
+      .from("cashiers")
+      .select("id, pin_hash")
+      .eq("active", true);
+    if (readError) {
+      return json({ ok: false, error: readError.message }, 500);
+    }
+    for (const c of (actives ?? []) as Record<string, unknown>[]) {
+      const hash = String(c["pin_hash"] ?? "");
+      if (hash === "") continue;
+      if (await bcrypt.compare(pin, hash)) return null;
+    }
+    // TANPA insert pin_attempts (lihat doc di atas).
+    return json({ ok: false, reason: "wrong" }, 403);
+  }
+
+  return json({ ok: false, error: "pin_required" }, 403);
+}
+
 /// Upsert satu transaksi + ganti item-nya utuh (idempotent).
 /// Batch C8.2 WS4: simpan cashier_id + cashier_name (kasir pencatat).
 async function pushTransaction(
@@ -206,15 +333,60 @@ async function pushTransaction(
   const isVoid = p.is_void === true;
   const items = Array.isArray(p.items) ? p.items : [];
   if (items.length === 0) throw new Error("items kosong");
+  // SEC-1 R-05 poin 1: total harus sama dengan jumlah item. Diskon
+  // mengurangi total (subtotal = total + discount — lihat upsert di
+  // bawah), jadi yang benar: Σ(qty×price) == total + discount.
+  let itemsSum = 0;
   for (const it of items) {
     const item = it as Record<string, unknown>;
     if (typeof item.name !== "string" || item.name === "") {
       throw new Error("item tanpa nama");
     }
-    toPosInt(item.qty, "item.qty");
-    toNonNegInt(item.price, "item.price");
+    const qty = toPosInt(item.qty, "item.qty");
+    const price = toNonNegInt(item.price, "item.price");
+    itemsSum += qty * price;
   }
-  const createdAt = String(ev.created_at ?? new Date().toISOString());
+  if (itemsSum !== total + discount) {
+    throw new Error(
+      `total tidak cocok dengan item (total ${total} + diskon ${discount} != ${itemsSum})`,
+    );
+  }
+  if (paid < total) throw new Error("paid kurang dari total");
+  if (change !== paid - total) {
+    throw new Error("change tidak sama dengan paid - total");
+  }
+  // Void adalah event yang menunjuk transaksi LAMA (payload bisa dari
+  // versi app yang belum mengisi cash_amount/qris_amount) — cek
+  // pembagian hanya untuk penjualan baru.
+  if (!isVoid && qrisAmount + cashAmount !== total) {
+    throw new Error("qris_amount + cash_amount harus sama dengan total");
+  }
+  const createdAtDate = parseClientTime(
+    ev.created_at ?? new Date().toISOString(),
+    "created_at",
+  );
+  const createdAt = createdAtDate.toISOString();
+
+  // SEC-1 R-05 poin 2: shift gate server-side. Shift harus sudah
+  // dibuka pada created_at transaksi dan belum ditutup saat itu.
+  // Memakai created_at (bukan waktu push) supaya penjualan offline
+  // yang di-push sesudah shift tutup tetap lolos bila dibuat saat
+  // shift terbuka.
+  const { data: shiftRows, error: shiftErr } = await supabase
+    .from("cash_shifts")
+    .select("opened_at, closed_at")
+    .eq("outlet_id", outletId)
+    .lte("opened_at", createdAt);
+  if (shiftErr) throw new Error(`baca shift gagal: ${shiftErr.message}`);
+  const hasOpenShift = ((shiftRows ?? []) as Record<string, unknown>[])
+    .some((row) => {
+      const closedRaw = row["closed_at"];
+      if (closedRaw == null) return true;
+      const closedMs = Date.parse(String(closedRaw));
+      return Number.isFinite(closedMs) &&
+        closedMs >= createdAtDate.getTime();
+    });
+  if (!hasOpenShift) throw new Error("no_open_shift");
   // cashier_id = UUID kasir dari server (migrasi 010); string bukan
   // UUID / kosong = null (kolom uuid tidak menerima string kosong).
   const cashierIdRaw =
@@ -516,7 +688,11 @@ async function pushExpense(
     typeof p.cashier_name === "string" ? p.cashier_name : "";
   const description =
     typeof p.description === "string" ? p.description : "";
-  const createdAt = String(ev.created_at ?? new Date().toISOString());
+  // SEC-1 R-05 poin 3: amount > 0 (toPosInt) + batas waktu sama.
+  const createdAt = parseClientTime(
+    ev.created_at ?? new Date().toISOString(),
+    "created_at",
+  ).toISOString();
   const { error: upErr } = await supabase
     .from("expenses")
     .upsert(
@@ -589,6 +765,24 @@ async function pushShift(
     if (v == null) return null;
     return Math.trunc(toNumber(v, field));
   };
+  // SEC-1 R-05 poin 4: uang tidak boleh negatif; selisih harus
+  // konsisten bila counted + expected + difference ketiganya ada.
+  const optNonNegInt = (v: unknown, field: string): number | null => {
+    const n = optInt(v, field);
+    if (n != null && n < 0) throw new Error(`${field} negatif`);
+    return n;
+  };
+  const countedCash = optNonNegInt(p.counted_cash, "counted_cash");
+  const expectedCash = optNonNegInt(p.expected_cash, "expected_cash");
+  const difference = optInt(p.difference, "difference");
+  if (
+    countedCash != null && expectedCash != null && difference != null &&
+    difference !== countedCash - expectedCash
+  ) {
+    throw new Error(
+      "difference tidak sama dengan counted_cash - expected_cash",
+    );
+  }
 
   if (status === "open") {
     const { data: otherOpen } = await supabase
@@ -651,9 +845,9 @@ async function pushShift(
         opened_at: openedAt,
         opening_float: openingFloat,
         closed_at: closedAt,
-        counted_cash: optInt(p.counted_cash, "counted_cash"),
-        expected_cash: optInt(p.expected_cash, "expected_cash"),
-        difference: optInt(p.difference, "difference"),
+        counted_cash: countedCash,
+        expected_cash: expectedCash,
+        difference,
         status,
         note: typeof p.note === "string" ? p.note : "",
         client_uuid: clientUuid,
@@ -1201,13 +1395,16 @@ async function pushBrew(
   return { applied: true };
 }
 
-/// Kirim ke gerai (Batch C10 WS3): cek gudang DULU (race guard —
-/// dua HP kirim bersamaan), lalu gudang − + gerai + (delta +
-/// mutasi 'kirim' di kedua sisi). Idempotent by client_uuid —
-/// sisip baris kiriman dulu (upsert), baru terapkan delta (retry
-/// aman, lihat pushStockIn). Gudang kurang -> throw
+/// Kirim ke gerai (Batch C10 WS3 + SEC-1 R-06): pindahkan gudang −
+/// dan gerai + secara ATOMIK lewat RPC Postgres `apply_stock_send`
+/// (migrasi 013) — baris gudang dikunci FOR UPDATE, jadi dua
+/// kiriman bersamaan tidak bisa sama-sama lolos (TOCTOU hilang).
+/// Mutasi 'kirim' ditulis DI DALAM RPC dengan UUID deterministik
+/// dari client_uuid kiriman (retry tidak memotong dua kali).
+/// Gudang kurang -> RPC RAISE 'gudang_kurang' -> throw
 /// Error("gudang_kurang") — app membalik stok lokal + memberi tahu
-/// Owner (bukan retry diam-diam).
+/// Owner (bukan retry diam-diam). Clamp Math.max(0, ...) TIDAK
+/// dipakai di jalur kirim lagi (clamp menutupi overdraw).
 async function pushStockSend(
   supabase: Supabase,
   ev: Record<string, unknown>,
@@ -1232,20 +1429,35 @@ async function pushStockSend(
       unit: typeof it.unit === "string" && it.unit !== "" ? it.unit : "pcs",
     });
   }
-  // Race guard: baca gudang SEKARANG — bila kurang untuk SATU saja
-  // item, tolak SELURUH kiriman (tidak ada yang dipindah). Cek ini
-  // HARUS sebelum sisip baris kiriman (kiriman yang ditolak tidak
-  // boleh tercatat 'ok').
+  // SEC-1 R-06: SATU RPC atomik — kunci baris gudang, cek semua
+  // item, lalu pindahkan. Semua-atau-tidak-sama-sekali.
+  const rpcItems: Record<string, unknown>[] = [];
   for (const it of parsed) {
-    const { data: row } = await supabase
-      .from("stock_items")
-      .select("qty")
-      .eq("outlet_id", GUDANG_ID)
-      .eq("name", it.name)
-      .maybeSingle();
-    const have = row == null ? 0 : Number((row as { qty: number }).qty ?? 0);
-    if (have < it.qty) throw new Error("gudang_kurang");
+    rpcItems.push({
+      name: it.name,
+      qty: it.qty,
+      unit: it.unit,
+      out_uuid: await normalizeClientUuid(
+        `${clientUuid}:gudang:${it.name}`,
+      ),
+      in_uuid: await normalizeClientUuid(
+        `${clientUuid}:gerai:${it.name}`,
+      ),
+    });
   }
+  const { error: rpcErr } = await supabase.rpc("apply_stock_send", {
+    p_outlet: outletId,
+    p_items: rpcItems,
+  });
+  if (rpcErr) {
+    const message = String(rpcErr.message ?? "");
+    if (message.includes("gudang_kurang")) {
+      throw new Error("gudang_kurang");
+    }
+    throw new Error(`kirim stok gagal: ${message}`);
+  }
+  // Baris kiriman dicatat SESUDAH stok benar-benar pindah (kiriman
+  // yang ditolak RPC tidak boleh tercatat 'ok').
   const { error: insErr } = await supabase.from("stock_sends").upsert(
     {
       id: clientUuid,
@@ -1265,42 +1477,6 @@ async function pushStockSend(
     { onConflict: "client_uuid" },
   );
   if (insErr) throw new Error(`sisip kiriman gagal: ${insErr.message}`);
-  for (const it of parsed) {
-    const gudangRow = await getOrCreateStockRow(
-      supabase,
-      GUDANG_ID,
-      it.name,
-      it.unit,
-    );
-    const geraiRow = await getOrCreateStockRow(
-      supabase,
-      outletId,
-      it.name,
-      it.unit,
-    );
-    const outUuid = await normalizeClientUuid(
-      `${clientUuid}:gudang:${it.name}`,
-    );
-    const inUuid = await normalizeClientUuid(
-      `${clientUuid}:gerai:${it.name}`,
-    );
-    await applyStockDelta(
-      supabase,
-      GUDANG_ID,
-      gudangRow,
-      -it.qty,
-      "kirim",
-      outUuid,
-    );
-    await applyStockDelta(
-      supabase,
-      outletId,
-      geraiRow,
-      it.qty,
-      "kirim",
-      inUuid,
-    );
-  }
   const sendItems = parsed.map((it) => ({
     id: `${clientUuid}:${it.name}`,
     send_id: clientUuid,
@@ -1814,6 +1990,32 @@ Deno.serve(async (req: Request) => {
           400,
         );
       }
+      // SEC-1 R-02 poin 1: bukti PIN wajib SEBELUM dispatch kind.
+      // Tanpa ini siapa pun yang mengekstrak anon key bisa menulis
+      // transaksi palsu ke gerai mana pun (temuan HIGH RedMuse).
+      const proofError = await verifySyncProof(supabase, body);
+      if (proofError != null) return proofError;
+      // SEC-1 R-02 poin 2: outlet harus ada untuk SEMUA kind push
+      // (sebelumnya cek ini hanya di pull). GUDANG_ID hanya sah untuk
+      // kind yang memang memakai gudang (stock_in).
+      for (const raw of events) {
+        const ev = raw as Record<string, unknown>;
+        try {
+          await ensureOutletExists(
+            supabase,
+            String(ev.outlet_id ?? ""),
+            ev.kind === "stock_in",
+          );
+        } catch (e) {
+          return json(
+            {
+              ok: false,
+              error: String(e instanceof Error ? e.message : e),
+            },
+            400,
+          );
+        }
+      }
       const results: Record<string, unknown>[] = [];
       // Dedupe shift (Batch C8.2 WS6): event buka yang ditolak server
       // karena shift lain lebih awal — app mengadopsi shift itu.
@@ -1879,6 +2081,9 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "pull") {
+      // SEC-1 R-02 poin 1: pull juga wajib bukti PIN.
+      const pullProofError = await verifySyncProof(supabase, body);
+      if (pullProofError != null) return pullProofError;
       try {
         return json(await pull(supabase, body));
       } catch (e) {

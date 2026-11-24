@@ -34,6 +34,14 @@ class SukaTeaApp extends StatelessWidget {
       title: 'SUKA TEA',
       theme: SukaTeaTheme.light,
       debugShowCheckedModeBanner: false,
+      // SEC-1 R-11: font sistem (MIUI/aksesibilitas) tidak boleh
+      // menggembungkan teks app di luar 1,3x — akar "teks raksasa"
+      // B6 (bukan warna/font mono, yang memang tidak ada di kode).
+      builder: (context, child) => MediaQuery.withClampedTextScaling(
+        minScaleFactor: 1.0,
+        maxScaleFactor: 1.3,
+        child: child ?? const SizedBox.shrink(),
+      ),
       home: const _LoginGate(),
     );
   }
@@ -134,6 +142,12 @@ class _LoginGateState extends State<_LoginGate>
     // gerai ini (bisa dibuka di device lain — gate POS harus tahu).
     unawaited(StockService.instance.ensureOutlet(result.outletId));
     unawaited(SyncService.instance.refreshShifts(outletId: result.outletId));
+    // SEC-1 R-02: bukti PIN sudah tersedia sesudah verifikasi PIN
+    // (PinService/CashierService menyimpannya di memori). Start timer
+    // sync di main() sengaja TIDAK pull sebelum login — di sini
+    // saatnya flush antrean + pull pertama.
+    unawaited(SyncService.instance.syncNow());
+    unawaited(SyncService.instance.refreshSales(outletId: result.outletId));
     setState(() => _login = result);
     if (result.role == AppRole.kasir) {
       CashierSessionService.instance.touch();
@@ -182,6 +196,10 @@ class _LoginGateState extends State<_LoginGate>
     final login = _login;
     if (login == null) return;
     _locked = true;
+    // SEC-1 R-02: PIN Owner sesi ikut dihapus saat lock (bukti sync
+    // tidak boleh bertahan di memori sesudah peran dikunci). PIN kasir
+    // diganti sesudah unlock berhasil.
+    CashierSessionService.instance.clearOwnerPin();
     final outlet = OutletService.instance.outletById(login.outletId) ??
         OutletService.instance.currentOutlet;
     await Navigator.of(context).push<void>(
@@ -399,7 +417,9 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
               selected: true,
               onSelected: (_) async {
                 if (_role == AppRole.owner) {
-                  // Turun ke Kasir tidak perlu PIN.
+                  // Turun ke Kasir tidak perlu PIN, tapi bukti Owner
+                  // dibuang (SEC-1 R-02) — sync memakai bukti Kasir.
+                  CashierSessionService.instance.clearOwnerPin();
                   setState(() => _role = AppRole.kasir);
                 } else {
                   // Naik ke Owner wajib PIN.

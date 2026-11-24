@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../data/outlet_service.dart';
+import '../login/cashier_session.dart';
 import '../../data/supabase_client.dart';
 import '../pin/pin_service.dart';
 
@@ -149,6 +150,25 @@ class CashierService {
   int _failedAttempts = 0;
   DateTime? _lockedUntil;
 
+  /// Nama kasir terdaftar yang SUDAH dimuat dari server (memori saja,
+  /// Batch C10.2 W5). Dipakai resolusi nama pembuka shift saat sesi
+  /// tidak menyimpan nama (mis. sesi lama) — TIDAK PERNAH disimpan
+  /// ke storage; PIN pun tidak pernah disimpan.
+  final Map<String, String> _knownCashierNames = {};
+
+  /// Nama kasir untuk [cashierId] yang pernah dimuat, null bila belum
+  /// ada di memori. Tidak memanggil server (resolusi shift sinkron).
+  String? knownNameFor(String cashierId) {
+    final name = _knownCashierNames[cashierId];
+    return name == null || name.isEmpty ? null : name;
+  }
+
+  /// Simpan pasangan id -> nama ke registry memori (dipakai setelah
+  /// list/verify kasir, dan untuk resolusi nama pembuka shift W5).
+  void rememberCashier({required String id, required String name}) {
+    if (id.isNotEmpty && name.isNotEmpty) _knownCashierNames[id] = name;
+  }
+
   bool get isLocked =>
       _lockedUntil != null && DateTime.now().isBefore(_lockedUntil!);
 
@@ -193,6 +213,13 @@ class CashierService {
       if (parsed.result == CashierVerifyResult.ok) {
         _failedAttempts = 0;
         _lockedUntil = null;
+        // SEC-1 R-02: PIN kasir sesi di MEMORI (bukan storage).
+        CashierSessionService.instance.rememberCashierPin(pin);
+        final id = parsed.cashierId;
+        final name = parsed.name;
+        if (id != null && name != null) {
+          rememberCashier(id: id, name: name);
+        }
       } else if (parsed.result == CashierVerifyResult.wrong) {
         _failedAttempts++;
         if (_failedAttempts >= maxAttempts) {
@@ -267,7 +294,13 @@ class CashierService {
         'list-cashiers',
         body: cashierOwnerBody(ownerPin: ownerPin),
       );
-      return parseCashierListResponse(res.data);
+      final parsed = parseCashierListResponse(res.data);
+      if (parsed.ok) {
+        for (final c in parsed.cashiers) {
+          rememberCashier(id: c.id, name: c.name);
+        }
+      }
+      return parsed;
     } catch (e) {
       debugPrint('Muat daftar kasir gagal: $e');
       return (ok: false, cashiers: const <Cashier>[]);

@@ -3,12 +3,18 @@
 // Sheets (tab: Ringkasan Harian, Transaksi, Stok/Bahan, Pengeluaran).
 // Sheets HANYA untuk laporan/export — Supabase tetap sumber kebenaran.
 //
-// POST { outlet_id, shift_id } -> { ok, ... }
+// POST { outlet_id, shift_id, owner_pin } -> { ok, ... }
 //   outlet_id = UUID gerai (wajib), shift_id = TANGGAL 'YYYY-MM-DD'
 //   (wajib — app tidak punya konsep shift; tutup kasir = harian).
 //   200 { ok:true, spreadsheet_id, date, counts:{...}, note? }
-//   400 input tidak valid / 501 secret Google belum diisi /
-//   500 error Supabase / Sheets API.
+//   400 input tidak valid / 403 bukti PIN Owner tidak ada / salah /
+//   501 secret Google belum diisi / 500 error Supabase / Sheets API.
+//
+// SEC-1 R-03: bukti PIN Owner WAJIB — tanpa ini siapa pun yang
+// punya anon key bisa membaca data keuangan + menimpa sheet owner
+// (batchClear/batchUpdate bersifat destruktif). Verifikasi memakai
+// hash global + rate limit purpose 'owner' (sama seperti
+// verify-owner-pin).
 //
 // KEJUJURAN DATA (penting): sejak Batch C6 penjualan tersinkron
 // ke Supabase via Edge Function `sync-sales`, jadi tabel
@@ -31,11 +37,16 @@
 // mengembalikan 501 dengan pesan yang menyebut nama secret-nya.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import bcrypt from "npm:bcryptjs@2.4.3";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+const GLOBAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
+const MAX_FAILURES = 10;
+const WINDOW_MINUTES = 10;
 
 const TABS = ["Ringkasan Harian", "Transaksi", "Stok/Bahan", "Pengeluaran"];
 const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
@@ -205,6 +216,51 @@ Deno.serve(async (req: Request) => {
     const endIso = dayEnd.toISOString();
 
     const supabase = createClient(supabaseUrl, serviceKey);
+
+    // --- Bukti PIN Owner (SEC-1 R-03) — SEBELUM baca/tulis apa pun ---
+    const ownerPin = String(body.owner_pin ?? "");
+    if (ownerPin === "") {
+      return json({ ok: false, error: "pin_required" }, 403);
+    }
+    if (!/^\d{6}$/.test(ownerPin)) {
+      return json({ ok: false, error: "owner_pin 6 digit wajib" }, 403);
+    }
+    // Rate limit purpose 'owner' (migrasi 012) — pola
+    // verify-owner-pin. Percobaan dicatat ke pin_attempts.
+    const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000)
+      .toISOString();
+    const { count } = await supabase
+      .from("pin_attempts")
+      .select("id", { count: "exact", head: true })
+      .eq("outlet_id", GLOBAL_OUTLET_ID)
+      .eq("success", false)
+      .eq("purpose", "owner")
+      .gte("created_at", since);
+    if ((count ?? 0) >= MAX_FAILURES) {
+      return json({ ok: false, reason: "locked" }, 403);
+    }
+    const { data: pinRow, error: pinReadError } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("outlet_id", GLOBAL_OUTLET_ID)
+      .eq("key", "owner_pin_hash")
+      .maybeSingle();
+    if (pinReadError) {
+      return json({ ok: false, error: pinReadError.message }, 500);
+    }
+    const pinHash = (pinRow as { value?: string } | null)?.value;
+    if (!pinHash) {
+      return json({ ok: false, reason: "not_set" }, 403);
+    }
+    const pinMatch = await bcrypt.compare(ownerPin, pinHash);
+    await supabase.from("pin_attempts").insert({
+      outlet_id: GLOBAL_OUTLET_ID,
+      success: pinMatch,
+      purpose: "owner",
+    });
+    if (!pinMatch) {
+      return json({ ok: false, reason: "wrong" }, 403);
+    }
 
     // --- Baca data Supabase (service_role, RLS dilewati) ---
     const { data: summaryRows, error: summaryError } = await supabase

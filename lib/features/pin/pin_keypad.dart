@@ -14,7 +14,8 @@ import '../../core/theme/app_theme.dart';
 /// [compact]: keypad kecil untuk layar PIN Kasir (tombol 72px, lebar
 /// total 232px, di tengah layar) — keypad besar lama (~110px di HP
 /// 360dp, hampir selebar layar) terlalu dominan di halaman login.
-/// Default false = ukuran lama, dipakai KasirPinDialog (tidak diubah).
+/// Default false = ukuran lama, dipakai dialog PIN lama (R-09:
+/// KasirPinDialog sudah dihapus — keypad tetap dipakai KasirPinPage).
 class PinKeypad extends StatelessWidget {
   const PinKeypad({
     super.key,

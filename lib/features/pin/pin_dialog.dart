@@ -26,8 +26,9 @@ class PinEntryDialog extends StatefulWidget {
 
   /// Dipanggil dengan PIN Owner yang berhasil diverifikasi (sebelum
   /// pop) — dipakai alur yang butuh nilai PIN-nya lagi, mis. Ubah PIN
-  /// Gerai yang meneruskan PIN Owner ke set-kasir-pin. PIN TIDAK
-  /// disimpan di mana pun; hanya diteruskan sekali ke server.
+  /// PIN Owner sekali pakai untuk alur lain (mis. verifikasi ulang).
+  /// PIN TIDAK disimpan di storage; di sisi app hanya hidup di
+  /// memori sesi (SEC-1 R-02).
   /// null = pemanggil tidak butuh nilainya (perilaku lama).
   final ValueChanged<String>? onPinVerified;
 

@@ -51,6 +51,45 @@ class CashierSessionService extends ChangeNotifier {
   bool get hasSession => _outletId != null;
   DateTime get lastActive => _lastActive;
 
+  // ---- Bukti PIN sesi (SEC-1 R-02) ----
+  // HANYA di memori proses ini — TIDAK PERNAH ditulis ke Drift /
+  // SharedPreferences / file. Dipakai SyncService untuk melampirkan
+  // `owner_pin` / `cashier_pin` ke setiap panggilan sync-sales.
+  // Dihapus saat logout, lock, ganti peran, atau app ditutup.
+  String? _ownerPin;
+  String? _cashierPin;
+
+  /// Ingat PIN Owner sesudah unlock berhasil (memori saja).
+  void rememberOwnerPin(String pin) {
+    _ownerPin = pin;
+    _cashierPin = null;
+  }
+
+  /// Ingat PIN kasir sesudah login berhasil (memori saja).
+  void rememberCashierPin(String pin) {
+    _cashierPin = pin;
+    _ownerPin = null;
+  }
+
+  /// Hapus bukti PIN Owner (mis. kembali ke peran Kasir / lock).
+  void clearOwnerPin() {
+    _ownerPin = null;
+  }
+
+  /// Bukti PIN untuk body sync-sales: {owner_pin} atau {cashier_pin};
+  /// kosong = belum ada bukti (sync WAJIB ditahan — R-02).
+  Map<String, dynamic> get sessionProof {
+    final owner = _ownerPin;
+    if (owner != null && owner.isNotEmpty) return {'owner_pin': owner};
+    final cashier = _cashierPin;
+    if (cashier != null && cashier.isNotEmpty) {
+      return {'cashier_pin': cashier};
+    }
+    return const <String, dynamic>{};
+  }
+
+  bool get hasSessionProof => sessionProof.isNotEmpty;
+
   Future<void> init() async {
     _db ??= AppDatabase();
     final row = await (_db!.select(_db!.cashierSessions)
@@ -96,6 +135,9 @@ class CashierSessionService extends ChangeNotifier {
     _outletId = null;
     _cashierId = null;
     _cashierName = null;
+    // Bukti PIN ikut dihapus (SEC-1 R-02 — PIN hanya di memori).
+    _ownerPin = null;
+    _cashierPin = null;
     _lastActive = DateTime.now();
     notifyListeners();
   }

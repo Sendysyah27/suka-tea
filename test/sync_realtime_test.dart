@@ -12,6 +12,7 @@ import 'package:suka_tea/data/sale_history.dart';
 import 'package:suka_tea/data/stock_service.dart';
 import 'package:suka_tea/data/sync_payload.dart';
 import 'package:suka_tea/data/sync_service.dart';
+import 'package:suka_tea/features/login/cashier_session.dart';
 
 /// Sinkronisasi realtime (Batch C9) — MURNI + service dengan Drift
 /// asli (pola gerai_monitor_sync_test: path_provider di-mock ke
@@ -635,6 +636,9 @@ void main() {
 
   group('refreshSales + timer', () {
     test('refreshSales dobel bersamaan = satu pull', () async {
+      // SEC-1 R-02: EF sync-sales sekarang butuh bukti PIN —
+      // test menyimulasikan sesi kasir yang sudah login.
+      CashierSessionService.instance.rememberCashierPin('123456');
       var pulls = 0;
       final svc = SyncService.createForTest(
         configured: true,
@@ -648,6 +652,7 @@ void main() {
     });
 
     test('start() dua kali = satu timer', () async {
+      CashierSessionService.instance.rememberCashierPin('123456');
       // Waktu nyata (bukan fakeAsync): merge refreshSales memakai
       // Drift asli yang butuh event loop nyata, jadi jam palsu tidak
       // bisa menyelesaikan pull pertama dan guard _pullingSales akan

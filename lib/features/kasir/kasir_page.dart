@@ -629,6 +629,13 @@ class _KasirPageState extends State<KasirPage> {
     // supaya event void nanti menunjuk baris Supabase yang sama.
     // Payload lengkap (outlet, paid, change, created_at, is_void,
     // modifiers) supaya server tidak perlu menebak-nebak.
+    // SEC-1 R-05: server kini menuntut qris_amount + cash_amount =
+    // total. Alur non-split SEBELUMNYA mengirim 0/0 (paid saja), jadi
+    // isi bagiannya di sini: tunai -> cash_amount = total, selain
+    // tunai -> qris_amount = total. Split sudah membawa keduanya.
+    final isSplit = qrisAmount > 0 && cashAmount > 0;
+    final effectiveQris = isSplit ? qrisAmount : (method == PaymentMethod.tunai ? 0 : total);
+    final effectiveCash = isSplit ? cashAmount : (method == PaymentMethod.tunai ? total : 0);
     final clientUuid = newClientUuid();
     final outletId = OutletService.instance.currentOutletId;
     // Batch C8.2 WS4: kasir pencatat dari sesi aktif (identitas dari
@@ -650,8 +657,8 @@ class _KasirPageState extends State<KasirPage> {
       'discount': discount,
       'paid': paid,
       'change': paid - total,
-      'qris_amount': qrisAmount,
-      'cash_amount': cashAmount,
+      'qris_amount': effectiveQris,
+      'cash_amount': effectiveCash,
       'cashier_id': cashierId,
       'cashier_name': cashierName,
       'is_void': false,
@@ -678,8 +685,8 @@ class _KasirPageState extends State<KasirPage> {
       method: method,
       paid: paid,
       discount: discount,
-      qrisAmount: qrisAmount,
-      cashAmount: cashAmount,
+      qrisAmount: effectiveQris,
+      cashAmount: effectiveCash,
       cashierId: cashierId,
       cashierName: cashierName,
     );
@@ -2144,11 +2151,12 @@ class _ShiftGateScreenState extends State<_ShiftGateScreen> {
 
   Future<void> _openShift() async {
     final session = CashierSessionService.instance;
-    final name = session.cashierName?.trim() ?? '';
     await openShiftFlow(
       context,
       cashierId: session.cashierId ?? '',
-      cashierName: name.isNotEmpty ? name : 'Kasir',
+      // Batch C10.2 W5: JANGAN fallback 'Kasir' — openShiftFlow
+      // me-resolve nama (sesi / registry kasir / Owner / kosong).
+      cashierName: session.cashierName ?? '',
     );
     // Shift berhasil dibuka -> CashShiftService notify -> gate hilang
     // sendiri (ListenableBuilder di build KasirPage).

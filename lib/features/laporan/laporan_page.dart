@@ -60,10 +60,12 @@ class LaporanPage extends StatefulWidget {
 }
 
 class _LaporanPageState extends State<LaporanPage> {
-  /// Nama pencatat shift: sesi kasir aktif; Owner (tanpa sesi) = 'Owner'.
+  /// Nama pencatat shift: sesi kasir aktif; Owner (tanpa sesi) =
+  /// 'Owner'; selain itu KOSONG (Batch C10.2 W5 — literal 'Kasir'
+  /// bukan nama orang; tampilan memakai '—').
   String get _cashierName =>
       CashierSessionService.instance.cashierName ??
-      (widget.role == AppRole.owner ? 'Owner' : 'Kasir');
+      (widget.role == AppRole.owner ? 'Owner' : '');
 
   /// UUID kasir pembuka/penutup dari server; Owner (tanpa sesi) = ''.
   String get _cashierId =>
@@ -114,6 +116,7 @@ class _LaporanPageState extends State<LaporanPage> {
       context,
       cashierId: _cashierId,
       cashierName: _cashierName,
+      isOwner: widget.role == AppRole.owner,
     );
     if (shift != null) unawaited(SyncService.instance.syncNow());
   }
@@ -576,7 +579,7 @@ class _LaporanPageState extends State<LaporanPage> {
             const SizedBox(height: 8),
             _shiftRow(
               'Dibuka oleh',
-              open.cashierName.isEmpty ? 'Kasir' : open.cashierName,
+              shiftOpenerLabel(open.cashierName),
             ),
             _shiftRow('Dibuka', formatShiftTime(open.openedAt)),
             _shiftRow('Modal awal', formatRupiah(open.openingFloat)),
@@ -628,7 +631,7 @@ class _LaporanPageState extends State<LaporanPage> {
     final when = closedAt == null
         ? formatShiftDayTime(s.openedAt)
         : '${formatShiftDayTime(s.openedAt)} – ${formatShiftTime(closedAt)}';
-    final opener = s.cashierName.isEmpty ? 'Kasir' : s.cashierName;
+    final opener = shiftOpenerLabel(s.cashierName);
     final closer = s.closedByCashierName;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),

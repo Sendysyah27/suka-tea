@@ -44,6 +44,8 @@ enum _LoginStep { select, pin }
 /// PIN — identitas kasir (id + nama) datang dari SERVER, bukan
 /// ketikan. PIN kasir per-gerai lama (C4/C5, KasirPinService) TIDAK
 /// LAGI dipakai di alur login (fail-open-nya ikut mati).
+/// SEC-1 R-09: EF + service kasir-PIN lawas sudah DIHAPUS dari repo
+/// (tidak ada pemanggil hidup — yang tersisa hanyalah komentar ini).
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.onSuccess});
 

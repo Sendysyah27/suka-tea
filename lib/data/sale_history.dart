@@ -41,7 +41,11 @@ class SaleItem {
         productId: item.product.id,
         productName: item.product.name,
         variantId: item.variant.id,
-        variantName: item.variant.name,
+        // Batch C10.2 W4: segmen varian snapshot memakai nama saat
+        // ini ('22oz'), bukan nama lama yang mungkin masih tersimpan
+        // di record menu lokal ('Reguler').
+        variantName:
+            canonicalVariantName(item.variant.id, item.variant.name),
         qty: item.qty,
         unitPrice: item.unitPrice,
         modifiers: item.modifiers.map((m) => m.name).toList(),

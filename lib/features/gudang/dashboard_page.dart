@@ -27,6 +27,17 @@ import 'package_list_page.dart';
 import 'send_stock_page.dart';
 import 'stock_in_page.dart';
 
+/// Teks laba bersih di hero "Ringkasan hari ini" (Batch C10.2 W2).
+/// Aturan jujur yang SAMA dengan §7 Keuangan: bila HPP belum diatur
+/// (satu gerai tersinkron pun), tampil "—" — JANGAN angka mentah
+/// `omzet − 0 − pengeluaran` yang terlihat seperti laba nyata.
+/// Dipisah supaya bisa diuji unit tanpa memompa seluruh halaman.
+String heroLabaBersihText({
+  required bool hppUnset,
+  required int labaBersih,
+}) =>
+    'laba bersih ${hppUnset ? '—' : formatRupiah(labaBersih)}';
+
 /// Dashboard Owner FULL (Batch C10 WS7, FigCraft v32 frame 17).
 /// Owner-only. 9 seksi, urutan layar 1→2→4→3→5→6→7→8→9:
 /// 1 Ringkasan hari ini semua gerai → Laporan.
@@ -387,7 +398,7 @@ class _DashboardPageState extends State<DashboardPage> {
                     const SizedBox(height: 4),
                     Text(
                       '$totalTxn transaksi • $totalCups cup • '
-                      'laba bersih ${formatRupiah(labaBersih)}',
+                      '${heroLabaBersihText(hppUnset: hppUnset, labaBersih: labaBersih)}',
                       style: const TextStyle(color: SukaTeaColors.muted),
                     ),
                     if (statsByOutlet.values.any((s) => s == null))
@@ -918,11 +929,14 @@ class _GeraiStockRow extends StatelessWidget {
           .compareTo(
               b.qty / (b.lowThreshold == 0 ? 1 : b.lowThreshold)));
     final top3 = low.take(3).toList();
-    final capacity = totalCapacityCups(
+    final capacity = capacityForOutlet(
       MenuService.instance.products,
       StockService.instance.recipes,
       StockService.instance.stockByNameFor(outletId),
     );
+    // "Paling tipis" (Batch C10.2 W3): daftar stok terendah + nama
+    // bahan yang membatasi kapasitas serentak (kalau belum tercakup).
+    final limiting = capacity.limitingStock;
     final sendsToday = PackageService.instance.sendsFor(
       outletId,
       DateTime.now(),
@@ -943,14 +957,15 @@ class _GeraiStockRow extends StatelessWidget {
                 ),
               ),
               Text(
-                'Bisa jual $capacity cup',
+                'Bisa jual ${capacity.cups} cup',
                 style: const TextStyle(color: SukaTeaColors.muted),
               ),
             ],
           ),
           if (top3.isNotEmpty)
             Text(
-              'Paling tipis: ${top3.map((s) => '${s.name} ${qtyText(s.qty)} ${s.unit}').join(', ')}.',
+              'Paling tipis: ${top3.map((s) => '${s.name} ${qtyText(s.qty)} ${s.unit}').join(', ')}'
+              '${limiting != null && !top3.any((s) => s.name == limiting) ? ' • pembatas: $limiting' : ''}.',
               style: const TextStyle(
                 color: SukaTeaColors.muted,
                 fontSize: 12,

@@ -73,6 +73,7 @@ Deno.serve(async (req: Request) => {
       .select("id", { count: "exact", head: true })
       .eq("outlet_id", outletId)
       .eq("success", false)
+      .eq("purpose", "owner")
       .gte("created_at", since);
     if ((count ?? 0) >= MAX_FAILURES) {
       return json({ ok: false, reason: "locked" }, 403);
@@ -96,6 +97,7 @@ Deno.serve(async (req: Request) => {
     await supabase.from("pin_attempts").insert({
       outlet_id: outletId,
       success: match,
+      purpose: "owner",
     });
     if (!match) {
       return json({ ok: false, reason: "wrong" }, 403);

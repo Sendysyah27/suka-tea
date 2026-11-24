@@ -18,6 +18,7 @@ import 'package_service.dart';
 import 'sale_history.dart';
 import 'stock_service.dart';
 import 'supabase_client.dart';
+import '../features/login/cashier_session.dart';
 import 'sync_payload.dart';
 import 'topping_service.dart';
 
@@ -62,8 +63,11 @@ typedef FlushResult = ({
 ///   tambah / buka baris yang sama.
 Future<FlushResult> flushOutboxEntries(
   List<OutboxEntry> pending,
-  SyncTransport transport,
-) async {
+  SyncTransport transport, {
+  /// Bukti PIN sesi (SEC-1 R-02) — {'owner_pin': ...} atau
+  /// {'cashier_pin': ...}. Kosong = body tanpa bukti (test lama).
+  Map<String, dynamic> proof = const <String, dynamic>{},
+}) async {
   final events = <Map<String, dynamic>>[];
   final failed = <String>[];
   final skipped = <String>[];
@@ -97,7 +101,11 @@ Future<FlushResult> flushOutboxEntries(
     );
   }
   try {
-    final res = await transport({'action': 'push', 'events': events});
+    final res = await transport({
+      'action': 'push',
+      'events': events,
+      ...proof,
+    });
     final outcome = applyPushResults(events, res, failed);
     // Adopsi dedupe butuh client_uuid lokal event shift yang ditolak
     // (id shift lokal) — ambil dari event yang dikirim (server tidak
@@ -374,6 +382,13 @@ class SyncService extends ChangeNotifier {
       await refreshPending();
       return;
     }
+    // SEC-1 R-02: EF sync-sales menolak push tanpa bukti PIN. Bukti
+    // hanya hidup di memori (sesudah login/unlock) — jangan kirim
+    // request yang pasti 403 (antrean tetap pending, bukan hilang).
+    if (!CashierSessionService.instance.hasSessionProof) {
+      debugPrint('Sync ditahan: bukti PIN sesi belum ada (SEC-1 R-02).');
+      return;
+    }
     _syncing = true;
     try {
       final pending = await _outbox.pendingEntries();
@@ -383,7 +398,11 @@ class SyncService extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      final result = await flushOutboxEntries(pending, _transport);
+      final result = await flushOutboxEntries(
+        pending,
+        _transport,
+        proof: CashierSessionService.instance.sessionProof,
+      );
       for (final id in result.sentIds) {
         await _outbox.markSent(id);
       }
@@ -490,6 +509,8 @@ class SyncService extends ChangeNotifier {
       'outlet_id': outletId,
       'from': dateOnly(from),
       'to': dateOnly(to),
+      // SEC-1 R-02: pull juga wajib bukti PIN.
+      ...CashierSessionService.instance.sessionProof,
     });
     final parsed = parsePullResponse(res);
     final sales = parsed.transactions
@@ -551,6 +572,13 @@ class SyncService extends ChangeNotifier {
   Future<void> refreshSales({String? outletId}) async {
     if (_pullingSales) return;
     if (!isConfigured) return;
+    // SEC-1 R-02: pull pertama WAJIB sesudah login (bukti PIN ada).
+    // Pemanggil pra-login (start() di main, restore sesi tanpa PIN)
+    // tidak boleh menembak request yang pasti 403.
+    if (!CashierSessionService.instance.hasSessionProof) {
+      debugPrint('Pull ditahan: bukti PIN sesi belum ada (SEC-1 R-02).');
+      return;
+    }
     final outlet = outletId ?? OutletService.instance.currentOutletId;
     _pullingSales = true;
     try {

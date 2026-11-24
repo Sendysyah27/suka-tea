@@ -523,22 +523,87 @@ class GeraiTarget {
   return (cups: min, limitingStock: min == 0 ? limiting : null);
 }
 
-/// Total kapasitas gerai (Batch C10 WS5): JUMLAH maksimum per menu
-/// dijumlahkan (bukan kapasitas nyata serentak — tiap menu memakai
-/// bahan yang sama; label UI wajib menjelaskannya).
-int totalCapacityCups(
+/// Nama bahan yang membatasi satu resep (paling cepat habis), tanpa
+/// memandang apakah kapasitasnya 0 atau tidak. Dipakai label
+/// "Paling tipis" §6/Tab Stok (Batch C10.2 W3).
+String? _limitingStockName(
+  List<RecipeLine> recipe,
+  Map<String, StockItem> stockByName,
+) {
+  if (recipe.isEmpty) return null;
+  var min = 1 << 30;
+  String? limiting;
+  for (final line in recipe) {
+    final stock = stockByName[line.stockName];
+    final n = (stock == null || line.qty <= 0)
+        ? 0
+        : (stock.qty / line.qty + 1e-9).floor();
+    if (n < min) {
+      min = n;
+      limiting = line.stockName;
+    }
+  }
+  return limiting;
+}
+
+/// Kapasitas gerai yang JUJUR (Batch C10.2 W3): MAKSIMUM cup SATU
+/// menu — bukan jumlah kapasitas semua menu.
+///
+/// Alasan: semua menu memakai bahan bersama (Teh Masak, Gula, Cup),
+/// jadi menjual 20 cup menu apa pun dari 8 L Teh Masak adalah batas
+/// nyata; mencampur menu tidak bisa melampaui menu tunggal terbaik
+/// (ada menu polos yang hanya memakai bahan bersama). Menjumlahkan
+/// kapasitas per menu (perilaku C10) menghasilkan 400 cup untuk
+/// stok yang sama — angka itu menyesatkan (bug B3).
+///
+/// [limitingStock] = bahan yang membatasi menu dengan kapasitas
+/// maksimum (menu pertama bila semua 0) — dipakai label "Paling
+/// tipis". Tipe kembalian [totalCapacityCups] tetap `int` supaya
+/// pemanggil lama tidak berubah.
+({int cups, String? limitingStock}) capacityForOutlet(
   List<Product> products,
   Map<String, List<RecipeLine>> recipes,
   Map<String, StockItem> stockByName,
 ) {
-  var total = 0;
+  var best = 0;
+  String? limiting;
+  Product? firstActive;
   for (final p in products) {
     if (!p.isActive) continue;
+    firstActive ??= p;
     final recipe = recipes[p.variants.first.id] ?? const <RecipeLine>[];
-    total += sellableCupsForProduct(recipe, stockByName).cups;
+    final cups = sellableCupsForProduct(recipe, stockByName).cups;
+    if (cups > best) {
+      best = cups;
+      limiting = _limitingStockName(recipe, stockByName);
+    }
   }
-  return total;
+  if (best == 0) {
+    final recipe = firstActive == null
+        ? const <RecipeLine>[]
+        : (recipes[firstActive.variants.first.id] ?? const <RecipeLine>[]);
+    limiting = _limitingStockName(recipe, stockByName);
+  }
+  return (cups: best, limitingStock: limiting);
 }
+
+/// Total kapasitas gerai (Batch C10.2 W3) — lihat [capacityForOutlet]:
+/// MAKSIMUM cup satu menu (bukan penjumlahan per menu).
+int totalCapacityCups(
+  List<Product> products,
+  Map<String, List<RecipeLine>> recipes,
+  Map<String, StockItem> stockByName,
+) =>
+    capacityForOutlet(products, recipes, stockByName).cups;
+
+/// Bahan pembatas kapasitas serentak (Batch C10.2 W3) — untuk label
+/// "Paling tipis" bila pemanggil butuh nama bahannya.
+String? limitingStockForCapacity(
+  List<Product> products,
+  Map<String, List<RecipeLine>> recipes,
+  Map<String, StockItem> stockByName,
+) =>
+    capacityForOutlet(products, recipes, stockByName).limitingStock;
 
 // ===================== Ledger keluar-masuk (WS8) =====================
 

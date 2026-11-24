@@ -6,6 +6,7 @@ import '../../core/utils/money.dart';
 import '../../core/utils/sheet_pop.dart';
 import '../../core/widgets/tap_feedback.dart';
 import '../../data/cash_shift_service.dart';
+import '../kasir/cashier_service.dart';
 
 /// Jam "HH:mm" tanpa intl (repo belum memakai DateFormat di lib/).
 String formatShiftTime(DateTime d) =>
@@ -34,17 +35,54 @@ String formatShiftDayTime(DateTime d) {
 /// Hasil sheet tutup kas: uang hasil hitungan + catatan.
 typedef CloseShiftInput = ({int countedCash, String note});
 
+/// Nama pembuka shift yang JUJUR (Batch C10.2 W5) — resolusi berurut:
+/// (a) nama sesi kasir bila tidak kosong; (b) nama kasir terdaftar
+/// dari registry yang sudah dimuat di memori ([CashierService]);
+/// (c) peran Owner -> 'Owner'; (d) selain itu string KOSONG — UI
+/// menampilkan '—'. Literal 'Kasir' TIDAK PERNAH disimpan sebagai
+/// nama pembuka (itu identitas generik, bukan orang).
+String resolveShiftOpenerName({
+  required String cashierId,
+  required String cashierName,
+  required bool isOwner,
+}) {
+  final direct = cashierName.trim();
+  if (direct.isNotEmpty) return direct;
+  final id = cashierId.trim();
+  if (id.isNotEmpty) {
+    final known = CashierService.instance.knownNameFor(id)?.trim() ?? '';
+    if (known.isNotEmpty) return known;
+  }
+  if (isOwner) return 'Owner';
+  return '';
+}
+
+/// Label tampilan "Dibuka oleh": nama kosong -> '—' (bukan 'Kasir').
+String shiftOpenerLabel(String name) {
+  final trimmed = name.trim();
+  return trimmed.isEmpty ? '—' : trimmed;
+}
+
 /// Alur buka shift lengkap (Batch C8.2 WS6 — dipakai gate POS
 /// KasirPage + tombol "Buka Shift" LaporanPage): sheet modal awal ->
 /// openNewShift (aturan C7: tolak bila sudah ada shift open di gerai
 /// itu) -> shift yang dibuka, atau null bila batal / ditolak.
 /// [cashierId]/[cashierName] = pembuka (Owner = '' / 'Owner').
+/// [isOwner] (Batch C10.2 W5): true = sesi Owner tanpa nama kasir —
+/// nama pembuka 'Owner'. Resolusi nama dilakukan DI SINI supaya
+/// kedua call site ikut (lihat [resolveShiftOpenerName]).
 Future<CashShift?> openShiftFlow(
   BuildContext context, {
   required String cashierId,
   required String cashierName,
+  bool isOwner = false,
   String? outletId,
 }) async {
+  final openerName = resolveShiftOpenerName(
+    cashierId: cashierId,
+    cashierName: cashierName,
+    isOwner: isOwner,
+  );
   final openingFloat = await showOpenShiftSheet(context);
   if (openingFloat == null) return null;
   if (!context.mounted) return null;
@@ -52,7 +90,7 @@ Future<CashShift?> openShiftFlow(
     openingFloat: openingFloat,
     outletId: outletId,
     cashierId: cashierId,
-    cashierName: cashierName,
+    cashierName: openerName,
   );
   if (shift == null && context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -287,7 +325,7 @@ class _CloseShiftSheetContentState extends State<_CloseShiftSheetContent> {
           const SizedBox(height: 4),
           Text(
             'Dibuka ${formatShiftTime(shift.openedAt)} • '
-            '${shift.cashierName}',
+            '${shiftOpenerLabel(shift.cashierName)}',
             style: const TextStyle(color: SukaTeaColors.muted),
           ),
           const SizedBox(height: 16),

@@ -109,6 +109,19 @@ class Modifier {
       };
 }
 
+/// Nama varian KANONIK saat ini (Batch C10.2 W4).
+///
+/// Record menu lokal bisa masih menyimpan nama varian lama
+/// ('Reguler') dari instalasi sebelum C8.2 walau id-nya sudah
+/// `..._22oz`. Snapshot penjualan BARU wajib memakai nama varian
+/// saat ini ('22oz'); snapshot lama (sudah tersimpan) TIDAK diubah.
+/// Id berakhiran `_22oz` = varian 22oz (satu-satunya varian sejak
+/// C8.2 — lihat seedMenu/models ProductVariant).
+String canonicalVariantName(String variantId, String storedName) {
+  if (variantId.endsWith('_22oz')) return '22oz';
+  return storedName;
+}
+
 class CartItem {
   CartItem({
     required this.product,
@@ -127,7 +140,8 @@ class CartItem {
   int get total => unitPrice * qty;
 
   /// "Es Teh Lemon 22oz" (tanpa modifier).
-  String get nameText => '${product.name} ${variant.name}';
+  String get nameText =>
+      '${product.name} ${canonicalVariantName(variant.id, variant.name)}';
 
   /// "(Normal, Es Normal)" — topping ditulis "+Nama"
   /// ("(Normal, Es Normal, +Boba)"). Kosong bila tanpa modifier.

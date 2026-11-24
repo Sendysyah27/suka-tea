@@ -162,6 +162,34 @@ class StockService extends ChangeNotifier {
   Map<String, StockItem> stockByNameFor(String outletId) =>
       {for (final s in levelsFor(outletId)) s.name: s};
 
+  /// Katalog bahan kanonik (Batch C10.2 W1) — nama bahan -> satuan.
+  ///
+  /// Sumber (urut prioritas satuan bila nama sama): (a) [seedStock]
+  /// (SELALU ada — katalog tidak pernah kosong walau gudang belum
+  /// pernah di-seed), (b) level stok SEMUA gerai termasuk gudang
+  /// (menutup bahan custom yang Owner tambah lewat tab Stok),
+  /// (c) semua `RecipeLine.stockName` di semua resep.
+  ///
+  /// Tidak memakai gerai aktif: `stockByNameFor(gudangOutletId)`
+  /// kosong di instalasi baru (gudang tidak pernah di-seed), dan
+  /// itulah akar dropdown "Ubah Paket" yang kosong (bug B1/C10.2).
+  Map<String, String> get allKnownStockNames {
+    final units = <String, String>{
+      for (final s in seedStock()) s.name: s.unit,
+    };
+    for (final levels in _levelsByOutlet.values) {
+      for (final s in levels) {
+        units.putIfAbsent(s.name, () => s.unit);
+      }
+    }
+    for (final lines in _recipes.values) {
+      for (final line in lines) {
+        units.putIfAbsent(line.stockName, () => 'pcs');
+      }
+    }
+    return Map.unmodifiable(units);
+  }
+
   List<RecipeLine> recipesFor(String variantId) =>
       List.unmodifiable(_recipes[variantId] ?? const <RecipeLine>[]);
 
@@ -721,10 +749,12 @@ String _productIdOfVariant(String variantId) =>
         final updated = levels[i].copyWith(
           unit: unit,
           lowThreshold: low,
-          // Batch C10.1 Bug 2b: biaya server 0 = tidak ada info —
-          // jangan timpa biaya lokal (copyWith null = pertahankan
-          // nilai lama). Hanya biaya > 0 yang diadopsi.
-          costPerUnit: (cost == null || cost <= 0) ? null : cost,
+          // SEC-1 R-10: samakan dengan jalur baris baru di atas —
+          // biaya server 0 = "tidak ada info biaya" -> lokal -1
+          // (belum diatur), bukan 0. null = field tidak dikirim ->
+          // copyWith mempertahankan nilai lokal. (Rp0 gratis sengaja
+          // belum ikut pull — keterbatasan C10.1 yang sudah dicatat.)
+          costPerUnit: cost == null ? null : (cost == 0 ? -1 : cost),
           shelfLifeDays: shelf,
         );
         if (updated.unit != levels[i].unit ||

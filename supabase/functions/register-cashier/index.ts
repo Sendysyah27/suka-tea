@@ -64,6 +64,7 @@ async function verifyOwnerPin(
     .select("id", { count: "exact", head: true })
     .eq("outlet_id", outletId)
     .eq("success", false)
+    .eq("purpose", "owner")
     .gte("created_at", since);
   if ((count ?? 0) >= MAX_FAILURES) {
     return json({ ok: false, reason: "locked" }, 403);
@@ -87,6 +88,7 @@ async function verifyOwnerPin(
   await supabase.from("pin_attempts").insert({
     outlet_id: outletId,
     success: match,
+    purpose: "owner",
   });
   if (!match) {
     return json({ ok: false, reason: "wrong" }, 403);

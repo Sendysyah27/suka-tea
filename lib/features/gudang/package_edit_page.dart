@@ -80,18 +80,15 @@ class _PackageEditPageState extends State<PackageEditPage> {
     super.dispose();
   }
 
-  List<String> get _allNames {
-    final names = StockService.instance
-        .stockByNameFor(gudangOutletId)
-        .keys
-        .toList()
-      ..sort();
-    return names;
-  }
+  /// Katalog bahan kanonik (Batch C10.2 W1) — BUKAN level stok gudang.
+  /// Gudang tidak pernah di-seed (selalu kosong di POCO), jadi
+  /// membaca level gudang membuat dropdown kosong + semua baris
+  /// template tampil label "Bahan" dengan jumlah 0.
+  List<String> get _allNames =>
+      StockService.instance.allKnownStockNames.keys.toList()..sort();
 
-  String? _unitOf(String name) => StockService.instance
-      .stockByNameFor(gudangOutletId)[name]
-      ?.unit;
+  String? _unitOf(String name) =>
+      StockService.instance.allKnownStockNames[name];
 
   void _addRow() {
     final used = _rows.map((r) => r.name).toSet();
