@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
@@ -15,10 +17,13 @@ import '../../data/held_order_service.dart';
 import '../../data/local/outbox_service.dart';
 import '../../data/menu_service.dart';
 import '../../data/models.dart';
+import '../../data/outlet_service.dart';
 import '../../data/recipe_logic.dart';
 import '../../data/sale_history.dart';
 import '../../data/seed_menu.dart';
 import '../../data/stock_service.dart';
+import '../../data/sync_payload.dart';
+import '../../data/sync_service.dart';
 import '../login/cashier_session.dart';
 import '../qris/qris_pay_page.dart';
 import 'cash_sheet.dart';
@@ -609,21 +614,42 @@ class _KasirPageState extends State<KasirPage> {
     int qrisAmount = 0,
     int cashAmount = 0,
   }) async {
+    // Batch C6: SATU id untuk penjualan ini — dipakai sebagai
+    // client_uuid outbox (kunci idempotency Supabase) DAN id riwayat,
+    // supaya event void nanti menunjuk baris Supabase yang sama.
+    // Payload lengkap (outlet, paid, change, created_at, is_void,
+    // modifiers) supaya server tidak perlu menebak-nebak.
+    final clientUuid = newClientUuid();
+    final outletId = OutletService.instance.currentOutletId;
     await OutboxService.instance.enqueueSale({
-      'client_uuid': DateTime.now().microsecondsSinceEpoch.toString(),
+      'client_uuid': clientUuid,
+      'outlet_id': outletId,
       'payment_method': method.name,
       'total': total,
       'discount': discount,
+      'paid': paid,
+      'change': paid - total,
       'qris_amount': qrisAmount,
       'cash_amount': cashAmount,
+      'is_void': false,
+      'created_at': DateTime.now().toIso8601String(),
       'items': items
-          .map((i) => {'name': i.label, 'qty': i.qty, 'price': i.unitPrice})
+          .map((i) => {
+                'name': i.label,
+                'qty': i.qty,
+                'price': i.unitPrice,
+                'modifiers': i.modifiers.map((m) => m.name).toList(),
+              })
           .toList(),
     });
     // Potong stok bahan sesuai resep item yang terjual (clamp di 0).
-    final newlyLow = await StockService.instance.deductForSale(items);
+    final newlyLow = await StockService.instance.deductForSale(
+      items,
+      transactionClientUuid: clientUuid,
+    );
     // Catat ke riwayat SESUDAH potong stok (untuk Keuangan/Laporan).
     await SaleHistoryService.instance.recordSale(
+      id: clientUuid,
       items: items,
       total: total,
       method: method,
@@ -632,6 +658,9 @@ class _KasirPageState extends State<KasirPage> {
       qrisAmount: qrisAmount,
       cashAmount: cashAmount,
     );
+    // Batch C6: sync fire-and-forget — penjualan TIDAK menunggu
+    // server; gagal = tetap pending di outbox, coba lagi nanti.
+    unawaited(SyncService.instance.syncNow());
     if (!mounted) return;
     setState(() {
       _cart.clear();

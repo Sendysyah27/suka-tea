@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
@@ -8,6 +10,7 @@ import '../../data/models.dart';
 import '../../data/outlet_service.dart';
 import '../../data/sale_history.dart';
 import '../../data/stock_service.dart';
+import '../../data/sync_service.dart';
 import '../riwayat/riwayat_page.dart';
 import 'gerai_edit_page.dart';
 
@@ -19,8 +22,9 @@ import 'gerai_edit_page.dart';
 /// Jadi bagian "Stok menipis" menampilkan stok HP ini dan hanya
 /// bermakna untuk gerai yang sedang dibuka; untuk gerai lain tampil
 /// catatan. Transaksi + laporan per gerai BENAR-BENAR per gerai
-/// (SaleHistory.outletId, Batch C4) — tapi hanya dari penjualan di
-/// HP ini, sampai sinkronisasi Supabase aktif.
+/// (SaleHistory.outletId, Batch C4). Batch C6: transaksi + laporan
+/// kini bisa LIVE dari Supabase (pull di halaman ini, fallback data
+/// lokal bila offline/gagal) — gerai lain pun tampil penuh.
 class GeraiMonitorPage extends StatefulWidget {
   const GeraiMonitorPage({super.key, required this.outlet});
 
@@ -33,6 +37,50 @@ class GeraiMonitorPage extends StatefulWidget {
 class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
   var _monthly = false;
 
+  /// Transaksi LIVE dari Supabase (null = belum berhasil pull —
+  /// pakai data lokal). Pull sebulan penuh supaya Harian + Bulanan
+  /// sama-sama bisa dihitung dari data live.
+  List<SaleRecord>? _liveSales;
+  var _liveLoading = false;
+  String? _liveError;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshLive();
+  }
+
+  /// Tarik transaksi gerai dari Supabase (dipanggil initState +
+  /// tombol refresh). Gagal (offline / Supabase belum dikonfigurasi
+  /// / EF belum di-deploy) = tetap tampil data lokal, bukan error
+  /// merah — halaman ini harus tetap berguna saat offline.
+  Future<void> _refreshLive() async {
+    if (_liveLoading) return;
+    setState(() => _liveLoading = true);
+    unawaited(SyncService.instance.refreshPending());
+    try {
+      final now = DateTime.now();
+      final sales = await SyncService.instance.pullOutlet(
+        outletId: widget.outlet.id,
+        from: DateTime(now.year, now.month, 1),
+        to: now,
+      );
+      if (!mounted) return;
+      setState(() {
+        _liveSales = sales;
+        _liveError = null;
+        _liveLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _liveSales = null;
+        _liveError = e.toString();
+        _liveLoading = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final outlet = widget.outlet;
@@ -43,6 +91,11 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
       appBar: AppBar(
         title: ScreenTitle(outlet.name),
         actions: [
+          IconButton(
+            tooltip: 'Muat ulang data live',
+            onPressed: _refreshLive,
+            icon: const Icon(Icons.refresh_outlined),
+          ),
           IconButton(
             tooltip: 'Ubah gerai',
             onPressed: () => Navigator.of(context).push(
@@ -58,18 +111,46 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
         listenable: Listenable.merge([
           SaleHistoryService.instance,
           StockService.instance,
+          SyncService.instance,
         ]),
         builder: (context, _) {
-          final todaySales = SaleHistoryService.instance.activeSalesOn(
-            now,
-            outletId: outlet.id,
-          );
-          final periodSales = _monthly
-              ? SaleHistoryService.instance.salesInMonth(
-                  now,
-                  outletId: outlet.id,
+          // Batch C6: bila pull live berhasil, transaksi + laporan
+          // memakai data Supabase (semua gerai, bukan cuma HP ini);
+          // bila gagal/offline, jatuh ke data lokal seperti dulu.
+          // Void tetap dikecualikan (sama seperti activeSalesOn).
+          final List<SaleRecord> todaySales;
+          final List<SaleRecord> periodSales;
+          if (_liveSales != null) {
+            final live = _liveSales!.where((s) => !s.isVoid).toList();
+            todaySales = live
+                .where(
+                  (s) =>
+                      s.createdAt.year == now.year &&
+                      s.createdAt.month == now.month &&
+                      s.createdAt.day == now.day,
                 )
-              : todaySales;
+                .toList();
+            periodSales = _monthly
+                ? live
+                    .where(
+                      (s) =>
+                          s.createdAt.year == now.year &&
+                          s.createdAt.month == now.month,
+                    )
+                    .toList()
+                : todaySales;
+          } else {
+            todaySales = SaleHistoryService.instance.activeSalesOn(
+              now,
+              outletId: outlet.id,
+            );
+            periodSales = _monthly
+                ? SaleHistoryService.instance.salesInMonth(
+                    now,
+                    outletId: outlet.id,
+                  )
+                : todaySales;
+          }
           final stats = computeDailyStats(
             periodSales,
             StockService.instance.recipes,
@@ -108,22 +189,67 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    'update $timeLabel • data lokal',
-                    style: const TextStyle(
-                      color: SukaTeaColors.muted,
-                      fontSize: 12,
+                  Expanded(
+                    child: Text(
+                      _liveLoading
+                          ? 'memuat data live…'
+                          : _liveSales != null
+                              ? 'update $timeLabel • Live Supabase'
+                              : 'update $timeLabel • data lokal',
+                      style: const TextStyle(
+                        color: SukaTeaColors.muted,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
                 ],
               ),
+              // Batch C6: hitungan antrean belum tersinkron (satu
+              // tempat saja — di sini, bukan di Laporan). Hilang
+              // sendiri sesudah sync berhasil.
+              if (SyncService.instance.pendingCount > 0) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFDF3E0),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    '${SyncService.instance.pendingCount} transaksi '
+                    'belum tersinkron ke Supabase',
+                    style: const TextStyle(
+                      color: SukaTeaColors.amber,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+              if (_liveSales == null &&
+                  _liveError != null &&
+                  SyncService.instance.isConfigured) ...[
+                const SizedBox(height: 8),
+                const _NoteCard(
+                  text: 'Data live gagal dimuat — menampilkan data lokal '
+                      'dari HP ini.',
+                ),
+              ],
               if (!isCurrent) ...[
                 const SizedBox(height: 12),
-                const _NoteCard(
-                  text: 'Gerai ini tidak sedang dibuka di HP ini. '
-                      'Transaksi & laporan di bawah hanya dari penjualan '
-                      'yang tercatat di HP ini — data gerai lain tampil '
-                      'penuh setelah sinkronisasi Supabase aktif.',
+                _NoteCard(
+                  text: _liveSales != null
+                      ? 'Gerai ini tidak sedang dibuka di HP ini — tapi '
+                          'transaksi & laporan di bawah diambil LIVE dari '
+                          'Supabase, jadi tampil penuh. Stok masih dari '
+                          'HP ini: stok per gerai belum dipisah.'
+                      : 'Gerai ini tidak sedang dibuka di HP ini. '
+                          'Transaksi & laporan di bawah hanya dari penjualan '
+                          'yang tercatat di HP ini — data gerai lain tampil '
+                          'penuh setelah sinkronisasi Supabase aktif.',
                 ),
               ],
               const SizedBox(height: 16),

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import 'app_database.dart';
@@ -47,6 +48,42 @@ class OutboxService {
     }
   }
 
-  // TODO (M3): syncPending() — kirim antrean ke Supabase dengan
-  // client_uuid sebagai kunci idempotency, lalu markSent per baris.
+  /// Antrean yang belum terkirim (untuk SyncService — flush).
+  Future<List<OutboxEntry>> pendingEntries() async {
+    try {
+      return await _database.pendingEntries();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Tandai satu entri sebagai terkirim. HANYA dipanggil SyncService
+  /// sesudah server konfirmasi per-event (results[].ok) — bukan
+  /// sesudah request terkirim.
+  Future<void> markSent(String id) async {
+    try {
+      await _database.markSent(id);
+    } catch (e) {
+      debugPrint('Outbox markSent gagal: $e');
+    }
+  }
+
+  /// Tambah hitungan percobaan kirim satu entri (gagal sync).
+  /// Entri TETAP pending — hanya dicatat supaya terlihat bila
+  /// sebuah entri macet berulang. Tidak pernah menghapus antrean.
+  Future<void> incrementAttempts(String id) async {
+    try {
+      final row = await (_database.select(_database.outboxEntries)
+            ..where((t) => t.id.equals(id)))
+          .getSingleOrNull();
+      if (row == null) return;
+      await (_database.update(_database.outboxEntries)
+            ..where((t) => t.id.equals(id)))
+          .write(
+            OutboxEntriesCompanion(attempts: Value(row.attempts + 1)),
+          );
+    } catch (e) {
+      debugPrint('Outbox incrementAttempts gagal: $e');
+    }
+  }
 }

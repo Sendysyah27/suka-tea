@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import 'local/app_database.dart';
+import 'local/outbox_service.dart';
 import 'models.dart';
 import 'outlet_service.dart';
 import 'recipe_logic.dart';
@@ -205,6 +206,59 @@ class SaleRecord {
       outletId: json['outletId'] as String? ?? defaultOutletId,
       qrisAmount: (json['qrisAmount'] as num? ?? 0).toInt(),
       cashAmount: (json['cashAmount'] as num? ?? 0).toInt(),
+    );
+  }
+
+  /// Rekonstruksi dari baris Supabase (jalur pull Batch C6 — Pantau
+  /// Gerai live). [txn] = satu baris `transactions` dari EF
+  /// sync-sales (bawa client_uuid + kolom baru discount /
+  /// qris_amount / cash_amount dari migrasi 008); [items] = baris
+  /// `transaction_items` transaksi itu. productId/variantId tidak
+  /// tersimpan di Supabase (id produk app bukan UUID Supabase) —
+  /// dikosongkan; nama snapshot + harga sudah cukup untuk
+  /// tampilan + statistik monitor.
+  factory SaleRecord.fromServer(
+    Map<String, dynamic> txn,
+    List<Map<String, dynamic>> items,
+  ) {
+    final methodName = txn['payment_method'] as String? ?? 'tunai';
+    return SaleRecord(
+      id: txn['client_uuid'] as String? ?? '',
+      // Supabase mengirim timestamptz UTC — ubah ke waktu lokal
+      // supaya filter hari/bulan di Pantau Gerai cocok dengan zona
+      // toko (WIB): tanpa ini, penjualan 00:00–06:59 WIB jatuh ke
+      // hari sebelumnya.
+      createdAt:
+          DateTime.tryParse(txn['created_at'] as String? ?? '')
+                  ?.toLocal() ??
+              DateTime.now(),
+      items: items
+          .map(
+            (it) => SaleItem(
+              productId: '',
+              productName: it['name_snapshot'] as String? ?? '',
+              variantId: '',
+              variantName: '',
+              qty: (it['qty'] as num? ?? 1).toInt(),
+              unitPrice: (it['unit_price'] as num? ?? 0).toInt(),
+              modifiers: (it['modifiers_json'] as List<dynamic>? ?? const [])
+                  .map((m) => m.toString())
+                  .toList(),
+            ),
+          )
+          .toList(),
+      total: (txn['total'] as num? ?? 0).toInt(),
+      method: PaymentMethod.values.firstWhere(
+        (m) => m.name == methodName,
+        orElse: () => PaymentMethod.tunai,
+      ),
+      paid: (txn['paid'] as num? ?? 0).toInt(),
+      change: (txn['change_amount'] as num? ?? 0).toInt(),
+      discount: (txn['discount'] as num? ?? 0).toInt(),
+      isVoid: txn['status'] as String? == 'void',
+      outletId: txn['outlet_id'] as String? ?? defaultOutletId,
+      qrisAmount: (txn['qris_amount'] as num? ?? 0).toInt(),
+      cashAmount: (txn['cash_amount'] as num? ?? 0).toInt(),
     );
   }
 
@@ -425,6 +479,10 @@ class SaleHistoryService extends ChangeNotifier {
   /// diskon; [discount] dicatat supaya bisa diaudit di Riwayat.
   /// [outletId] null = gerai aktif sesi ini. [qrisAmount]/[cashAmount]
   /// = bagian split (Batch C2); transaksi non-split = 0.
+  /// [id] (Batch C6): bila diisi, dipakai sebagai id record — kasir
+  /// mengisinya dengan client_uuid yang SAMA dengan yang dikirim ke
+  /// outbox, supaya event void nanti menunjuk baris Supabase yang
+  /// sama (kunci idempotency). Default = mikROdetik sekarang (lama).
   /// Mengembalikan record yang dicatat.
   Future<SaleRecord> recordSale({
     required List<CartItem> items,
@@ -435,9 +493,10 @@ class SaleHistoryService extends ChangeNotifier {
     String? outletId,
     int qrisAmount = 0,
     int cashAmount = 0,
+    String? id,
   }) async {
     final record = SaleRecord(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      id: id ?? DateTime.now().microsecondsSinceEpoch.toString(),
       createdAt: DateTime.now(),
       items: items.map(SaleItem.fromCartItem).toList(),
       total: total,
@@ -481,10 +540,18 @@ class SaleHistoryService extends ChangeNotifier {
   /// record ini ditandai. false = id tidak ada / sudah void.
   /// Transaksi void tetap tampil di Riwayat (dengan label VOID) tapi
   /// tidak dihitung di statistik mana pun.
+  /// Batch C6: void juga diantrekan ke outbox sebagai event
+  /// 'transaction' dengan client_uuid YANG SAMA dengan penjualan
+  /// asalnya (id record = client_uuid sejak _selesaikanBayar) +
+  /// is_void true + payload lengkap — server meng-upsert baris yang
+  /// sama jadi status 'void' (last-write-wins; status void bersifat
+  /// sticky, tidak bisa balik ke 'completed'). Gagal antre tidak
+  /// menggagalkan void lokal.
   Future<bool> voidSale(String id) async {
     final i = _sales.indexWhere((s) => s.id == id);
     if (i < 0 || _sales[i].isVoid) return false;
-    _sales[i] = _sales[i].copyWith(isVoid: true);
+    final record = _sales[i];
+    _sales[i] = record.copyWith(isVoid: true);
     notifyListeners();
     try {
       await (_database.update(_database.saleHistory)
@@ -492,6 +559,31 @@ class SaleHistoryService extends ChangeNotifier {
           .write(const SaleHistoryCompanion(isVoid: Value(true)));
     } catch (e) {
       debugPrint('SaleHistory void gagal simpan (memori tetap void): $e');
+    }
+    try {
+      await OutboxService.instance.enqueueSale({
+        'client_uuid': record.id,
+        'outlet_id': record.outletId,
+        'payment_method': record.method.name,
+        'total': record.total,
+        'discount': record.discount,
+        'paid': record.paid,
+        'change': record.change,
+        'qris_amount': record.qrisAmount,
+        'cash_amount': record.cashAmount,
+        'is_void': true,
+        'created_at': record.createdAt.toIso8601String(),
+        'items': record.items
+            .map((it) => {
+                  'name': '${it.productName} ${it.variantName}'.trim(),
+                  'qty': it.qty,
+                  'price': it.unitPrice,
+                  'modifiers': it.modifiers,
+                })
+            .toList(),
+      });
+    } catch (e) {
+      debugPrint('SaleHistory void gagal antre outbox (void lokal tetap): $e');
     }
     return true;
   }

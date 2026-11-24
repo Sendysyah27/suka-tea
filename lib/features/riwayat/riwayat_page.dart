@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
@@ -7,6 +9,7 @@ import '../../core/widgets/screen_title.dart';
 import '../../data/models.dart';
 import '../../data/sale_history.dart';
 import '../../data/stock_service.dart';
+import '../../data/sync_service.dart';
 import '../../data/topping_service.dart';
 import '../kasir/receipt.dart';
 
@@ -64,8 +67,15 @@ class RiwayatPage extends StatelessWidget {
     final cartItems = sale.items
         .map((it) => it.toCartItem(ToppingService.instance.toppingNames))
         .toList();
-    await StockService.instance.restoreForSale(cartItems);
+    // Batch C6: mutasi stok void ditautkan ke client_uuid penjualan
+    // asal (sale.id) supaya server bisa menautkannya; sesudah void,
+    // sync fire-and-forget (event void diantrekan di voidSale).
+    await StockService.instance.restoreForSale(
+      cartItems,
+      transactionClientUuid: sale.id,
+    );
     await SaleHistoryService.instance.voidSale(sale.id);
+    unawaited(SyncService.instance.syncNow());
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(

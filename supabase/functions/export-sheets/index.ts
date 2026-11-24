@@ -10,13 +10,11 @@
 //   400 input tidak valid / 501 secret Google belum diisi /
 //   500 error Supabase / Sheets API.
 //
-// KEJUJURAN DATA (penting): penjualan selama ini LOKAL SAJA di HP
-// (tidak ada sinkronisasi outbox ke Supabase), jadi tabel
-// `transactions` di Supabase kemungkinan besar KOSONG. Fungsi ini
-// TIDAK mengarang angka: bila tidak ada data, tab ditulis dengan
-// header + baris catatan 'data lokal belum tersinkron' dan response
-// membawa counts 0 + note yang sama. Begitu sinkronisasi penjualan
-// ada, fungsi ini langsung menulis angka nyata tanpa perubahan.
+// KEJUJURAN DATA (penting): sejak Batch C6 penjualan tersinkron
+// ke Supabase via Edge Function `sync-sales`, jadi tabel
+// `transactions` berisi angka nyata. Fungsi ini TIDAK mengarang
+// angka: bila tidak ada data, tab ditulis dengan header + baris
+// catatan dan response membawa counts 0 + note yang sama.
 //
 // Auth Google: service account (JWT RS256, dibuat sendiri dengan
 // crypto.subtle — tanpa dep googleapis). Secret (JANGAN di repo):
@@ -211,7 +209,7 @@ Deno.serve(async (req: Request) => {
     // --- Baca data Supabase (service_role, RLS dilewati) ---
     const { data: summaryRows, error: summaryError } = await supabase
       .from("v_daily_summary")
-      .select("jumlah_transaksi, omzet, tunai, transfer, qris_manual, ewallet")
+      .select("jumlah_transaksi, omzet, tunai, transfer, qris, qris_manual, ewallet, split")
       .eq("outlet_id", outletId)
       .eq("hari", date);
     if (summaryError) {
@@ -268,10 +266,10 @@ Deno.serve(async (req: Request) => {
 
     // --- Susun isi 4 tab ---
     const emptyNote =
-      "Belum ada data di Supabase untuk gerai + tanggal ini — penjualan masih tersimpan lokal di HP (sinkronisasi penjualan belum ada).";
+      "Belum ada transaksi tersinkron di Supabase untuk gerai + tanggal ini — cek indikator sinkronisasi di Pantau Gerai.";
     const summary = (summaryRows ?? [])[0] as Record<string, unknown> | undefined;
     const summaryValues: unknown[][] = [
-      ["Tanggal", "Gerai (outlet_id)", "Jumlah Transaksi", "Omzet (Rp)", "Tunai (Rp)", "Transfer (Rp)", "QRIS Manual (Rp)", "E-Wallet (Rp)"],
+      ["Tanggal", "Gerai (outlet_id)", "Jumlah Transaksi", "Omzet (Rp)", "Tunai (Rp)", "Transfer (Rp)", "QRIS (Rp)", "QRIS Manual (Rp)", "Split (Rp)", "E-Wallet (Rp)"],
       [
         date,
         outletId,
@@ -279,7 +277,9 @@ Deno.serve(async (req: Request) => {
         summary?.['omzet'] ?? 0,
         summary?.['tunai'] ?? 0,
         summary?.['transfer'] ?? 0,
+        summary?.['qris'] ?? 0,
         summary?.['qris_manual'] ?? 0,
+        summary?.['split'] ?? 0,
         summary?.['ewallet'] ?? 0,
       ],
     ];

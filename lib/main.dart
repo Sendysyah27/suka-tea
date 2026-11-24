@@ -8,6 +8,7 @@ import 'data/outlet_service.dart';
 import 'data/sale_history.dart';
 import 'data/stock_service.dart';
 import 'data/supabase_client.dart';
+import 'data/sync_service.dart';
 import 'data/topping_service.dart';
 import 'features/login/cashier_session.dart';
 
@@ -45,5 +46,11 @@ Future<void> main() async {
   await SaleHistoryService.instance.init();
   // Order Pending di Kasir dari Drift (kosong bila belum ada).
   await HeldOrderService.instance.init();
+  // Sinkronisasi Supabase (Batch C6): flush antrean outbox yang
+  // masih pending + retry berkala 60 dtk selama ada pending.
+  // Fire-and-forget — TIDAK PERNAH memblokir jualan: gagal sync =
+  // tetap pending, coba lagi nanti. Tanpa Supabase terkonfigurasi
+  // sync dilewati diam-diam (mode offline).
+  SyncService.instance.start();
   runApp(const SukaTeaApp());
 }

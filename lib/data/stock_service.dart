@@ -4,9 +4,11 @@ import 'package:flutter/foundation.dart';
 import 'local/app_database.dart';
 import 'local/outbox_service.dart';
 import 'models.dart';
+import 'outlet_service.dart';
 import 'recipe_logic.dart';
 import 'seed_menu.dart';
 import 'seed_recipes.dart';
+import 'sync_payload.dart';
 
 /// Stok bahan + resep, di memori (ChangeNotifier) dan dicerminkan ke Drift.
 /// Semua tulis ke DB dibungkus try/catch (pola OutboxService): gagal
@@ -229,10 +231,19 @@ class StockService extends ChangeNotifier {
   /// untuk SnackBar peringatan di Kasir. Mutasi juga dicatat ke outbox
   /// (kind 'stock_movement') supaya bisa disinkronkan di M1; gagal
   /// catat tidak menggagalkan penjualan.
-  Future<List<String>> deductForSale(List<CartItem> cart) async {
+  /// Batch C6: payload mutasi membawa level lengkap per bahan
+  /// (unit, qty_after, ambang, harga) + outlet_id gerai utama
+  /// (stok itu SATU shared — "stok pusat", bukan per-gerai) +
+  /// [transactionClientUuid] (client_uuid penjualan asal, bila ada)
+  /// supaya server bisa menautkan mutasi ke transaksinya.
+  Future<List<String>> deductForSale(
+    List<CartItem> cart, {
+    String? transactionClientUuid,
+  }) async {
     final deductions = computeDeductions(cart, _recipes, stockByName);
     if (deductions.isEmpty) return const [];
     final newlyLow = <String>[];
+    final syncItems = <Map<String, dynamic>>[];
     for (final entry in deductions.entries) {
       final i = _levels.indexWhere((s) => s.name == entry.key);
       if (i < 0) continue;
@@ -241,15 +252,29 @@ class StockService extends ChangeNotifier {
       final wasLow = before.isLow;
       _levels[i] = before.copyWith(qty: afterQty);
       if (!wasLow && _levels[i].isLow) newlyLow.add(before.name);
+      syncItems.add({
+        'name': before.name,
+        'unit': before.unit,
+        'qty_after': afterQty,
+        'low_threshold': before.lowThreshold,
+        // -1 = harga belum diatur Owner -> server terima 0
+        // (sama seperti HPP lokal yang menghitungnya Rp0).
+        'cost_per_unit':
+            before.costPerUnit < 0 ? 0 : before.costPerUnit.round(),
+        'delta': -entry.value,
+      });
     }
     notifyListeners();
     await _saveAllLevels();
     try {
       await OutboxService.instance.enqueueSale(
         {
-          'client_uuid': DateTime.now().microsecondsSinceEpoch.toString(),
+          'client_uuid': newClientUuid(),
+          'outlet_id': defaultOutletId,
           'reason': 'penjualan',
-          'deductions': deductions,
+          if (transactionClientUuid != null)
+            'transaction_client_uuid': transactionClientUuid,
+          'items': syncItems,
         },
         kind: 'stock_movement',
       );
@@ -263,23 +288,41 @@ class StockService extends ChangeNotifier {
   /// dari deductForSale — JANGAN ubah deductForSale). Dipakai void
   /// di Riwayat. Stok hanya ditambah (tidak ada clamp atas); mutasi
   /// dicatat ke outbox (kind 'stock_movement', reason 'void').
-  Future<void> restoreForSale(List<CartItem> cart) async {
+  /// Batch C6: payload sama lengkapnya dengan deductForSale (level
+  /// lengkap + outlet stok pusat + tautan transaksi bila ada).
+  Future<void> restoreForSale(
+    List<CartItem> cart, {
+    String? transactionClientUuid,
+  }) async {
     final additions = computeDeductions(cart, _recipes, stockByName);
     if (additions.isEmpty) return;
+    final syncItems = <Map<String, dynamic>>[];
     for (final entry in additions.entries) {
       final i = _levels.indexWhere((s) => s.name == entry.key);
       if (i < 0) continue;
       final before = _levels[i];
       _levels[i] = before.copyWith(qty: before.qty + entry.value);
+      syncItems.add({
+        'name': before.name,
+        'unit': before.unit,
+        'qty_after': _levels[i].qty,
+        'low_threshold': before.lowThreshold,
+        'cost_per_unit':
+            before.costPerUnit < 0 ? 0 : before.costPerUnit.round(),
+        'delta': entry.value,
+      });
     }
     notifyListeners();
     await _saveAllLevels();
     try {
       await OutboxService.instance.enqueueSale(
         {
-          'client_uuid': DateTime.now().microsecondsSinceEpoch.toString(),
+          'client_uuid': newClientUuid(),
+          'outlet_id': defaultOutletId,
           'reason': 'void',
-          'additions': additions,
+          if (transactionClientUuid != null)
+            'transaction_client_uuid': transactionClientUuid,
+          'items': syncItems,
         },
         kind: 'stock_movement',
       );
