@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import 'local/app_database.dart';
+import 'menu_service.dart';
 import 'models.dart';
 import 'outlet_service.dart';
 
@@ -137,10 +138,26 @@ class HeldOrderService extends ChangeNotifier {
 
   /// Pulihkan satu order ke keranjang: hapus dari daftar + DB,
   /// kembalikan item-itemnya. null = id tidak ada.
+  /// Batch C8.2 WS7: normalisasi varian lama — order Pending lama
+  /// berisi varian _r/_j (Reguler/Jumbo) yang sudah tidak ada; ganti
+  /// ke varian 22oz produk itu sekarang (harga ikut harga tunggal
+  /// saat ini), modifier tetap. Produk yang sudah tidak ada di menu
+  /// dibiarkan apa adanya (data tersimpan — tetap bisa dibuka).
   Future<List<CartItem>?> restore(String id) async {
     final i = _orders.indexWhere((o) => o.id == id);
     if (i < 0) return null;
-    final items = _orders[i].items;
+    final items = _orders[i].items.map((item) {
+      final product = MenuService.instance.byId(item.product.id);
+      if (product == null || product.variants.isEmpty) return item;
+      final current = product.variants.first;
+      if (item.variant.id == current.id) return item;
+      return CartItem(
+        product: product,
+        variant: current,
+        qty: item.qty,
+        modifiers: item.modifiers,
+      );
+    }).toList();
     _orders = List<HeldOrder>.of(_orders)..removeAt(i);
     notifyListeners();
     try {

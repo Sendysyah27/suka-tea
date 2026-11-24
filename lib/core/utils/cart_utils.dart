@@ -6,9 +6,9 @@ import '../../data/models.dart';
 /// Dipakai untuk: badge angka di kartu produk (qty per produk) dan
 /// edit baris keranjang (ganti varian + modifier, qty dipertahankan).
 
-/// Total qty per produk di [cart], semua varian (Reguler + Jumbo)
-/// digabung. Key = product.id, value = total qty. Keranjang kosong
-/// menghasilkan map kosong.
+/// Total qty per produk di [cart], semua varian digabung. Key =
+/// product.id, value = total qty. Keranjang kosong menghasilkan
+/// map kosong.
 Map<String, int> cartQtyByProduct(List<CartItem> cart) {
   final map = <String, int>{};
   for (final item in cart) {

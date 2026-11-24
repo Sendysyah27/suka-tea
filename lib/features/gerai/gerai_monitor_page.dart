@@ -17,11 +17,10 @@ import 'gerai_edit_page.dart';
 /// Pantau Gerai (Batch C4, FigCraft v29 frame 15): transaksi berjalan,
 /// stok menipis, laporan Harian/Bulanan + top-3 produk — per gerai.
 ///
-/// DATA JUJUR: stok di app ini SATU untuk semua gerai (StockService
-/// tidak per-gerai — belum ada pemisahan stok per outlet di Drift).
-/// Jadi bagian "Stok menipis" menampilkan stok HP ini dan hanya
-/// bermakna untuk gerai yang sedang dibuka; untuk gerai lain tampil
-/// catatan. Transaksi + laporan per gerai BENAR-BENAR per gerai
+/// Batch C8.2 WS5 — STOK PER GERAI: tiap gerai punya bahan baku
+/// sendiri. Bagian "Stok menipis" menampilkan stok GERAI INI —
+/// live dari Supabase bila pull berhasil, lokal (levelsFor) bila
+/// offline. Transaksi + laporan per gerai BENAR-BENAR per gerai
 /// (SaleHistory.outletId, Batch C4). Batch C6: transaksi + laporan
 /// kini bisa LIVE dari Supabase (pull di halaman ini, fallback data
 /// lokal bila offline/gagal) — gerai lain pun tampil penuh.
@@ -41,17 +40,24 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
   /// pakai data lokal). Pull sebulan penuh supaya Harian + Bulanan
   /// sama-sama bisa dihitung dari data live.
   List<SaleRecord>? _liveSales;
+
+  /// Level stok LIVE gerai ini dari Supabase (null = belum berhasil
+  /// pull — pakai stok lokal gerai ini). Batch C8.2 WS5.
+  List<StockItem>? _liveStock;
   var _liveLoading = false;
   String? _liveError;
 
   @override
   void initState() {
     super.initState();
+    // Pastikan gerai yang dilihat punya stok lokal (seed bila
+    // pertama dipakai di HP ini) — jangan tampil kosong.
+    unawaited(StockService.instance.ensureOutlet(widget.outlet.id));
     _refreshLive();
   }
 
-  /// Tarik transaksi gerai dari Supabase (dipanggil initState +
-  /// tombol refresh). Gagal (offline / Supabase belum dikonfigurasi
+  /// Tarik transaksi + stok gerai dari Supabase (dipanggil initState
+  /// + tombol refresh). Gagal (offline / Supabase belum dikonfigurasi
   /// / EF belum di-deploy) = tetap tampil data lokal, bukan error
   /// merah — halaman ini harus tetap berguna saat offline.
   Future<void> _refreshLive() async {
@@ -60,14 +66,15 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
     unawaited(SyncService.instance.refreshPending());
     try {
       final now = DateTime.now();
-      final sales = await SyncService.instance.pullOutlet(
+      final pulled = await SyncService.instance.pullOutlet(
         outletId: widget.outlet.id,
         from: DateTime(now.year, now.month, 1),
         to: now,
       );
       if (!mounted) return;
       setState(() {
-        _liveSales = sales;
+        _liveSales = pulled.sales;
+        _liveStock = pulled.stock;
         _liveError = null;
         _liveLoading = false;
       });
@@ -75,6 +82,7 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
       if (!mounted) return;
       setState(() {
         _liveSales = null;
+        _liveStock = null;
         _liveError = e.toString();
         _liveLoading = false;
       });
@@ -154,12 +162,19 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
           final stats = computeDailyStats(
             periodSales,
             StockService.instance.recipes,
-            StockService.instance.costsByName,
+            // HPP dari biaya bahan GERAI INI (live bila pull berhasil,
+            // lokal gerai ini bila offline) — Batch C8.2 WS5.
+            _liveStock != null
+                ? StockService.costsFromLevels(_liveStock!)
+                : StockService.instance.costsByNameFor(outlet.id),
           );
           final top = topProducts(periodSales);
-          final lowStock = StockService.instance.levels
-              .where((s) => s.isLow)
-              .toList();
+          // Stok gerai ini: live bila pull berhasil, lokal gerai ini
+          // bila offline (Batch C8.2 WS5).
+          final stockLevels = _liveStock ??
+              StockService.instance.levelsFor(outlet.id);
+          final lowStock =
+              stockLevels.where((s) => s.isLow).toList();
           final timeLabel =
               '${now.hour.toString().padLeft(2, '0')}:'
               '${now.minute.toString().padLeft(2, '0')}';
@@ -243,9 +258,8 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
                 _NoteCard(
                   text: _liveSales != null
                       ? 'Gerai ini tidak sedang dibuka di HP ini — tapi '
-                          'transaksi & laporan di bawah diambil LIVE dari '
-                          'Supabase, jadi tampil penuh. Stok masih dari '
-                          'HP ini: stok per gerai belum dipisah.'
+                          'transaksi, laporan & stok di bawah diambil '
+                          'LIVE dari Supabase, jadi tampil penuh.'
                       : 'Gerai ini tidak sedang dibuka di HP ini. '
                           'Transaksi & laporan di bawah hanya dari penjualan '
                           'yang tercatat di HP ini — data gerai lain tampil '
@@ -277,6 +291,7 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
                       subtitle: Text(
                         '${sale.createdAt.hour.toString().padLeft(2, '0')}:'
                         '${sale.createdAt.minute.toString().padLeft(2, '0')}'
+                        ' • Kasir: ${sale.displayCashierName}'
                         ' • ${sale.items.map((i) => i.productName).join(', ')}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -315,11 +330,15 @@ class _GeraiMonitorPageState extends State<GeraiMonitorPage> {
                 style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
               ),
               const SizedBox(height: 8),
-              if (!isCurrent)
+              // Gerai lain + belum ada data live = stok lokal HP ini
+              // untuk gerai itu hanyalah seed (belum pernah dipakai di
+              // HP ini) — jangan tampilkan sebagai "aman", tampilkan
+              // catatan jujur (Batch C8.2 WS5).
+              if (!isCurrent && _liveStock == null)
                 const _NoteCard(
-                  text: 'Stok di HP ini adalah stok gerai yang sedang '
-                      'dibuka — stok per gerai belum dipisah. Buka gerai '
-                      'ini sebagai kasir untuk melihat stoknya.',
+                  text: 'Stok gerai ini belum tersinkron ke HP ini — '
+                      'buka gerai ini sebagai kasir untuk melihat '
+                      'stoknya, atau tekan refresh bila sudah online.',
                 )
               else if (lowStock.isEmpty)
                 const Text(

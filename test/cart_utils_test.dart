@@ -5,15 +5,19 @@ import 'package:suka_tea/data/models.dart';
 /// Helper keranjang Kasir (Batch C5): badge qty per produk +
 /// edit baris keranjang (ganti varian/modifier, qty dipertahankan,
 /// duplikat digabung).
+///
+/// Batch C8.2 WS7: tiap produk hanya 1 varian 22oz. Helper-nya
+/// sendiri tetap generik (tidak peduli jumlah varian), jadi fixture
+/// di sini 1 varian; satu test varian lama dipertahankan untuk
+/// membuktikan utility tidak crash pada data lama (_r/_j).
 
-const _reguler = ProductVariant(id: 'lemon_r', name: 'Reguler', price: 5000);
-const _jumbo = ProductVariant(id: 'lemon_j', name: 'Jumbo', price: 7000);
+const _v22 = ProductVariant(id: 'lemon_22oz', name: '22oz', price: 5000);
 
 const _lemon = Product(
   id: 'es-teh-lemon',
   name: 'Es Teh Lemon',
   category: 'Best Seller',
-  variants: [_reguler, _jumbo],
+  variants: [_v22],
 );
 
 const _susu = Product(
@@ -21,7 +25,7 @@ const _susu = Product(
   name: 'Es Teh Susu',
   category: 'Best Seller',
   variants: [
-    ProductVariant(id: 'susu_r', name: 'Reguler', price: 5000),
+    ProductVariant(id: 'susu_22oz', name: '22oz', price: 5000),
   ],
 );
 
@@ -50,21 +54,26 @@ void main() {
     });
 
     test('satu produk, satu varian', () {
-      final map = cartQtyByProduct([_item(_lemon, _reguler, 2)]);
+      final map = cartQtyByProduct([_item(_lemon, _v22, 2)]);
       expect(map, {'es-teh-lemon': 2});
     });
 
-    test('Reguler + Jumbo produk yang sama DIGABUNG', () {
+    test('dua baris produk yang sama (beda topping) DIGABUNG', () {
       final map = cartQtyByProduct([
-        _item(_lemon, _reguler, 2),
-        _item(_lemon, _jumbo, 3),
+        _item(_lemon, _v22, 2),
+        _item(
+          _lemon,
+          _v22,
+          3,
+          [_gulaNormal, _esNormal, _boba],
+        ),
       ]);
       expect(map, {'es-teh-lemon': 5});
     });
 
     test('produk berbeda dihitung terpisah', () {
       final map = cartQtyByProduct([
-        _item(_lemon, _reguler, 2),
+        _item(_lemon, _v22, 2),
         _item(_susu, _susu.variants.first, 1),
       ]);
       expect(map, {'es-teh-lemon': 2, 'es-teh-susu': 1});
@@ -101,55 +110,66 @@ void main() {
   });
 
   group('replaceCartItem (edit baris keranjang)', () {
-    test('ganti varian, qty dipertahankan, baris tidak nambah', () {
-      final cart = [_item(_lemon, _reguler, 2)];
-      final updated = replaceCartItem(cart, 0, _jumbo, [_gulaNormal, _esNormal]);
-      expect(updated.length, 1);
-      expect(updated.first.variant.id, 'lemon_j');
-      expect(updated.first.qty, 2);
-    });
-
-    test('ganti topping, harga ikut modifier baru', () {
-      final cart = [_item(_lemon, _reguler, 1)];
+    test('ganti topping, qty dipertahankan, baris tidak nambah', () {
+      final cart = [_item(_lemon, _v22, 1)];
       final updated = replaceCartItem(
         cart,
         0,
-        _reguler,
+        _v22,
         [_gulaNormal, _esNormal, _boba],
       );
       expect(updated.length, 1);
+      expect(updated.first.variant.id, 'lemon_22oz');
       expect(updated.first.unitPrice, 5000 + 3000);
       expect(updated.first.qty, 1);
     });
 
     test('edit jadi duplikat baris lain = qty digabung, baris hilang', () {
       final cart = [
-        _item(_lemon, _reguler, 2),
-        _item(_lemon, _jumbo, 3),
+        _item(_lemon, _v22, 2),
+        _item(_lemon, _v22, 3, [_gulaNormal, _esNormal, _boba]),
       ];
       final updated = replaceCartItem(
         cart,
         0,
-        _jumbo,
+        _v22,
+        [_gulaNormal, _esNormal, _boba],
+      );
+      expect(updated.length, 1);
+      expect(updated.first.variant.id, 'lemon_22oz');
+      expect(updated.first.qty, 5);
+    });
+
+    test('ganti varian (data lama _r/_j) tetap didukung utility', () {
+      // Utility generik — tidak peduli jumlah varian. Data lama
+      // (mis. order Pending sebelum WS7) masih bisa diedit.
+      const legacyJumbo =
+          ProductVariant(id: 'lemon_j', name: 'Jumbo', price: 7000);
+      final cart = [_item(_lemon, _v22, 2)];
+      final updated = replaceCartItem(
+        cart,
+        0,
+        legacyJumbo,
         [_gulaNormal, _esNormal],
       );
       expect(updated.length, 1);
       expect(updated.first.variant.id, 'lemon_j');
-      expect(updated.first.qty, 5);
+      expect(updated.first.qty, 2);
     });
 
     test('list lama tidak diubah', () {
-      final cart = [_item(_lemon, _reguler, 2)];
-      replaceCartItem(cart, 0, _jumbo, [_gulaNormal, _esNormal]);
-      expect(cart.first.variant.id, 'lemon_r');
+      final cart = [_item(_lemon, _v22, 2)];
+      replaceCartItem(cart, 0, _v22, [_gulaNormal, _esNormal, _boba]);
+      expect(cart.first.variant.id, 'lemon_22oz');
       expect(cart.first.qty, 2);
+      expect(cart.first.modifiers, hasLength(2));
     });
 
     test('index di luar rentang = salinan tanpa perubahan', () {
-      final cart = [_item(_lemon, _reguler, 2)];
-      final updated = replaceCartItem(cart, 5, _jumbo, [_gulaNormal, _esNormal]);
+      final cart = [_item(_lemon, _v22, 2)];
+      final updated = replaceCartItem(cart, 5, _v22, [_gulaNormal, _esNormal]);
       expect(updated.length, 1);
-      expect(updated.first.variant.id, 'lemon_r');
+      expect(updated.first.variant.id, 'lemon_22oz');
     });
   });
 }

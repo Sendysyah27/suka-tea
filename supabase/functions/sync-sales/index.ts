@@ -1,21 +1,48 @@
-// SUKA TEA — Edge Function `sync-sales` (Batch C6 + C7)
+// SUKA TEA — Edge Function `sync-sales` (Batch C6 + C7 + C8.2)
 // Sinkronisasi penjualan + mutasi stok per-gerai, dan baca live
 // untuk Pantau Gerai Owner.
 //
 // POST { action, ... } -> { ok, ... }
 //   action 'push': { events: [{ outbox_id, kind, client_uuid,
 //     outlet_id, created_at, payload }] } -> { ok, results:
-//     [{ outbox_id, client_uuid, ok, error? }] } (per-event, urutan
-//     diproses sekuensial = urutan antrean app).
+//     [{ outbox_id, client_uuid, ok, error? }],
+//     shift_adoptions: [{ outbox_id, existing_client_uuid,
+//     existing_opened_at, existing_cashier_name,
+//     existing_cashier_id, existing_opening_float }] } (per-event,
+//     urutan diproses sekuensial = urutan antrean app).
 //   action 'pull': { outlet_id, from, to } (tanggal YYYY-MM-DD,
 //     inklusif, zona lokal) -> { ok, outlet_id, from, to,
 //     transactions: [...], items: [{ transaction_client_uuid,
-//     name_snapshot, qty, unit_price, modifiers_json }] }.
+//     name_snapshot, qty, unit_price, modifiers_json }],
+//     stock: [{ name, unit, qty, low_threshold, cost_per_unit }],
+//     shifts: [shift terbuka gerai itu] }.
+//   action 'shift_expected': { outlet_id, from, to } (ISO
+//     timestamp) -> { ok, cash_in, cash_out } — expected kas
+//     server (semua kasir + semua device gerai itu, void
+//     dikecualikan). Pemanggil menambahkan opening_float sendiri.
 //   400 input tidak valid / 500 error Supabase.
 //
 // Batch C7: kind 'expense' (upsert pengeluaran by client_uuid;
 // is_deleted true = hapus baris) + kind 'shift' (upsert shift kas
 // by client_uuid, last-write-wins: event tutup menimpa event buka).
+//
+// Batch C8.2:
+// - WS4: transaksi menyimpan cashier_id + cashier_name (kasir
+//   pencatat dari server); pull mengembalikannya.
+// - WS5: stok PER GERAI — mutasi diterapkan ke outlet PENGIRIM
+//   (bukan lagi gerai utama); server menerapkan DELTA (qty_delta),
+//   bukan level absolut qty_after — idempotent via client_uuid
+//   (hanya terapkan bila movement benar-benar baru), clamp >= 0.
+//   Baris stok baru memakai qty_after sebagai level awal.
+//   Pull mengembalikan stok gerai yang diminta.
+// - WS6: SATU shift per gerai (laci satu). Push 'open' di-dedupe
+//   server: shift dengan opened_at PALING AWAL dipertahankan —
+//   yang lebih awal menutup yang lebih lambat; yang lebih lambat
+//   dikembalikan sebagai dedupe (shift_adoptions) supaya app
+//   mengadopsi shift yang sudah ada. Push 'close' untuk shift
+//   yang tidak ada diabaikan (tidak membuat baris hantu).
+//   Pull mengembalikan shift TERBUKA gerai itu (visibilitas antar
+//   device). Expected dihitung server (aksi 'shift_expected').
 //
 // JALUR TULIS: Edge Function ini (bukan tulis langsung dari app).
 // RLS 001 menuntut auth.uid() membership — anon key tidak punya
@@ -32,14 +59,6 @@
 // Void = event 'transaction' dengan client_uuid YANG SAMA +
 // is_void true; status 'void' bersifat STICKY — event penjualan
 // lama yang terkirim ulang tidak bisa membaliknya ke 'completed'.
-//
-// STOK: stok itu SATU shared untuk semua gerai (bukan per-gerai).
-// App mengirim mutasi stok dengan outlet_id gerai utama (...0001)
-// sebagai "stok pusat". Level stok diterapkan dari qty_after
-// absolut — TAPI hanya bila baris mutasi benar-benar baru
-// (insert berhasil); kirim ulang tidak boleh memundurkan level.
-// Mutasi ditautkan ke transaksi bila transaksinya sudah
-// tersinkron (boleh null).
 //
 // KEJUJURAN / BATASAN (tanpa Auth M0, EF ini tidak bisa membedakan
 // kasir asli vs pemalsu yang mengekstrak anon key dari app —
@@ -121,6 +140,7 @@ async function normalizeClientUuid(raw: string): Promise<string> {
 }
 
 /// Upsert satu transaksi + ganti item-nya utuh (idempotent).
+/// Batch C8.2 WS4: simpan cashier_id + cashier_name (kasir pencatat).
 async function pushTransaction(
   supabase: Supabase,
   ev: Record<string, unknown>,
@@ -152,6 +172,13 @@ async function pushTransaction(
     toNonNegInt(item.price, "item.price");
   }
   const createdAt = String(ev.created_at ?? new Date().toISOString());
+  // cashier_id = UUID kasir dari server (migrasi 010); string bukan
+  // UUID / kosong = null (kolom uuid tidak menerima string kosong).
+  const cashierIdRaw =
+    typeof p.cashier_id === "string" ? p.cashier_id : "";
+  const cashierId = UUID_RE.test(cashierIdRaw) ? cashierIdRaw : null;
+  const cashierName =
+    typeof p.cashier_name === "string" ? p.cashier_name : "";
 
   // Sticky-void: status 'void' yang sudah tersimpan tidak boleh
   // balik ke 'completed' bila event penjualan lama terkirim ulang.
@@ -181,6 +208,8 @@ async function pushTransaction(
         discount,
         qris_amount: qrisAmount,
         cash_amount: cashAmount,
+        cashier_id: cashierId,
+        cashier_name: cashierName,
       },
       { onConflict: "client_uuid" },
     )
@@ -214,9 +243,11 @@ async function pushTransaction(
   return { transaction_id: txnId, status };
 }
 
-/// Satu mutasi stok: pastikan baris stock_items ada, sisipkan
-/// mutasi (idempotent via client_uuid), lalu terapkan level
-/// qty_after — HANYA bila mutasi benar-benar baru.
+/// Satu mutasi stok (Batch C8.2 WS5 — DELTA, per gerai pengirim):
+/// pastikan baris stock_items gerai itu ada, sisipkan mutasi
+/// (idempotent via client_uuid), lalu terapkan DELTA ke level —
+/// HANYA bila mutasi benar-benar baru, clamp >= 0. Baris stok baru
+/// memakai qty_after sebagai level awal (mutasi pertama per bahan).
 async function pushStockMovement(
   supabase: Supabase,
   ev: Record<string, unknown>,
@@ -258,17 +289,29 @@ async function pushStockMovement(
     const cost = toNonNegInt(item.cost_per_unit ?? 0, "item.cost_per_unit");
     const delta = toNumber(item.delta, "item.delta");
 
-    // 1) Pastikan baris stok ada (qty TIDAK diubah di sini — level
-    //    hanya diterapkan sesudah mutasi terbukti baru).
+    // 1) Pastikan baris stok gerai ini ada. Baris baru memakai
+    //    qty_after sebagai level awal (mutasi pertama per bahan).
+    //    23505 = balapan dengan device lain yang membuat baris yang
+    //    sama duluan — baca ulang, lalu lanjut sebagai baris lama.
     const { data: existingStock } = await supabase
       .from("stock_items")
-      .select("id")
+      .select("id, qty")
       .eq("outlet_id", outletId)
       .eq("name", name)
       .maybeSingle();
     let stockId: string;
+    let currentQty: number | null = null;
+    // true = baris SUDAH ada sebelum event ini (delta diterapkan di
+    // langkah 3); false = baris baru dibuat langkah 1 dengan
+    // qty_after sebagai level awal (mutasi ini SUDAH termasuk di
+    // level itu — jangan terapkan delta lagi).
+    let rowPreExisted = false;
     if (existingStock != null) {
       stockId = (existingStock as { id: string }).id;
+      currentQty = Number(
+        (existingStock as { qty: number }).qty ?? 0,
+      );
+      rowPreExisted = true;
       const { error: updErr } = await supabase
         .from("stock_items")
         .update({ unit, low_threshold: lowThreshold, cost })
@@ -287,16 +330,35 @@ async function pushStockMovement(
           low_threshold: lowThreshold,
           cost,
         })
-        .select("id")
+        .select("id, qty")
         .single();
       if (insErr) {
-        throw new Error(`buat stok gagal: ${insErr.message}`);
+        if ((insErr as { code?: string }).code === "23505") {
+          const { data: raced } = await supabase
+            .from("stock_items")
+            .select("id, qty")
+            .eq("outlet_id", outletId)
+            .eq("name", name)
+            .maybeSingle();
+          if (raced == null) {
+            throw new Error(`buat stok gagal: ${insErr.message}`);
+          }
+          stockId = (raced as { id: string }).id;
+          currentQty = Number((raced as { qty: number }).qty ?? 0);
+          // Baris ternyata sudah ada (dibuat device lain duluan) —
+          // delta TETAP diterapkan di langkah 3.
+          rowPreExisted = true;
+        } else {
+          throw new Error(`buat stok gagal: ${insErr.message}`);
+        }
+      } else {
+        stockId = (created as { id: string }).id;
+        currentQty = Number((created as { qty: number }).qty ?? 0);
       }
-      stockId = (created as { id: string }).id;
     }
 
     // 2) Sisip mutasi — duplikat client_uuid (23505) = kirim ulang:
-    //    bukan error, lewati update level (sudah diterapkan dulu).
+    //    bukan error, lewati penerapan delta (sudah diterapkan dulu).
     const { data: moved, error: movErr } = await supabase
       .from("stock_movements")
       .insert({
@@ -315,12 +377,20 @@ async function pushStockMovement(
     }
     if (moved == null) continue;
 
-    // 3) Mutasi baru -> terapkan level absolut.
-    const { error: lvlErr } = await supabase
-      .from("stock_items")
-      .update({ qty: qtyAfter })
-      .eq("id", stockId);
-    if (lvlErr) throw new Error(`update level stok gagal: ${lvlErr.message}`);
+    // 3) Mutasi baru -> terapkan DELTA ke level gerai ini, clamp >= 0.
+    //    Baris baru: currentQty SUDAH = qty_after (level awal di
+    //    langkah 1 sudah termasuk mutasi ini) — jangan terapkan
+    //    delta lagi, atau level jadi dobel.
+    if (rowPreExisted) {
+      const nextQty = Math.max(0, (currentQty ?? 0) + delta);
+      const { error: lvlErr } = await supabase
+        .from("stock_items")
+        .update({ qty: nextQty })
+        .eq("id", stockId);
+      if (lvlErr) {
+        throw new Error(`update level stok gagal: ${lvlErr.message}`);
+      }
+    }
     applied++;
   }
   return { applied_items: applied };
@@ -375,21 +445,39 @@ async function pushExpense(
   return { deleted: false };
 }
 
-/// Upsert satu shift kas (last-write-wins by client_uuid): event
-/// buka (status 'open', closed_* null) lalu event tutup (status
-/// 'closed') menimpa baris yang sama. difference boleh negatif
-/// (kurang) — tidak ada CHECK di bawah 0 untuk kolom itu.
+/// Upsert satu shift kas (Batch C8.2 WS6 — SATU shift per gerai).
+/// - Event 'open': dedupe — bila sudah ada shift OPEN lain di gerai
+///   ini (client_uuid berbeda), yang opened_at PALING AWAL menang.
+///   Masuk lebih awal -> shift lain ditutup (closed_at = opened_at
+///   masuk) lalu masuk di-upsert. Masuk lebih lambat/sama ->
+///   kembalikan dedupe (existing_*) supaya app mengadopsi shift
+///   yang sudah ada, JANGAN upsert.
+/// - Event 'close': bila baris client_uuid tidak ada, abaikan
+///   (jangan buat baris hantu — tutup tanpa buka tidak ada artinya).
+/// - Selain itu last-write-wins by client_uuid seperti C7.
 async function pushShift(
   supabase: Supabase,
   ev: Record<string, unknown>,
-): Promise<{ status: string }> {
+): Promise<Record<string, unknown>> {
   const outletId = String(ev.outlet_id ?? "");
   if (!UUID_RE.test(outletId)) throw new Error("outlet_id bukan UUID");
   const p = ev.payload as Record<string, unknown> | undefined;
   if (p == null || typeof p !== "object") throw new Error("payload hilang");
   const clientUuid = await normalizeClientUuid(String(ev.client_uuid ?? ""));
+  const cashierIdRaw =
+    typeof p.cashier_id === "string" ? p.cashier_id : "";
+  const cashierId = UUID_RE.test(cashierIdRaw) ? cashierIdRaw : null;
   const cashierName =
     typeof p.cashier_name === "string" ? p.cashier_name : "";
+  const closedByIdRaw =
+    typeof p.closed_by_cashier_id === "string"
+      ? p.closed_by_cashier_id
+      : "";
+  const closedById = UUID_RE.test(closedByIdRaw) ? closedByIdRaw : null;
+  const closedByName =
+    typeof p.closed_by_cashier_name === "string"
+      ? p.closed_by_cashier_name
+      : "";
   const openedAt = String(p.opened_at ?? "");
   if (Number.isNaN(Date.parse(openedAt))) {
     throw new Error("opened_at bukan tanggal");
@@ -410,12 +498,65 @@ async function pushShift(
     if (v == null) return null;
     return Math.trunc(toNumber(v, field));
   };
+
+  if (status === "open") {
+    const { data: otherOpen } = await supabase
+      .from("cash_shifts")
+      .select("client_uuid, opened_at, cashier_name, cashier_id, opening_float")
+      .eq("outlet_id", outletId)
+      .eq("status", "open")
+      .neq("client_uuid", clientUuid)
+      .order("opened_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (otherOpen != null) {
+      const other = otherOpen as Record<string, unknown>;
+      const otherOpened = new Date(String(other["opened_at"]));
+      const incomingOpened = new Date(openedAt);
+      if (incomingOpened.getTime() < otherOpened.getTime()) {
+        // Masuk lebih awal -> menang: tutup shift lain (yang lebih
+        // lambat) di titik waktu masuk dibuka, lalu upsert masuk.
+        await supabase
+          .from("cash_shifts")
+          .update({ status: "closed", closed_at: openedAt })
+          .eq("client_uuid", String(other["client_uuid"]));
+      } else {
+        // Masuk lebih lambat/sama -> dedupe: kembalikan shift yang
+        // sudah ada, app mengadopsinya (buang duplikat lokalnya).
+        return {
+          status: "open",
+          deduped: true,
+          existing_client_uuid: String(other["client_uuid"]),
+          existing_opened_at: String(other["opened_at"]),
+          existing_cashier_name: String(other["cashier_name"] ?? ""),
+          existing_cashier_id: String(other["cashier_id"] ?? ""),
+          existing_opening_float:
+            typeof other["opening_float"] === "number"
+              ? other["opening_float"]
+              : 0,
+        };
+      }
+    }
+  } else {
+    const { data: existing } = await supabase
+      .from("cash_shifts")
+      .select("id")
+      .eq("client_uuid", clientUuid)
+      .maybeSingle();
+    if (existing == null) {
+      return { status: "closed", ignored: true };
+    }
+  }
+
   const { error: upErr } = await supabase
     .from("cash_shifts")
     .upsert(
       {
         outlet_id: outletId,
+        cashier_id: cashierId,
         cashier_name: cashierName,
+        closed_by_cashier_id: closedById,
+        closed_by_cashier_name: closedByName,
         opened_at: openedAt,
         opening_float: openingFloat,
         closed_at: closedAt,
@@ -432,7 +573,7 @@ async function pushShift(
   return { status };
 }
 
-/// Baca transaksi gerai untuk Pantau Gerai live.
+/// Baca transaksi + stok + shift terbuka gerai untuk Pantau Gerai live.
 /// Hari dalam WIB (toko di UTC+7): from 00:00 WIB s.d. to+1 00:00 WIB.
 async function pull(
   supabase: Supabase,
@@ -460,7 +601,7 @@ async function pull(
   const { data: txns, error: txnErr } = await supabase
     .from("transactions")
     .select(
-      "id, client_uuid, outlet_id, created_at, payment_method, subtotal, total, paid, change_amount, status, discount, qris_amount, cash_amount",
+      "id, client_uuid, outlet_id, created_at, payment_method, subtotal, total, paid, change_amount, status, discount, qris_amount, cash_amount, cashier_id, cashier_name",
     )
     .eq("outlet_id", outletId)
     .gte("created_at", start.toISOString())
@@ -491,6 +632,36 @@ async function pull(
       });
     }
   }
+
+  // Stok gerai yang diminta (Batch C8.2 WS5).
+  const { data: stockRows, error: stockErr } = await supabase
+    .from("stock_items")
+    .select("name, unit, qty, low_threshold, cost")
+    .eq("outlet_id", outletId)
+    .order("name", { ascending: true });
+  if (stockErr) throw new Error(`baca stok gagal: ${stockErr.message}`);
+  const stock = ((stockRows ?? []) as Record<string, unknown>[]).map(
+    (s) => ({
+      name: s["name"],
+      unit: s["unit"],
+      qty: s["qty"],
+      low_threshold: s["low_threshold"],
+      cost_per_unit: s["cost"],
+    }),
+  );
+
+  // Shift TERBUKA gerai itu (Batch C8.2 WS6 — visibilitas antar device).
+  const { data: shiftRows, error: shiftErr } = await supabase
+    .from("cash_shifts")
+    .select(
+      "client_uuid, outlet_id, cashier_id, cashier_name, opened_at, opening_float, status, closed_at, closed_by_cashier_id, closed_by_cashier_name",
+    )
+    .eq("outlet_id", outletId)
+    .eq("status", "open")
+    .order("opened_at", { ascending: true });
+  if (shiftErr) throw new Error(`baca shift gagal: ${shiftErr.message}`);
+  const shifts = (shiftRows ?? []) as Record<string, unknown>[];
+
   return {
     ok: true,
     outlet_id: outletId,
@@ -498,7 +669,63 @@ async function pull(
     to,
     transactions: txnList,
     items,
+    stock,
+    shifts,
   };
+}
+
+/// Expected kas server (Batch C8.2 WS6): cash_in = tunai masuk dari
+/// SEMUA transaksi gerai itu di [from, to) (tunai -> total; split ->
+/// total − qris_amount; void dikecualikan); cash_out = pengeluaran
+/// TUNAI gerai itu di jendela yang sama. Pemanggil menambahkan
+/// opening_float shift itu sendiri. [from]/[to] = ISO timestamp.
+async function shiftExpected(
+  supabase: Supabase,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const outletId = String(body.outlet_id ?? "");
+  if (!UUID_RE.test(outletId)) throw new Error("outlet_id bukan UUID");
+  const fromRaw = String(body.from ?? "");
+  const toRaw = String(body.to ?? "");
+  const from = new Date(fromRaw);
+  const to = new Date(toRaw);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    throw new Error("from/to harus timestamp ISO");
+  }
+  if (from.getTime() >= to.getTime()) {
+    throw new Error("from harus sebelum to");
+  }
+  const { data: txns, error: txnErr } = await supabase
+    .from("transactions")
+    .select("payment_method, total, qris_amount, status")
+    .eq("outlet_id", outletId)
+    .gte("created_at", from.toISOString())
+    .lt("created_at", to.toISOString());
+  if (txnErr) throw new Error(`baca transaksi gagal: ${txnErr.message}`);
+  let cashIn = 0;
+  for (const t of (txns ?? []) as Record<string, unknown>[]) {
+    if (t["status"] === "void") continue;
+    const total = Number(t["total"] ?? 0);
+    const method = String(t["payment_method"] ?? "");
+    if (method === "tunai") {
+      cashIn += total;
+    } else if (method === "split") {
+      cashIn += Math.max(0, total - Number(t["qris_amount"] ?? 0));
+    }
+  }
+  const { data: expenses, error: expErr } = await supabase
+    .from("expenses")
+    .select("amount")
+    .eq("outlet_id", outletId)
+    .eq("is_cash", true)
+    .gte("created_at", from.toISOString())
+    .lt("created_at", to.toISOString());
+  if (expErr) throw new Error(`baca pengeluaran gagal: ${expErr.message}`);
+  let cashOut = 0;
+  for (const e of (expenses ?? []) as Record<string, unknown>[]) {
+    cashOut += Number(e["amount"] ?? 0);
+  }
+  return { ok: true, cash_in: cashIn, cash_out: cashOut };
 }
 
 Deno.serve(async (req: Request) => {
@@ -530,6 +757,9 @@ Deno.serve(async (req: Request) => {
         );
       }
       const results: Record<string, unknown>[] = [];
+      // Dedupe shift (Batch C8.2 WS6): event buka yang ditolak server
+      // karena shift lain lebih awal — app mengadopsi shift itu.
+      const shiftAdoptions: Record<string, unknown>[] = [];
       for (const raw of events) {
         const ev = raw as Record<string, unknown>;
         const outboxId = String(ev.outbox_id ?? "");
@@ -541,7 +771,19 @@ Deno.serve(async (req: Request) => {
           } else if (ev.kind === "expense") {
             await pushExpense(supabase, ev);
           } else if (ev.kind === "shift") {
-            await pushShift(supabase, ev);
+            const shiftResult = await pushShift(supabase, ev);
+            if (shiftResult["deduped"] === true) {
+              shiftAdoptions.push({
+                outbox_id: outboxId,
+                existing_client_uuid: shiftResult["existing_client_uuid"],
+                existing_opened_at: shiftResult["existing_opened_at"],
+                existing_cashier_name:
+                  shiftResult["existing_cashier_name"],
+                existing_cashier_id: shiftResult["existing_cashier_id"],
+                existing_opening_float:
+                  shiftResult["existing_opening_float"],
+              });
+            }
           } else {
             throw new Error(`kind tidak dikenal: ${String(ev.kind ?? "")}`);
           }
@@ -559,12 +801,23 @@ Deno.serve(async (req: Request) => {
           });
         }
       }
-      return json({ ok: true, results });
+      return json({ ok: true, results, shift_adoptions: shiftAdoptions });
     }
 
     if (action === "pull") {
       try {
         return json(await pull(supabase, body));
+      } catch (e) {
+        return json(
+          { ok: false, error: String(e instanceof Error ? e.message : e) },
+          400,
+        );
+      }
+    }
+
+    if (action === "shift_expected") {
+      try {
+        return json(await shiftExpected(supabase, body));
       } catch (e) {
         return json(
           { ok: false, error: String(e instanceof Error ? e.message : e) },

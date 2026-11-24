@@ -26,12 +26,12 @@ void main() {
     );
     await tester.pump();
     // Tombol "+" rounded square di pojok foto kartu pertama
-    // (FigCraft v26 frame 01): quick-add Reguler pertama =
+    // (FigCraft v26 frame 01): quick-add 22oz pertama =
     // Manggo Milktea, harga poster 8K.
     await tester.tap(find.byIcon(Icons.add).first);
     await tester.pump();
     // Total keranjang berubah dari Rp0 menjadi Rp8.000.
-    // Harga kartu sekarang RENTANG ("Rp8.000 – Rp10.000") dan teks
+    // Harga kartu sekarang TUNGGAL 22oz ("Rp8.000") dan teks
     // bar bawah "Keranjang (1) • Rp8.000" satu Text utuh — jadi
     // dicari sebagai substring, bukan teks persis.
     expect(find.textContaining('Rp8.000'), findsWidgets);

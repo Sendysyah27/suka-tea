@@ -48,7 +48,7 @@ class ProductVariant {
   });
 
   final String id;
-  final String name; // Reguler / Jumbo
+  final String name; // '22oz' (Batch C8.2 WS7 — satu ukuran saja)
   final int? sizeOz;
   final int price; // harga jual (rupiah)
   final int cost; // HPP (rupiah) — hanya Owner, jangan tampil ke Kasir
@@ -70,8 +70,6 @@ class Product {
   final String? photoUrl;
   final List<ProductVariant> variants;
   final bool isActive;
-
-  ProductVariant get reguler => variants.first;
 }
 
 class Modifier {
@@ -128,7 +126,7 @@ class CartItem {
       variant.price + modifiers.fold(0, (s, m) => s + m.priceDelta);
   int get total => unitPrice * qty;
 
-  /// "Es Teh Lemon Reguler" (tanpa modifier).
+  /// "Es Teh Lemon 22oz" (tanpa modifier).
   String get nameText => '${product.name} ${variant.name}';
 
   /// "(Normal, Es Normal)" — topping ditulis "+Nama"
@@ -164,7 +162,9 @@ class CartItem {
   factory CartItem.fromJson(Map<String, dynamic> json) {
     final variant = ProductVariant(
       id: json['variantId'] as String? ?? '',
-      name: json['variantName'] as String? ?? 'Reguler',
+      // Batch C8.2 WS7: default '22oz' (bukan 'Reguler' lagi) untuk
+      // JSON lama tanpa nama varian.
+      name: json['variantName'] as String? ?? '22oz',
       price: (json['variantPrice'] as num? ?? 0).toInt(),
     );
     final product = Product(
@@ -192,6 +192,7 @@ class StockItem {
     required this.qty,
     required this.lowThreshold,
     this.costPerUnit = -1,
+    this.outletId = '',
   });
 
   final String name;
@@ -205,6 +206,10 @@ class StockItem {
   /// Nilai awal dari seedStockCostPerUnit (backfill saat init).
   final double costPerUnit;
 
+  /// Gerai pemilik stok ini (Batch C8.2 WS5 — stok per gerai).
+  /// '' = tidak diketahui (data lama sebelum v10 / sumber lokal).
+  final String outletId;
+
   bool get isLow => qty <= lowThreshold;
 
   StockItem copyWith({
@@ -213,6 +218,7 @@ class StockItem {
     double? qty,
     double? lowThreshold,
     double? costPerUnit,
+    String? outletId,
   }) =>
       StockItem(
         name: name ?? this.name,
@@ -220,6 +226,7 @@ class StockItem {
         qty: qty ?? this.qty,
         lowThreshold: lowThreshold ?? this.lowThreshold,
         costPerUnit: costPerUnit ?? this.costPerUnit,
+        outletId: outletId ?? this.outletId,
       );
 }
 
@@ -233,7 +240,7 @@ class ReceiptLine {
     required this.unitPrice,
   });
 
-  final String name; // "Es Teh Lemon Reguler"
+  final String name; // "Es Teh Lemon 22oz"
   final String modifierText; // "(Normal, Es Normal)" atau ''
   final int qty;
   final int unitPrice;

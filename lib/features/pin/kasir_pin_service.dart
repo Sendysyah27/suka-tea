@@ -10,6 +10,13 @@ import 'pin_service.dart';
 /// PIN kasir TIDAK PERNAH disimpan lokal — bahkan hash-nya tidak
 /// di-cache.
 ///
+/// DEPRECATED — Batch C8.2 (24 Nov 2026): PIN kasir per-gerai TIDAK
+/// LAGI dipakai. Kasir kini didaftarkan Owner di "Kelola Kasir"
+/// (lib/features/kasir/cashier_service.dart) — satu PIN berlaku di
+/// semua gerai, identitas dari server. File ini + dialog-nya +
+/// ketiga Edge Function-nya SENGAJA DIBIARKAN (bukan dihapus) supaya
+/// rollback / audit tetap bisa — tapi tidak ada pemakai lagi di app.
+///
 /// STATUS DEPLOY (jujur): ketiga Edge Function itu SUDAH ada sebagai
 /// file di repo (supabase/functions/verify-kasir-pin/ dst) tapi BELUM
 /// di-deploy ke dashboard Supabase — Jhon yang deploy. Selama

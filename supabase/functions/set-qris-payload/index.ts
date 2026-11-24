@@ -1,5 +1,5 @@
-// SUKA TEA — Edge Function `set-qris-payload` (Batch C8)
-// Simpan payload QRIS statis merchant (TERENKRIPSI) ke Supabase.
+// SUKA TEA — Edge Function `set-qris-payload` (Batch C8.2 — QRIS GLOBAL)
+// Simpan payload QRIS statis merchant (PLAINTEXT) ke Supabase.
 //
 // Kenapa lewat Edge Function, bukan upsert langsung dari app:
 // `app_settings` (migrasi 002) RLS-nya nyala dengan SATU policy
@@ -13,11 +13,17 @@
 // upload-product-photo) + tulis dilakukan service_role yang melewati
 // RLS. JWT OFF — PIN adalah auth-nya (sama seperti EF PIN lain).
 //
-// Nilai yang disimpan HARUS sudah terenkripsi di perangkat
-// (AES-256-GCM, format `enc:v1:` + base64 — Batch C2). Plaintext
-// DITOLAK (400, fail closed): jangan pernah terima payload polos baru.
-// Kunci enkripsi tetap di perangkat (Android Keystore via
-// flutter_secure_storage) — TIDAK PERNAH ikut ke Supabase.
+// Batch C8.2: payload kini SATU untuk SEMUA gerai + SEMUA device.
+// Nilai disimpan PLAINTEXT, SELALU di baris outlet global ...0001
+// (outlet_id pemanggil DIABAIKAN untuk baris tulis — hanya dipakai
+// untuk verifikasi PIN Owner gerai itu + audit pin_attempts).
+// Enkripsi per-perangkat (Batch C2/C8, format `enc:v1:`) DIHAPUS:
+// kunci cuma ada di satu HP, jadi payload yang disimpan di POVA
+// tidak bisa dipakai POCO ("belum di setting", 24 Nov 2026).
+// Trade-off jujur (disetujui Sendy 24 Nov 13:54): siapa pun yang
+// memegang anon key bisa membaca payload ini lewat get-qris-payload;
+// praktis risikonya rendah — payload statis hanya bisa membuat QR
+// yang membayar KE rekening merchant, tidak bisa mengalihkan uang.
 //
 // POST { outlet_id, pin, value } -> { ok:true }  (200)
 // POST { outlet_id, pin, delete:true } -> { ok:true }  (200, hapus baris)
@@ -40,12 +46,13 @@ const corsHeaders = {
 
 const MAX_FAILURES = 10;
 const WINDOW_MINUTES = 10;
-// Ciphertext QRIS (payload ~500 karakter -> base64 ~700 + prefix)
-// jauh di bawah batas ini; batas menahan junk raksasa yang tak sengaja.
+// Payload QRIS statis ~500 karakter; batas menahan junk raksasa
+// yang tak sengaja.
 const MAX_VALUE_CHARS = 8192;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ENCRYPTED_PREFIX = "enc:v1:";
+// Baris GLOBAL: satu payload untuk semua gerai + semua device.
+const GLOBAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -76,17 +83,13 @@ Deno.serve(async (req: Request) => {
       );
     }
     if (!isDelete) {
-      // Fail closed: HANYA ciphertext `enc:v1:` yang boleh disimpan.
-      // Plaintext (payload mentah) DITOLAK — jangan pernah terima
-      // payload polos baru (RedMuse F2, Batch C2).
-      if (
-        !value.startsWith(ENCRYPTED_PREFIX) ||
-        value.length > MAX_VALUE_CHARS
-      ) {
+      // Fail closed: HANYA plaintext QRIS statis yang boleh disimpan
+      // (diawali "000201" = Payload Format Indicator "01").
+      if (!value.startsWith("000201") || value.length > MAX_VALUE_CHARS) {
         return json(
           {
             ok: false,
-            error: "value harus ciphertext 'enc:v1:' (maks 8192 karakter)",
+            error: "value harus payload QRIS statis (diawali 000201, maks 8192 karakter)",
           },
           400,
         );
@@ -131,12 +134,12 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, reason: "wrong" }, 403);
     }
 
-    // --- Tulis (service_role melewati RLS) ---
+    // --- Tulis (service_role melewati RLS) — SELALU baris global ---
     if (isDelete) {
       const { error } = await supabase
         .from("app_settings")
         .delete()
-        .eq("outlet_id", outletId)
+        .eq("outlet_id", GLOBAL_OUTLET_ID)
         .eq("key", "qris_static_payload");
       if (error) {
         return json({ ok: false, error: error.message }, 500);
@@ -144,7 +147,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true });
     }
     const { error } = await supabase.from("app_settings").upsert(
-      { outlet_id: outletId, key: "qris_static_payload", value },
+      { outlet_id: GLOBAL_OUTLET_ID, key: "qris_static_payload", value },
       { onConflict: "outlet_id,key" },
     );
     if (error) {

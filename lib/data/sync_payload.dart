@@ -16,6 +16,13 @@ import 'dart:math';
 /// dan `stock_movements`). Entri outbox LAMA (sebelum C6) memakai
 /// client_uuid string angka mikROdetik (bukan UUID) — server
 /// menormalkannya secara deterministik, jadi tetap idempotent.
+///
+/// Batch C8.2: penjualan membawa cashier_id + cashier_name (WS4);
+/// mutasi stok membawa outlet pengirim + DELTA (WS5 — bukan level
+/// absolut lagi); shift membawa cashier pembuka + penutup (WS6) dan
+/// pull mengembalikan stok + shift terbuka gerai itu (WS5/WS6) —
+/// dedupe shift antar device diputuskan fungsi pure di bawah
+/// ([resolveShiftWinner] / [pickAdoptedShift]).
 
 /// Cara bayar yang dikenal server (migrasi 001 + 002 + 008).
 const Set<String> serverPaymentMethods = {
@@ -140,6 +147,11 @@ Map<String, dynamic> normalizeSaleEvent({
   final createdAt = (createdRaw is String && createdRaw.isNotEmpty)
       ? createdRaw
       : entryCreatedAt.toIso8601String();
+  // Batch C8.2 WS4: kasir pencatat ikut tersinkron (struk + Pantau
+  // Gerai + expected tutup kas tahu siapa yang jual). Payload lama
+  // tanpa kasir -> '' (server menyimpan default '').
+  final cashierId = rawPayload['cashier_id'];
+  final cashierName = rawPayload['cashier_name'];
   return {
     'outbox_id': outboxId,
     'kind': 'transaction',
@@ -154,6 +166,8 @@ Map<String, dynamic> normalizeSaleEvent({
       'change': change,
       'qris_amount': qrisAmount,
       'cash_amount': cashAmount,
+      'cashier_id': cashierId is String ? cashierId : '',
+      'cashier_name': cashierName is String ? cashierName : '',
       'is_void': rawPayload['is_void'] == true,
       'items': items,
     },
@@ -176,9 +190,11 @@ bool isLegacyStockPayload(Map<String, dynamic> rawPayload) {
 /// Normalisasi event mutasi stok ('stock_movement').
 /// Payload per item: {name, unit, qty_after, low_threshold,
 /// cost_per_unit, delta} — delta negatif = penjualan, positif = void.
-/// outlet_id SELALU gerai utama (stok itu SATU shared, bukan
-/// per-gerai — lihat laporan C6); payload lama tanpa outlet_id
-/// jatuh ke [fallbackOutletId].
+/// [qty_after] = level lokal sesudah mutasi (info tampilan — server
+/// Batch C8.2 WS5 TIDAK lagi memakai level absolut, melainkan DELTA:
+/// hanya terapkan bila movement benar-benar baru, clamp >= 0).
+/// outlet_id = outlet PENGIRIM (Batch C8.2 WS5 — stok per gerai);
+/// payload lama tanpa outlet_id jatuh ke [fallbackOutletId].
 Map<String, dynamic> normalizeStockEvent({
   required String outboxId,
   required Map<String, dynamic> rawPayload,
@@ -341,6 +357,9 @@ Map<String, dynamic> normalizeShiftEvent({
     throw const FormatException('shift closed tanpa closed_at');
   }
   final cashierName = rawPayload['cashier_name'];
+  final cashierId = rawPayload['cashier_id'];
+  final closedById = rawPayload['closed_by_cashier_id'];
+  final closedByName = rawPayload['closed_by_cashier_name'];
   final note = rawPayload['note'];
   return {
     'outbox_id': outboxId,
@@ -349,7 +368,12 @@ Map<String, dynamic> normalizeShiftEvent({
     'outlet_id': outletId,
     'created_at': openedRaw,
     'payload': {
+      'cashier_id': cashierId is String ? cashierId : '',
       'cashier_name': cashierName is String ? cashierName : '',
+      'closed_by_cashier_id':
+          closedById is String ? closedById : '',
+      'closed_by_cashier_name':
+          closedByName is String ? closedByName : '',
       'opened_at': openedRaw,
       'opening_float': openingFloat,
       'closed_at': closedAt,
@@ -368,11 +392,138 @@ Map<String, dynamic> normalizeShiftEvent({
   };
 }
 
+/// Satu shift dari server (pull) — ringkasan untuk gate POS +
+/// kartu "Kas & Shift" (Batch C8.2 WS6). [cashierName] = PEMBUKA
+/// shift; [closedByCashierName] = PENUTUP (terisi bila closed).
+typedef ShiftSummary = ({
+  String clientUuid,
+  String outletId,
+  String cashierId,
+  String cashierName,
+  DateTime openedAt,
+  int openingFloat,
+  String status,
+  DateTime? closedAt,
+  String closedByCashierId,
+  String closedByCashierName,
+});
+
+/// Parse daftar shift mentah dari jawaban pull EF — entri rusak
+/// (tanpa client_uuid / opened_at tidak bisa diparse) dilewati,
+/// bukan gagal total. Bukan list / kosong -> list kosong.
+List<ShiftSummary> parseShiftSummaries(dynamic raw) {
+  if (raw is! List) return const <ShiftSummary>[];
+  final list = <ShiftSummary>[];
+  for (final entry in raw) {
+    if (entry is! Map) continue;
+    final clientUuid = entry['client_uuid'];
+    final openedRaw = entry['opened_at'];
+    if (clientUuid is! String || clientUuid.isEmpty) continue;
+    final openedAt =
+        openedRaw is String ? DateTime.tryParse(openedRaw) : null;
+    if (openedAt == null) continue;
+    final outletId = entry['outlet_id'];
+    final cashierId = entry['cashier_id'];
+    final cashierName = entry['cashier_name'];
+    final openingFloat = entry['opening_float'];
+    final status = entry['status'];
+    final closedRaw = entry['closed_at'];
+    final closedById = entry['closed_by_cashier_id'];
+    final closedByName = entry['closed_by_cashier_name'];
+    list.add((
+      clientUuid: clientUuid,
+      outletId: outletId is String ? outletId : '',
+      cashierId: cashierId is String ? cashierId : '',
+      cashierName: cashierName is String ? cashierName : '',
+      openedAt: openedAt,
+      openingFloat: openingFloat is num ? openingFloat.toInt() : 0,
+      status: status is String ? status : 'open',
+      closedAt: closedRaw is String ? DateTime.tryParse(closedRaw) : null,
+      closedByCashierId: closedById is String ? closedById : '',
+      closedByCashierName: closedByName is String ? closedByName : '',
+    ));
+  }
+  return list;
+}
+
+/// Pemenang dedupe shift (Batch C8.2 WS6): bila 2 device membuka
+/// shift offline di gerai yang sama, yang dipertahankan server =
+/// yang opened_at PALING AWAL; seri -> client_uuid paling kecil
+/// (deterministik, sama di semua device).
+ShiftSummary resolveShiftWinner(ShiftSummary a, ShiftSummary b) {
+  if (a.openedAt.isBefore(b.openedAt)) return a;
+  if (b.openedAt.isBefore(a.openedAt)) return b;
+  return a.clientUuid.compareTo(b.clientUuid) <= 0 ? a : b;
+}
+
+/// Shift server mana (bila ada) yang harus diadopsi app sesudah pull
+/// (Batch C8.2 WS6). Aturan:
+/// - tidak ada shift server -> null (tidak ada yang diadopsi).
+/// - tidak ada shift lokal terbuka -> adopsi pemenang server.
+/// - shift lokal == shift server (client_uuid sama) -> null.
+/// - event buka lokal masih PENDING (belum terkirim) -> null:
+///   server belum tahu shift lokal, jadi jangan buang dulu — dedupe
+///   diputuskan server saat event itu terkirim.
+/// - event buka lokal sudah terkirim + pemenang server lebih awal
+///   dari lokal -> adopsi pemenang server (lokal kalah dedupe).
+/// - lokal lebih awal -> null (server akan mengadopsi lokal saat
+///   event terkirim / sudah mengadopsi).
+ShiftSummary? pickAdoptedShift({
+  ShiftSummary? localOpen,
+  bool localPending = false,
+  required List<ShiftSummary> serverOpens,
+}) {
+  if (serverOpens.isEmpty) return null;
+  final serverWinner = serverOpens.reduce(resolveShiftWinner);
+  if (localOpen == null) return serverWinner;
+  if (localOpen.clientUuid == serverWinner.clientUuid) return null;
+  if (localPending) return null;
+  final winner = resolveShiftWinner(localOpen, serverWinner);
+  return winner == serverWinner ? serverWinner : null;
+}
+
+/// Hasil push shift yang kena dedupe server (Batch C8.2 WS6):
+/// event buka lokal ditolak karena shift lain lebih awal — app harus
+/// mengadopsi shift [existingClientUuid] itu dan membuang duplikat
+/// lokalnya (lihat CashShiftService.adoptServerShift).
+/// [localClientUuid] = id shift lokal yang ditolak — TIDAK dikirim
+/// server, diisi pemanggil (flushOutboxEntries) dari event yang
+/// dikirim; '' bila tidak diketahui (adopsi dilewati).
+typedef ShiftAdoption = ({
+  String outboxId,
+  String existingClientUuid,
+  DateTime existingOpenedAt,
+  String existingCashierName,
+  String existingCashierId,
+  int existingOpeningFloat,
+  String localClientUuid,
+});
+
+/// Parse jawaban aksi 'shift_expected' EF: expected kas server =
+/// cash_in (semua transaksi tunai gerai itu di jendela) dikurangi
+/// cash_out (pengeluaran tunai gerai itu di jendela). null = jawaban
+/// rusak / gagal — pemanggil memakai hitungan lokal berlabel
+/// "perkiraan (offline)".
+({int cashIn, int cashOut})? parseShiftExpectedResponse(dynamic data) {
+  if (data is! Map) return null;
+  if (data['ok'] != true) return null;
+  final cashIn = data['cash_in'];
+  final cashOut = data['cash_out'];
+  if (cashIn is! num || cashOut is! num) return null;
+  return (cashIn: cashIn.toInt(), cashOut: cashOut.toInt());
+}
+
 /// Hasil pull yang sudah divalidasi: daftar transaksi mentah (Map)
-/// + item dikelompokkan per client_uuid transaksi.
+/// + item dikelompokkan per client_uuid transaksi + level stok
+/// gerai yang diminta (Batch C8.2 WS5 — mentah, dipetakan pemanggil)
+/// + shift terbuka gerai itu (Batch C8.2 WS6).
+/// 'stock' / 'shifts' yang hilang (EF lama / jawaban lama) = list
+/// kosong, BUKAN error — pull lama tetap jalan.
 typedef PullData = ({
   List<Map<String, dynamic>> transactions,
   Map<String, List<Map<String, dynamic>>> itemsByClientUuid,
+  List<Map<String, dynamic>> stock,
+  List<ShiftSummary> shifts,
 });
 
 /// Validasi jawaban pull EF. Throw [FormatException] bila jawaban
@@ -414,7 +565,24 @@ PullData parsePullResponse(dynamic data) {
     if (key.isEmpty) continue;
     (byUuid[key] ??= <Map<String, dynamic>>[]).add(item);
   }
-  return (transactions: transactions, itemsByClientUuid: byUuid);
+  final stockRaw = data['stock'];
+  final stock = <Map<String, dynamic>>[];
+  if (stockRaw is List) {
+    for (final s in stockRaw) {
+      if (s is Map<String, dynamic>) {
+        stock.add(s);
+      } else if (s is Map) {
+        stock.add(Map<String, dynamic>.from(s));
+      }
+    }
+  }
+  final shifts = parseShiftSummaries(data['shifts']);
+  return (
+    transactions: transactions,
+    itemsByClientUuid: byUuid,
+    stock: stock,
+    shifts: shifts,
+  );
 }
 
 /// Terjemahkan jawaban push EF ke id outbox yang boleh ditandai
@@ -422,7 +590,15 @@ PullData parsePullResponse(dynamic data) {
 /// `alreadyFailed` = id yang sudah gagal di tahap normalisasi.
 /// Jawaban rusak / bukan Map / ok != true = SEMUA event dianggap
 /// gagal (jangan tandai terkirim tanpa konfirmasi server).
-typedef PushOutcome = ({List<String> sentIds, List<String> failedIds});
+/// [shiftAdoptions] = event shift yang kena dedupe server (Batch
+/// C8.2 WS6) — event-nya tetap terhitung terkirim (sudah diproses),
+/// tapi app harus mengadopsi shift server itu (lihat
+/// CashShiftService.adoptServerShift).
+typedef PushOutcome = ({
+  List<String> sentIds,
+  List<String> failedIds,
+  List<ShiftAdoption> shiftAdoptions,
+});
 
 PushOutcome applyPushResults(
   List<Map<String, dynamic>> events,
@@ -431,14 +607,23 @@ PushOutcome applyPushResults(
 ]) {
   final allIds = events.map((e) => e['outbox_id'] as String).toList();
   final failed = <String>[...alreadyFailed];
+  const noAdoptions = <ShiftAdoption>[];
   if (data is! Map || data['ok'] != true) {
     failed.addAll(allIds);
-    return (sentIds: const <String>[], failedIds: failed);
+    return (
+      sentIds: const <String>[],
+      failedIds: failed,
+      shiftAdoptions: noAdoptions,
+    );
   }
   final results = data['results'];
   if (results is! List) {
     failed.addAll(allIds);
-    return (sentIds: const <String>[], failedIds: failed);
+    return (
+      sentIds: const <String>[],
+      failedIds: failed,
+      shiftAdoptions: noAdoptions,
+    );
   }
   final okIds = <String>{};
   for (final r in results) {
@@ -449,5 +634,41 @@ PushOutcome applyPushResults(
   }
   final sent = allIds.where(okIds.contains).toList();
   failed.addAll(allIds.where((id) => !okIds.contains(id)));
-  return (sentIds: sent, failedIds: failed);
+  final adoptions = <ShiftAdoption>[];
+  final adoptionsRaw = data['shift_adoptions'];
+  if (adoptionsRaw is List) {
+    for (final a in adoptionsRaw) {
+      if (a is! Map) continue;
+      final outboxId = a['outbox_id'];
+      final existingUuid = a['existing_client_uuid'];
+      final existingOpened = a['existing_opened_at'];
+      if (outboxId is! String ||
+          existingUuid is! String ||
+          existingUuid.isEmpty) {
+        continue;
+      }
+      final openedAt = existingOpened is String
+          ? DateTime.tryParse(existingOpened)
+          : null;
+      if (openedAt == null) continue;
+      final existingName = a['existing_cashier_name'];
+      final existingId = a['existing_cashier_id'];
+      final existingFloat = a['existing_opening_float'];
+      adoptions.add((
+        outboxId: outboxId,
+        existingClientUuid: existingUuid,
+        existingOpenedAt: openedAt,
+        existingCashierName: existingName is String ? existingName : '',
+        existingCashierId: existingId is String ? existingId : '',
+        existingOpeningFloat:
+            existingFloat is num ? existingFloat.toInt() : 0,
+        localClientUuid: '',
+      ));
+    }
+  }
+  return (
+    sentIds: sent,
+    failedIds: failed,
+    shiftAdoptions: adoptions,
+  );
 }

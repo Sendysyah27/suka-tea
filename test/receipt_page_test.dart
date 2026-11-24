@@ -11,7 +11,7 @@ void main() {
         home: DigitalReceiptPage(
           lines: const [
             ReceiptLine(
-              name: 'Red Velvet Milktea Reguler',
+              name: 'Red Velvet Milktea 22oz',
               modifierText: '(Kurang Manis, Sedikit Es, +Selasih)',
               qty: 1,
               unitPrice: 9000,

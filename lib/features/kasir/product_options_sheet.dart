@@ -15,20 +15,23 @@ class ProductSelection {
   final List<Modifier> modifiers;
 }
 
-/// Sheet pilihan saat kartu produk diketuk: varian Reguler/Jumbo
-/// (dengan harga masing-masing), gula, es, topping (multi-pilih,
-/// harga topping dari ToppingService — Boba +3K, Jelly +2K, Selasih
-/// +1K sebagai seed; Owner bisa ubah di Kelola Topping).
+/// Sheet pilihan saat kartu produk diketuk: ukuran 22oz (INFO saja —
+/// Batch C8.2 WS7: TIDAK ADA pilihan ukuran, SUKA TEA hanya jual
+/// cup 22oz), gula, es, topping (multi-pilih, harga topping dari
+/// ToppingService — Boba +3K, Jelly +2K, Selasih +1K sebagai seed;
+/// Owner bisa ubah di Kelola Topping).
 /// Topping AKTIF saja yang tampil; sebelum ToppingService init,
 /// dipakai seed (toppingOptions) supaya widget test tetap jalan.
-/// Harga live = harga varian + delta topping.
+/// Harga live = harga 22oz + delta topping.
 /// Mengembalikan ProductSelection atau null bila batal.
 ///
 /// [initial] (Batch C5, mode edit): pilihan baris keranjang yang
-/// sedang diedit — varian, gula, es, dan topping terisi dari baris
-/// itu. Topping dicocokkan BERDASARKAN NAMA ke topping aktif saat
-/// ini (hargaDelta ikut topping aktif, bukan yang tersimpan);
+/// sedang diedit — gula, es, dan topping terisi dari baris itu.
+/// Topping dicocokkan BERDASARKAN NAMA ke topping aktif saat ini
+/// (hargaDelta ikut topping aktif, bukan yang tersimpan);
 /// topping yang sudah tidak aktif lagi TIDAK ikut (dihapus Owner).
+/// Varian lama di [initial] (mis. Reguler/Jumbo dari order Pending
+/// lama) DIABAIKAN — selalu pakai varian 22oz produk saat ini.
 /// Tombol konfirmasi jadi "Simpan" (bukan "Tambah") di mode ini.
 Future<ProductSelection?> showProductOptionsSheet(
   BuildContext context,
@@ -45,7 +48,9 @@ Future<ProductSelection?> showProductOptionsSheet(
     return defaults.first;
   }
 
-  var variant = initial?.variant ?? product.variants.first;
+  // Batch C8.2 WS7: SATU varian — 22oz. Varian lama di initial
+  // (Reguler/Jumbo dari order Pending lama) diabaikan.
+  final variant = product.variants.first;
   var gula = pickKind('gula', gulaOptions);
   var es = pickKind('es', esOptions);
   final toppings = <Modifier>{};
@@ -103,22 +108,31 @@ Future<ProductSelection?> showProductOptionsSheet(
                 style: const TextStyle(color: SukaTeaColors.muted),
               ),
               const SizedBox(height: 16),
-              const Text(
-                'Ukuran',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
+              // Batch C8.2 WS7: ukuran 22oz = INFO, bukan pilihan.
+              Row(
                 children: [
-                  for (final v in product.variants)
-                    ChoiceChip(
-                      label: Text(
-                        '${v.name} • ${formatRupiah(v.price)}',
-                      ),
-                      selected: variant.id == v.id,
-                      onSelected: (_) => setSheetState(() => variant = v),
+                  const Text(
+                    'Ukuran',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
                     ),
+                    decoration: BoxDecoration(
+                      color: SukaTeaColors.tint,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '22oz • ${formatRupiah(variant.price)}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: SukaTeaColors.emeraldDark,
+                      ),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 16),

@@ -6,6 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'local/app_database.dart';
 import 'local/outbox_service.dart';
+import 'cash_shift_service.dart';
+import 'models.dart';
 import 'outlet_service.dart';
 import 'sale_history.dart';
 import 'supabase_client.dart';
@@ -19,10 +21,14 @@ typedef SyncTransport = Future<Map<String, dynamic>> Function(
 );
 
 /// Hasil satu flush: id outbox yang boleh ditandai terkirim + yang gagal.
+/// [shiftAdoptions] = event shift yang kena dedupe server (Batch
+/// C8.2 WS6) — event-nya tetap terkirim, tapi app harus mengadopsi
+/// shift server itu (localClientUuid terisi dari event yang dikirim).
 typedef FlushResult = ({
   List<String> sentIds,
   List<String> failedIds,
   List<String> skippedIds,
+  List<ShiftAdoption> shiftAdoptions,
 });
 
 /// Flush murni (tanpa Drift): ubah antrean pending jadi event, kirim
@@ -74,15 +80,36 @@ Future<FlushResult> flushOutboxEntries(
       sentIds: const <String>[],
       failedIds: failed,
       skippedIds: skipped,
+      shiftAdoptions: const <ShiftAdoption>[],
     );
   }
   try {
     final res = await transport({'action': 'push', 'events': events});
     final outcome = applyPushResults(events, res, failed);
+    // Adopsi dedupe butuh client_uuid lokal event shift yang ditolak
+    // (id shift lokal) — ambil dari event yang dikirim (server tidak
+    // mengirimnya kembali).
+    final byOutboxId = <String, Map<String, dynamic>>{
+      for (final e in events) e['outbox_id'] as String: e,
+    };
+    final adoptions = outcome.shiftAdoptions.map((a) {
+      final event = byOutboxId[a.outboxId];
+      final localUuid = event?['client_uuid'];
+      return (
+        outboxId: a.outboxId,
+        existingClientUuid: a.existingClientUuid,
+        existingOpenedAt: a.existingOpenedAt,
+        existingCashierName: a.existingCashierName,
+        existingCashierId: a.existingCashierId,
+        existingOpeningFloat: a.existingOpeningFloat,
+        localClientUuid: localUuid is String ? localUuid : '',
+      );
+    }).toList();
     return (
       sentIds: outcome.sentIds,
       failedIds: outcome.failedIds,
       skippedIds: skipped,
+      shiftAdoptions: adoptions,
     );
   } catch (e) {
     debugPrint('Sync push gagal (transport): $e');
@@ -93,6 +120,7 @@ Future<FlushResult> flushOutboxEntries(
         ...events.map((e) => e['outbox_id'] as String),
       ],
       skippedIds: skipped,
+      shiftAdoptions: const <ShiftAdoption>[],
     );
   }
 }
@@ -147,6 +175,10 @@ Map<String, dynamic> _normalizeEntry(
 ///   (results[].ok) — bukan sesudah request terkirim.
 /// - Tanpa Supabase terkonfigurasi, semua sync dilewati diam-diam
 ///   (mode offline) tapi hitungan pending tetap diperbarui untuk UI.
+/// - Batch C8.2 WS6: timer berkala juga menarik shift terbuka gerai
+///   ini ([refreshShifts]) supaya gate POS di device lain tahu shift
+///   sudah dibuka; push shift yang kalah dedupe server diadopsi
+///   (lihat CashShiftService.adoptServerShift).
 class SyncService extends ChangeNotifier {
   SyncService._({SyncTransport? transport, OutboxService? outbox})
       : _transport = transport ?? _defaultTransport,
@@ -211,12 +243,18 @@ class SyncService extends ChangeNotifier {
 
   /// Mulai sync: sekali jalan saat app start + retry berkala tiap
   /// 60 dtk. Aman dipanggil berkali-kali (timer hanya dibuat sekali).
+  /// Timer juga menarik shift terbuka gerai ini (Batch C8.2 WS6)
+  /// supaya gate POS tahu shift sudah dibuka di device lain.
   void start() {
     _timer ??= Timer.periodic(
       const Duration(seconds: 60),
-      (_) => unawaited(syncNow()),
+      (_) {
+        unawaited(syncNow());
+        unawaited(refreshShifts());
+      },
     );
     unawaited(syncNow());
+    unawaited(refreshShifts());
   }
 
   /// Hentikan timer berkala (dipakai test).
@@ -252,6 +290,17 @@ class SyncService extends ChangeNotifier {
       for (final id in result.skippedIds) {
         await _outbox.markSent(id);
       }
+      // Dedupe shift (Batch C8.2 WS6): event buka lokal ditolak
+      // server karena shift lain lebih awal — adopsi shift server
+      // itu, buang duplikat lokalnya. Gagal adopsi tidak menggagalkan
+      // sync (coba lagi di pull berikutnya).
+      for (final adoption in result.shiftAdoptions) {
+        try {
+          await CashShiftService.instance.adoptServerShift(adoption);
+        } catch (e) {
+          debugPrint('Adopsi shift server gagal: $e');
+        }
+      }
       for (final id in result.failedIds) {
         await _outbox.incrementAttempts(id);
       }
@@ -269,11 +318,18 @@ class SyncService extends ChangeNotifier {
     }
   }
 
-  /// Baca transaksi gerai dari Supabase (jalur Owner — live dari
-  /// mana aja). [from]/[to] inklusif tanggal (zona lokal); server
-  /// memotong hari dalam WIB. Throw bila Supabase belum
-  /// dikonfigurasi / jawaban server tidak valid.
-  Future<List<SaleRecord>> pullOutlet({
+  /// Baca transaksi + stok + shift terbuka gerai dari Supabase
+  /// (jalur Owner — live dari mana aja). [from]/[to] inklusif
+  /// tanggal (zona lokal) untuk transaksi; server memotong hari
+  /// dalam WIB. Stok = level gerai yang diminta (Batch C8.2 WS5);
+  /// shift = shift TERBUKA gerai itu (Batch C8.2 WS6, untuk gate
+  /// POS antar device). Throw bila Supabase belum dikonfigurasi /
+  /// jawaban server tidak valid.
+  Future<({
+    List<SaleRecord> sales,
+    List<StockItem> stock,
+    List<ShiftSummary> shifts,
+  })> pullOutlet({
     required String outletId,
     required DateTime from,
     required DateTime to,
@@ -288,7 +344,7 @@ class SyncService extends ChangeNotifier {
       'to': dateOnly(to),
     });
     final parsed = parsePullResponse(res);
-    return parsed.transactions
+    final sales = parsed.transactions
         .map(
           (t) => SaleRecord.fromServer(
             t,
@@ -297,5 +353,68 @@ class SyncService extends ChangeNotifier {
           ),
         )
         .toList();
+    final stock = parsed.stock
+        .map(
+          (s) => StockItem(
+            name: s['name'] as String? ?? '',
+            unit: s['unit'] as String? ?? 'pcs',
+            qty: (s['qty'] as num? ?? 0).toDouble(),
+            lowThreshold: (s['low_threshold'] as num? ?? 0).toDouble(),
+            costPerUnit: (s['cost_per_unit'] as num? ?? -1).toDouble(),
+            outletId: outletId,
+          ),
+        )
+        .toList();
+    return (sales: sales, stock: stock, shifts: parsed.shifts);
+  }
+
+  /// Tarik shift terbuka gerai ini dari server + adopsi bila perlu
+  /// (Batch C8.2 WS6 — visibilitas antar device). Dipanggil saat
+  /// login/app start + berkala tiap 60 dtk (lihat start()). No-op
+  /// bila offline / gagal (gate memakai data lokal terakhir).
+  /// Tidak pernah throw.
+  Future<void> refreshShifts({String? outletId}) async {
+    if (!isConfigured) return;
+    final outlet = outletId ?? OutletService.instance.currentOutletId;
+    try {
+      final now = DateTime.now();
+      final pulled = await pullOutlet(
+        outletId: outlet,
+        from: now.subtract(const Duration(days: 30)),
+        to: now,
+      );
+      await CashShiftService.instance.applyPulledShifts(
+        outletId: outlet,
+        serverOpens: pulled.shifts,
+      );
+    } catch (e) {
+      debugPrint('Refresh shift gagal: $e');
+    }
+  }
+
+  /// Expected kas dari SERVER (Batch C8.2 WS6): cash_in (semua
+  /// transaksi tunai gerai itu di [from, to)) dikurangi cash_out
+  /// (pengeluaran tunai gerai itu di jendela yang sama). Pemanggil
+  /// menambahkan opening_float shift itu sendiri. null = offline /
+  /// gagal — pemanggil memakai hitungan lokal berlabel
+  /// "perkiraan (offline)". Tidak pernah throw.
+  Future<({int cashIn, int cashOut})?> fetchShiftExpected({
+    required String outletId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    if (!isConfigured) return null;
+    try {
+      final res = await _transport({
+        'action': 'shift_expected',
+        'outlet_id': outletId,
+        'from': from.toIso8601String(),
+        'to': to.toIso8601String(),
+      });
+      return parseShiftExpectedResponse(res);
+    } catch (e) {
+      debugPrint('Expected server gagal: $e');
+      return null;
+    }
   }
 }

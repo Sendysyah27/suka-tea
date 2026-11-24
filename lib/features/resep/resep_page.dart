@@ -6,9 +6,10 @@ import '../../data/recipe_logic.dart';
 import '../../data/stock_service.dart';
 
 /// Editor resep — HANYA Owner, dibuka dari Kelola Menu → tombol Resep.
-/// Satu produk, dua seksi: Reguler (16oz) + Jumbo (22oz). Tiap baris:
-/// dropdown bahan + jumlah per cup + satuan + hapus. Satu bahan max 1x
-/// per varian (dropdown menyembunyikan bahan yang sudah dipakai).
+/// Satu produk, SATU seksi 22oz (Batch C8.2 WS7 — tidak ada lagi
+/// Reguler 16oz). Tiap baris: dropdown bahan + jumlah per cup +
+/// satuan + hapus. Satu bahan max 1x per varian (dropdown
+/// menyembunyikan bahan yang sudah dipakai).
 /// Perubahan lokal dulu (Drift), sinkron Supabase di M1.
 class ResepPage extends StatefulWidget {
   const ResepPage({super.key, required this.product});
@@ -20,8 +21,7 @@ class ResepPage extends StatefulWidget {
 }
 
 class _ResepPageState extends State<ResepPage> {
-  late List<RecipeLine> _linesReguler;
-  late List<RecipeLine> _linesJumbo;
+  late List<RecipeLine> _lines;
   bool _saving = false;
 
   @override
@@ -29,10 +29,8 @@ class _ResepPageState extends State<ResepPage> {
     super.initState();
     final service = StockService.instance;
     // Salinan yang bisa diedit — StockService baru ditulis saat Simpan.
-    _linesReguler =
-        service.recipesFor(widget.product.variants.first.id).toList();
-    _linesJumbo =
-        service.recipesFor(widget.product.variants.last.id).toList();
+    // Batch C8.2 WS7: SATU resep — varian 22oz produk ini.
+    _lines = service.recipesFor(widget.product.variants.first.id).toList();
   }
 
   /// Bahan yang boleh dipilih di dropdown baris ini: semua stok yang
@@ -78,8 +76,7 @@ class _ResepPageState extends State<ResepPage> {
   }
 
   Future<void> _save() async {
-    final all = [..._linesReguler, ..._linesJumbo];
-    if (all.any((l) => l.qty <= 0 || l.stockName.isEmpty)) {
+    if (_lines.any((l) => l.qty <= 0 || l.stockName.isEmpty)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Jumlah harus lebih dari 0 di semua baris.'),
@@ -90,11 +87,7 @@ class _ResepPageState extends State<ResepPage> {
     setState(() => _saving = true);
     await StockService.instance.setRecipe(
       widget.product.variants.first.id,
-      _linesReguler,
-    );
-    await StockService.instance.setRecipe(
-      widget.product.variants.last.id,
-      _linesJumbo,
+      _lines,
     );
     if (!mounted) return;
     setState(() => _saving = false);
@@ -217,13 +210,8 @@ class _ResepPageState extends State<ResepPage> {
             ),
           ),
           _variantSection(
-            title: 'Reguler (16oz)',
-            lines: _linesReguler,
-          ),
-          const SizedBox(height: 12),
-          _variantSection(
-            title: 'Jumbo (22oz)',
-            lines: _linesJumbo,
+            title: '22oz',
+            lines: _lines,
           ),
           const SizedBox(height: 16),
           FilledButton(

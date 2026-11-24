@@ -30,8 +30,8 @@ const _items = [
   SaleItem(
     productId: 'es-teh-jumbo',
     productName: 'Es Teh Jumbo',
-    variantId: 'es-teh-jumbo_r',
-    variantName: 'Reguler',
+    variantId: 'es-teh-jumbo_22oz',
+    variantName: '22oz',
     qty: 2,
     unitPrice: 3000,
   ),

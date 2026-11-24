@@ -1,28 +1,31 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../data/supabase_client.dart';
-import 'qris_crypto.dart';
 import 'qris_service.dart';
 
-/// Hasil mentah Edge Function `get-qris-payload` -> (ok, value).
+/// Hasil mentah Edge Function `get-qris-payload` ->
+/// (ok, value, legacy).
 /// [ok] = false bila bukan peta / ok != true / value bukan null atau
-/// ciphertext `enc:v1:` — fail closed: plaintext dari server TIDAK
-/// PERNAH diterima (EF menolak plaintext; RLS memblokir tulis langsung
-/// sejak migrasi 002, jadi baris plaintext seharusnya tidak ada).
-/// [value] = null bila belum diatur (`set:false`).
-({bool ok, String? value}) parseGetQrisResponse(dynamic data) {
-  if (data is! Map) return (ok: false, value: null);
-  if (data['ok'] != true) return (ok: false, value: null);
+/// String yang dikenal — fail closed.
+/// [value] = plaintext QRIS statis (diawali "000201") bila sudah
+/// diatur, null bila belum.
+/// [legacy] = true bila nilai tersimpan masih ciphertext lama
+/// `enc:v1:` (Batch C8) — app menganggapnya BELUM diatur; Owner
+/// wajib simpan ulang sekali (lihat [QrisSettingsService.needsReSave]).
+({bool ok, String? value, bool legacy}) parseGetQrisResponse(dynamic data) {
+  if (data is! Map) return (ok: false, value: null, legacy: false);
+  if (data['ok'] != true) return (ok: false, value: null, legacy: false);
   final value = data['value'];
-  if (value == null) return (ok: true, value: null);
-  if (value is! String || !QrisCrypto.isEncrypted(value)) {
-    return (ok: false, value: null);
+  if (value == null) return (ok: true, value: null, legacy: false);
+  if (value is! String) return (ok: false, value: null, legacy: false);
+  if (value.startsWith('enc:v1:')) {
+    return (ok: true, value: null, legacy: true);
   }
-  return (ok: true, value: value);
+  if (value.startsWith('000201')) {
+    return (ok: true, value: value, legacy: false);
+  }
+  return (ok: false, value: null, legacy: false);
 }
 
 /// Hasil mentah Edge Function `set-qris-payload` -> true bila ok.
@@ -34,57 +37,58 @@ bool parseSetQrisResponse(dynamic data) {
 
 /// Penyimpanan kode QRIS statis merchant (Owner saja).
 ///
-/// Nilai asli TIDAK PERNAH di-hardcode di repo: Owner menempelkannya di
-/// layar Pengaturan QRIS, lalu disimpan ke Supabase (`app_settings`,
-/// key `qris_static_payload`) bila outlet + Supabase sudah
-/// dikonfigurasi. Sebelum itu, nilai hanya hidup di memori aplikasi.
+/// Batch C8.2 — QRIS GLOBAL: SATU payload untuk SEMUA gerai + SEMUA
+/// device yang login. Nilai disimpan PLAINTEXT di Supabase
+/// (`app_settings`, key `qris_static_payload`, baris outlet global
+/// ...0001) dan dibaca apa adanya lewat Edge Function
+/// `get-qris-payload` — tanpa enkripsi per-perangkat (itu yang bikin
+/// payload POVA tidak bisa dipakai POCO, 24 Nov 2026).
 ///
-/// Batch C2 (RedMuse F2): nilai yang disimpan di Supabase TERENKRIPSI
-/// (AES-256-GCM, format `enc:v1:` + base64 nonce+ciphertext+tag).
-/// Kunci 32 byte dibuat sekali dan disimpan di perangkat (Android
-/// Keystore via flutter_secure_storage) — TIDAK PERNAH ikut ke
-/// Supabase, Drift, atau kode. Plaintext hanya hidup di memori saat
-/// generate QR (tidak terhindarkan — QR dinamis dibuat dari payload
-/// asli).
+/// Trade-off yang jujur (disetujui Sendy 24 Nov 13:54): siapa pun yang
+/// memegang anon key dari APK bisa membaca payload ini lewat EF.
+/// Praktis risikonya rendah — payload QRIS statis hanya bisa membuat
+/// QR yang membayar KE rekening merchant, tidak bisa mengalihkan uang.
+/// Tanpa Supabase Auth (M0) tidak ada cara lain supaya semua device
+/// bisa baca tapi orang luar tidak.
+///
+/// Nilai asli TIDAK PERNAH di-hardcode di repo: Owner menempelkannya di
+/// layar Pengaturan QRIS, lalu disimpan ke Supabase bila outlet +
+/// Supabase sudah dikonfigurasi. Sebelum itu, nilai hanya hidup di
+/// memori aplikasi.
 ///
 /// Batch C8: simpan/baca LEWAT Edge Function (`set-qris-payload` /
 /// `get-qris-payload`), BUKAN upsert/select langsung dari app.
 /// `app_settings` (migrasi 002) RLS-nya nyala dengan SATU policy
 /// "owner kelola pengaturan" (is_outlet_owner via auth.uid()) —
 /// sedangkan app TIDAK PERNAH login Supabase Auth, jadi baca/tulis
-/// langsung pakai anon key SELALU ditolak server. Terbukti 24 Nov 2026:
-/// app_settings cuma berisi owner_pin_hash + kasir_pin_hash, TIDAK ADA
-/// baris qris_static_payload — payload cuma hidup di memori + hilang
-/// tiap restart. EF memakai service_role (melewati RLS); bukti Owner
-/// adalah PIN Owner yang diverifikasi server-side di `set-qris-payload`
-/// (pola upload-product-photo). `get-qris-payload` tanpa cek PIN —
-/// kasir butuh ciphertext ini tiap generate QR, dan ciphertext tidak
-/// berguna tanpa kunci enkripsi perangkat.
+/// langsung pakai anon key SELALU ditolak server. EF memakai
+/// service_role (melewati RLS); bukti Owner adalah PIN Owner yang
+/// diverifikasi server-side di `set-qris-payload` (pola
+/// upload-product-photo). `get-qris-payload` tanpa cek PIN — kasir
+/// butuh payload ini tiap generate QR.
 class QrisSettingsService {
   QrisSettingsService._();
 
   static final QrisSettingsService instance = QrisSettingsService._();
 
-  /// Kunci kunci-enkripsi di secure storage perangkat.
-  static const _keyStorageKey = 'qris_payload_key';
-
-  final _secureStorage = const FlutterSecureStorage();
-
   /// Diisi app saat outlet aktif dipilih (sesudah login — gerai aktif
   /// baru diketahui di halaman Login, bukan di main()). Null = belum
-  /// ada outlet. Mengganti outlet me-reset status load supaya payload
-  /// gerai baru dibaca (bukan payload gerai lama yang tertinggal).
+  /// ada outlet. Payload itu GLOBAL (satu untuk semua gerai), jadi
+  /// ganti outlet tidak me-reset status load.
   String? _currentOutletId;
   String? get currentOutletId => _currentOutletId;
   set currentOutletId(String? value) {
-    if (value != _currentOutletId) {
-      _currentOutletId = value;
-      _loaded = false;
-    }
+    _currentOutletId = value;
   }
 
   String? _staticPayload;
   bool _loaded = false;
+
+  /// true = server masih menyimpan ciphertext lama `enc:v1:` (Batch
+  /// C8) — payload dianggap BELUM diatur; Owner wajib simpan ulang
+  /// sekali. Halaman Pengaturan menampilkan status ini.
+  bool _needsReSave = false;
+  bool get needsReSave => _needsReSave;
 
   String? get staticPayload => _staticPayload;
 
@@ -94,58 +98,10 @@ class QrisSettingsService {
   String? get merchantName =>
       _staticPayload == null ? null : QrisService.merchantName(_staticPayload!);
 
-  /// Baca kunci dari secure storage (null bila belum ada / rusak).
-  /// TIDAK membuat kunci baru — dipakai saat memuat (load tidak boleh
-  /// membuat kunci hanya karena membaca).
-  Future<Uint8List?> _readKey() async {
-    try {
-      final stored = await _secureStorage.read(key: _keyStorageKey);
-      if (stored == null) return null;
-      final bytes = base64Decode(stored);
-      return bytes.length == QrisCrypto.keyLength ? bytes : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Baca kunci, atau buat + simpan bila belum ada. Null bila secure
-  /// storage tidak bisa dipakai di perangkat ini.
-  Future<Uint8List?> _getOrCreateKey() async {
-    final existing = await _readKey();
-    if (existing != null) return existing;
-    try {
-      final key = QrisCrypto.generateKey();
-      await _secureStorage.write(
-        key: _keyStorageKey,
-        value: base64Encode(key),
-      );
-      return key;
-    } catch (e) {
-      debugPrint('Kunci QRIS tidak bisa dibuat/disimpan: $e');
-      return null;
-    }
-  }
-
-  /// Enkripsi payload untuk disimpan. Null bila kunci tidak tersedia.
-  Future<String?> _encryptPayload(String plaintext) async {
-    final key = await _getOrCreateKey();
-    if (key == null) return null;
-    try {
-      return QrisCrypto.encrypt(plaintext, key);
-    } catch (e) {
-      debugPrint('Enkripsi payload QRIS gagal: $e');
-      return null;
-    }
-  }
-
   /// Muat payload dari Supabase lewat Edge Function `get-qris-payload`
-  /// (service_role). Nilai terenkripsi dibuka dengan kunci perangkat;
-  /// bila kunci hilang/rusak, payload dianggap belum diatur.
-  /// Plaintext dari server DITOLAK (fail closed) — EF tidak pernah
-  /// menulis plaintext, dan tulis langsung sudah diblokir RLS sejak
-  /// migrasi 002, jadi baris plaintext seharusnya tidak ada.
-  /// Migration-on-read DIHAPUS (Batch C8): load() tidak punya PIN
-  /// Owner, jadi tidak bisa lagi menulis balik ke Supabase.
+  /// (service_role). Nilai dipakai langsung (plaintext global).
+  /// Ciphertext lama `enc:v1:` TIDAK dibuka — ditandai [needsReSave]
+  /// supaya Owner simpan ulang.
   Future<void> load() async {
     if (_loaded) return;
     // _loaded HANYA diset sesudah percobaan baca yang sesungguhnya —
@@ -167,27 +123,22 @@ class QrisSettingsService {
         );
         return;
       }
-      final value = parsed.value;
-      if (value == null) return;
-      if (QrisCrypto.isEncrypted(value)) {
-        final key = await _readKey();
-        final plain = key == null ? null : QrisCrypto.decrypt(value, key);
-        if (plain != null && QrisService.isValidStaticPayload(plain)) {
-          _staticPayload = plain;
-        } else {
-          debugPrint(
-            'Payload QRIS terenkripsi tidak bisa dibuka — kunci hilang '
-            'atau data rusak. Minta Owner simpan ulang QRIS merchant.',
-          );
-        }
+      if (parsed.legacy) {
+        _needsReSave = true;
+        debugPrint(
+          'Payload QRIS masih format lama (enc:v1:) — minta Owner '
+          'simpan ulang QRIS merchant.',
+        );
         return;
       }
-      // Bukan `enc:v1:` — parseGetQrisResponse sudah menolaknya, jadi
-      // jalur ini tidak terjangkau; dipertahankan sebagai jaring
-      // pengaman bila parse berubah di masa depan.
-      debugPrint(
-        'Payload QRIS dari server bukan format enc:v1: — diabaikan.',
-      );
+      final value = parsed.value;
+      if (value == null) return;
+      if (QrisService.isValidStaticPayload(value)) {
+        _staticPayload = value;
+        _needsReSave = false;
+      } else {
+        debugPrint('Payload QRIS dari server tidak valid — diabaikan.');
+      }
     } on FunctionException catch (e) {
       // Edge Function mengembalikan 4xx/5xx dengan body JSON {ok, error}:
       // details membawa body itu. NAMA KELAS: `FunctionException`
@@ -202,15 +153,16 @@ class QrisSettingsService {
   }
 
   /// Simpan payload statis (sudah divalidasi pemanggil) lewat Edge
-  /// Function `set-qris-payload`. [ownerPin] = PIN Owner yang sudah
-  /// diverifikasi halaman lewat PinEntryDialog — diteruskan sekali ke
-  /// server, TIDAK PERNAH disimpan di sini.
-  /// [ok] = false bila payload tidak valid ATAU enkripsi tidak
-  /// tersedia di perangkat ini (fail closed — jangan simpan plaintext
-  /// baru). [synced] = true bila nilai sudah sampai ke Supabase;
-  /// false = nilai hanya di memori sesi ini (Supabase belum aktif,
-  /// PIN ditolak server, atau EF belum di-deploy) — hilang saat
-  /// restart, jadi halaman wajib membedakan pesannya, jangan bilang
+  /// Function `set-qris-payload` — PLAINTEXT tervalidasi, disimpan
+  /// sebagai SATU baris global (semua gerai + semua device).
+  /// [ownerPin] = PIN Owner yang sudah diverifikasi halaman lewat
+  /// PinEntryDialog — diteruskan sekali ke server, TIDAK PERNAH
+  /// disimpan di sini.
+  /// [ok] = false bila payload tidak valid (fail closed).
+  /// [synced] = true bila nilai sudah sampai ke Supabase; false =
+  /// nilai hanya di memori sesi ini (Supabase belum aktif, PIN
+  /// ditolak server, atau EF belum di-deploy) — hilang saat restart,
+  /// jadi halaman wajib membedakan pesannya, jangan bilang
   /// "tersimpan" tanpa syarat.
   Future<({bool ok, bool synced})> save(
     String payload, {
@@ -219,9 +171,8 @@ class QrisSettingsService {
     if (!QrisService.isValidStaticPayload(payload)) {
       return (ok: false, synced: false);
     }
-    final encrypted = await _encryptPayload(payload);
-    if (encrypted == null) return (ok: false, synced: false);
     _staticPayload = payload;
+    _needsReSave = false;
     if (!SupabaseService.instance.isConfigured || currentOutletId == null) {
       return (ok: true, synced: false);
     }
@@ -231,7 +182,7 @@ class QrisSettingsService {
         body: {
           'outlet_id': currentOutletId,
           'pin': ownerPin,
-          'value': encrypted,
+          'value': payload,
         },
       );
       final synced = parseSetQrisResponse(res.data);
@@ -263,6 +214,7 @@ class QrisSettingsService {
   /// ada) akan dimuat lagi saat load() berikutnya.
   Future<bool> clear({required String ownerPin}) async {
     _staticPayload = null;
+    _needsReSave = false;
     if (!SupabaseService.instance.isConfigured || currentOutletId == null) {
       return false;
     }

@@ -34,6 +34,36 @@ String formatShiftDayTime(DateTime d) {
 /// Hasil sheet tutup kas: uang hasil hitungan + catatan.
 typedef CloseShiftInput = ({int countedCash, String note});
 
+/// Alur buka shift lengkap (Batch C8.2 WS6 — dipakai gate POS
+/// KasirPage + tombol "Buka Shift" LaporanPage): sheet modal awal ->
+/// openNewShift (aturan C7: tolak bila sudah ada shift open di gerai
+/// itu) -> shift yang dibuka, atau null bila batal / ditolak.
+/// [cashierId]/[cashierName] = pembuka (Owner = '' / 'Owner').
+Future<CashShift?> openShiftFlow(
+  BuildContext context, {
+  required String cashierId,
+  required String cashierName,
+  String? outletId,
+}) async {
+  final openingFloat = await showOpenShiftSheet(context);
+  if (openingFloat == null) return null;
+  if (!context.mounted) return null;
+  final shift = await CashShiftService.instance.openNewShift(
+    openingFloat: openingFloat,
+    outletId: outletId,
+    cashierId: cashierId,
+    cashierName: cashierName,
+  );
+  if (shift == null && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Shift sudah dibuka — tutup dulu shift yang ada.'),
+      ),
+    );
+  }
+  return shift;
+}
+
 /// Sheet "Buka Shift": input modal awal laci (default Rp0).
 /// Mengembalikan modal awal (int) atau null bila batal.
 /// null dari pemanggil TIDAK sama dengan 0 — batal berarti shift
@@ -149,6 +179,12 @@ class _OpenShiftSheetContentState extends State<_OpenShiftSheetContent> {
 /// ada selisih — teks menjelaskan lebih/kurang).
 /// Mengembalikan [CloseShiftInput] atau null bila batal.
 ///
+/// [expectedLabel] (Batch C8.2 WS6): keterangan angka expected —
+/// null = angka server (semua kasir + semua device); 'perkiraan
+/// (offline)' = hitungan lokal HP ini saja (hanya penjualan device
+/// ini yang terlihat). Label ini WAJIB tampil bila expected dari
+/// hitungan lokal.
+///
 /// Tombol konfirmasi TIDAK pop langsung: pop jalan lewat
 /// [popSheetSafely] — unfocus TextField + tunggu satu frame dulu.
 /// Pop langsung saat TextField masih fokus = layar merah debug
@@ -159,6 +195,7 @@ Future<CloseShiftInput?> showCloseShiftSheet(
   required int expected,
   required int cashIn,
   required int cashExpenses,
+  String? expectedLabel,
 }) async {
   return showModalBottomSheet<CloseShiftInput>(
     context: context,
@@ -168,6 +205,7 @@ Future<CloseShiftInput?> showCloseShiftSheet(
       expected: expected,
       cashIn: cashIn,
       cashExpenses: cashExpenses,
+      expectedLabel: expectedLabel,
     ),
   );
 }
@@ -178,12 +216,14 @@ class _CloseShiftSheetContent extends StatefulWidget {
     required this.expected,
     required this.cashIn,
     required this.cashExpenses,
+    this.expectedLabel,
   });
 
   final CashShift shift;
   final int expected;
   final int cashIn;
   final int cashExpenses;
+  final String? expectedLabel;
 
   @override
   State<_CloseShiftSheetContent> createState() =>
@@ -256,6 +296,16 @@ class _CloseShiftSheetContentState extends State<_CloseShiftSheetContent> {
           _previewRow('Pengeluaran tunai', -widget.cashExpenses),
           const Divider(height: 24),
           _previewRow('Expected di laci', widget.expected, bold: true),
+          if (widget.expectedLabel != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              widget.expectedLabel!,
+              style: const TextStyle(
+                color: SukaTeaColors.muted,
+                fontSize: 12,
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,

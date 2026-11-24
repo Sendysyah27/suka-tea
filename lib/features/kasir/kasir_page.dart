@@ -13,6 +13,7 @@ import '../../core/utils/split_payment.dart';
 import '../../core/widgets/product_photo.dart';
 import '../../core/widgets/screen_title.dart';
 import '../../core/widgets/tap_feedback.dart';
+import '../../data/cash_shift_service.dart';
 import '../../data/held_order_service.dart';
 import '../../data/local/outbox_service.dart';
 import '../../data/menu_service.dart';
@@ -25,6 +26,7 @@ import '../../data/stock_service.dart';
 import '../../data/sync_payload.dart';
 import '../../data/sync_service.dart';
 import '../login/cashier_session.dart';
+import '../laporan/shift_sheets.dart';
 import '../qris/qris_pay_page.dart';
 import 'cash_sheet.dart';
 import 'discount_sheet.dart';
@@ -108,13 +110,14 @@ class _KasirPageState extends State<KasirPage> {
     });
   }
 
-  /// Tap "+": tambah cepat varian Reguler, gula Normal, es Normal,
+  /// Tap "+": tambah cepat varian 22oz, gula Normal, es Normal,
   /// tanpa topping (perilaku default mockup).
   void _quickAdd(Product product) {
     _add(product, product.variants.first, [gulaOptions.first, esOptions.first]);
   }
 
-  /// Tap kartu: sheet pilihan varian + gula + es + topping.
+  /// Tap kartu: sheet pilihan gula + es + topping (ukuran 22oz
+  /// sudah tetap — bukan pilihan, Batch C8.2 WS7).
   Future<void> _openOptions(Product product) async {
     if (!product.isActive) return;
     final selection = await showProductOptionsSheet(context, product);
@@ -621,6 +624,17 @@ class _KasirPageState extends State<KasirPage> {
     // modifiers) supaya server tidak perlu menebak-nebak.
     final clientUuid = newClientUuid();
     final outletId = OutletService.instance.currentOutletId;
+    // Batch C8.2 WS4: kasir pencatat dari sesi aktif (identitas dari
+    // server) — Owner = '' / 'Owner', kasir = id/nama sesi, tanpa
+    // sesi = '' / 'Kasir'. Dihitung SEKALI di sini, dipakai outbox +
+    // riwayat + struk supaya ketiganya selalu sama.
+    final session = CashierSessionService.instance;
+    final sessionName = session.cashierName?.trim() ?? '';
+    final cashierId =
+        widget.role == AppRole.owner ? '' : (session.cashierId ?? '');
+    final cashierName = widget.role == AppRole.owner
+        ? 'Owner'
+        : (sessionName.isNotEmpty ? sessionName : 'Kasir');
     await OutboxService.instance.enqueueSale({
       'client_uuid': clientUuid,
       'outlet_id': outletId,
@@ -631,6 +645,8 @@ class _KasirPageState extends State<KasirPage> {
       'change': paid - total,
       'qris_amount': qrisAmount,
       'cash_amount': cashAmount,
+      'cashier_id': cashierId,
+      'cashier_name': cashierName,
       'is_void': false,
       'created_at': DateTime.now().toIso8601String(),
       'items': items
@@ -657,6 +673,8 @@ class _KasirPageState extends State<KasirPage> {
       discount: discount,
       qrisAmount: qrisAmount,
       cashAmount: cashAmount,
+      cashierId: cashierId,
+      cashierName: cashierName,
     );
     // Batch C6: sync fire-and-forget — penjualan TIDAK menunggu
     // server; gagal = tetap pending di outbox, coba lagi nanti.
@@ -671,10 +689,6 @@ class _KasirPageState extends State<KasirPage> {
     // auto-lock supaya kasir tidak dikunci tepat sesudah bayar.
     CashierSessionService.instance.touch();
     final lines = items.map(ReceiptLine.fromCartItem).toList();
-    // Nama kasir dari sesi (Batch C5) tampil di struk; Owner tetap
-    // 'Owner', tanpa sesi = 'Kasir'.
-    final sessionName =
-        CashierSessionService.instance.cashierName?.trim() ?? '';
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => DigitalReceiptPage(
@@ -686,9 +700,7 @@ class _KasirPageState extends State<KasirPage> {
           discountPercent: discountPercent,
           qrisAmount: qrisAmount,
           cashAmount: cashAmount,
-          cashier: widget.role == AppRole.owner
-              ? 'Owner'
-              : (sessionName.isNotEmpty ? sessionName : 'Kasir'),
+          cashier: cashierName,
         ),
       ),
     );
@@ -708,9 +720,25 @@ class _KasirPageState extends State<KasirPage> {
   @override
   Widget build(BuildContext context) {
     // MenuService = sumber menu; rebuild bila Kelola Menu mengubahnya.
+    // + CashShiftService (Batch C8.2 WS6): gate POS ikut berubah saat
+    // shift dibuka/ditutup (di device ini atau dari pull server).
     return ListenableBuilder(
-      listenable: MenuService.instance,
+      listenable: Listenable.merge([
+        MenuService.instance,
+        CashShiftService.instance,
+      ]),
       builder: (context, _) {
+        // GATE POS (Batch C8.2 WS6): kasir TANPA shift terbuka di gerai
+        // ini TIDAK BISA pakai POS — tampil layar "Buka Shift" sebagai
+        // ganti tab Kasir sampai ada shift terbuka untuk gerai itu.
+        // Owner tidak kena gate. Shift yang dibuka kasir mana pun
+        // berlaku untuk semua kasir gerai itu (SATU shift per gerai,
+        // laci satu) — termasuk yang dibuka di device lain (ditarik
+        // berkala via refreshShifts + tombol "Periksa lagi").
+        if (widget.role == AppRole.kasir &&
+            CashShiftService.instance.openShift == null) {
+          return const _ShiftGateScreen();
+        }
         return LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
@@ -935,8 +963,10 @@ class _MenuSection extends StatelessWidget {
   /// horizontal).
   final bool showCategoryChips;
 
-  /// Rentang harga kartu (FigCraft frame 01): "Rp8.000 – Rp10.000".
-  /// Produk 1 varian / harga sama = harga tunggal.
+  /// Harga kartu (Batch C8.2 WS7: harga TUNGGAL 22oz — "Rp8.000";
+  /// rentang lama "Rp8.000 – Rp10.000" sudah tidak ada karena tiap
+  /// produk hanya punya 1 varian). Cabang rentang dipertahankan
+  /// untuk data lama yang masih punya 2 varian di memori.
   static String _priceRange(Product p) {
     final first = p.variants.first.price;
     final last = p.variants.last.price;
@@ -2019,6 +2049,121 @@ class _BottomBar extends StatelessWidget {
                     ],
                   ],
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Layar "Buka Shift" — pengganti tab Kasir bila kasir belum punya
+/// shift terbuka di gerai ini (Batch C8.2 WS6 — GATE POS).
+/// Kasir tidak bisa jualan sebelum laci dibuka; Owner tidak pernah
+/// melihat layar ini. Shift yang dibuka kasir mana pun berlaku untuk
+/// semua kasir gerai itu (SATU shift per gerai, laci satu).
+/// "Periksa lagi" menarik shift dari server — shift yang dibuka di
+/// device lain muncul di sini tanpa buka shift kedua.
+class _ShiftGateScreen extends StatefulWidget {
+  const _ShiftGateScreen();
+
+  @override
+  State<_ShiftGateScreen> createState() => _ShiftGateScreenState();
+}
+
+class _ShiftGateScreenState extends State<_ShiftGateScreen> {
+  bool _checking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Tarik sekali saat layar muncul — shift mungkin sudah dibuka
+    // kasir lain di device lain.
+    unawaited(SyncService.instance.refreshShifts());
+  }
+
+  Future<void> _refresh() async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    await SyncService.instance.refreshShifts();
+    if (mounted) setState(() => _checking = false);
+  }
+
+  Future<void> _openShift() async {
+    final session = CashierSessionService.instance;
+    final name = session.cashierName?.trim() ?? '';
+    await openShiftFlow(
+      context,
+      cashierId: session.cashierId ?? '',
+      cashierName: name.isNotEmpty ? name : 'Kasir',
+    );
+    // Shift berhasil dibuka -> CashShiftService notify -> gate hilang
+    // sendiri (ListenableBuilder di build KasirPage).
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final outletName = OutletService.instance.currentOutlet.name;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Icon(
+              Icons.lock_clock,
+              size: 64,
+              color: SukaTeaColors.emerald,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Shift Belum Dibuka',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 20),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Buka shift dulu sebelum jualan di $outletName — '
+              'laci kas belum dibuka di gerai ini.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: SukaTeaColors.muted),
+            ),
+            const SizedBox(height: 24),
+            TapFeedback(
+              child: FilledButton(
+                onPressed: _openShift,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(0, 56),
+                ),
+                child: const Text(
+                  'Buka Shift',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TapFeedback(
+              child: OutlinedButton(
+                onPressed: _checking ? null : _refresh,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 56),
+                ),
+                child: Text(
+                  _checking ? 'Memeriksa…' : 'Periksa lagi',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Kasir lain sudah buka shift di device lain? '
+              'Tekan "Periksa lagi" — shift itu berlaku juga di sini.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: SukaTeaColors.muted,
+                fontSize: 12,
               ),
             ),
           ],

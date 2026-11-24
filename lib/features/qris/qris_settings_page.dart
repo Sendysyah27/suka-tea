@@ -93,8 +93,7 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
     if (!mounted) return;
     if (!result.ok) {
       setState(() {
-        _error = 'Gagal menyimpan — enkripsi tidak tersedia di perangkat ini. '
-            'Coba lagi.';
+        _error = 'Gagal menyimpan — payload tidak valid. Coba lagi.';
       });
       return;
     }
@@ -133,6 +132,7 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
     }
 
     final configured = QrisSettingsService.instance.isConfigured;
+    final needsReSave = QrisSettingsService.instance.needsReSave;
     final merchant = _savedMerchant;
     final previewError = _controller.text.isEmpty
         ? null
@@ -146,14 +146,20 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
           Card(
             child: ListTile(
               title: Text(
-                configured
-                    ? 'QRIS merchant terpasang'
-                    : 'QRIS merchant belum diatur',
+                needsReSave
+                    ? 'QRIS perlu disimpan ulang oleh Owner (format lama)'
+                    : configured
+                        ? 'QRIS merchant terpasang'
+                        : 'QRIS merchant belum diatur',
               ),
               subtitle: Text(
-                merchant != null
-                    ? 'Merchant: $merchant'
-                    : 'Tempel kode QRIS statis dari merchant di bawah.',
+                needsReSave
+                    ? 'Payload lama masih format enkripsi per-perangkat — '
+                        'simpan ulang sekali di bawah supaya berlaku di '
+                        'semua gerai + semua device.'
+                    : merchant != null
+                        ? 'Merchant: $merchant'
+                        : 'Tempel kode QRIS statis dari merchant di bawah.',
               ),
             ),
           ),
@@ -256,9 +262,9 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
           const Text(
             'Validasi sebelum simpan: Payload Format Indicator "01", '
             'Point of Initiation "11"/"12", mata uang "360" (IDR), dan CRC '
-            'tag 63 harus valid. Nilai disimpan TERENKRIPSI (AES-256-GCM) '
-            'di Supabase (app_settings, Owner-only) — kuncinya hanya ada '
-            'di HP ini, tidak di repo.',
+            'tag 63 harus valid. SATU QRIS untuk semua gerai + semua '
+            'device yang login — Owner simpan sekali, berlaku di '
+            'mana-mana (dibaca semua device lewat Edge Function).',
             style: TextStyle(color: Colors.black54),
           ),
         ],

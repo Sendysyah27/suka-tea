@@ -137,7 +137,7 @@ class RiwayatPage extends StatelessWidget {
                           method: sale.method,
                           total: sale.total,
                           paid: sale.paid,
-                          cashier: 'Kasir',
+                          cashier: sale.displayCashierName,
                           time: sale.createdAt,
                           discount: sale.discount,
                           isVoid: sale.isVoid,
@@ -230,6 +230,16 @@ class RiwayatPage extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: SukaTeaColors.muted,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        // Nama kasir pencatat (Batch C8.2 WS4) —
+                        // dari sesi/server, bukan hardcode 'Kasir'.
+                        Text(
+                          'Kasir: ${sale.displayCashierName}',
+                          style: const TextStyle(
+                            color: SukaTeaColors.muted,
+                            fontSize: 12,
                           ),
                         ),
                         const SizedBox(height: 8),

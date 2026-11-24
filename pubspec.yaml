@@ -12,8 +12,6 @@ dependencies:
     sdk: flutter
   drift: ^2.24.0
   drift_flutter: ^0.2.0
-  encrypt: ^5.0.3
-  flutter_secure_storage: ^10.3.4 # v11 butuh win32 ^6, bentrok dengan share_plus ^10 (win32 ^5) — v10 API sama, app belum punya data secure-storage lama jadi aman
   flutter_svg: ^2.0.10
   image: ^4.5.4
   image_picker: ^1.2.1 # terbaru 1.2.x (pub.dev, Nov 2026) — butuh Flutter 3.29+/Dart 3.7+, CI 3.47.8 OK; Android Photo Picker, minSdk 24 OK

@@ -4,7 +4,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/tap_feedback.dart';
 import '../../data/outlet_service.dart';
-import '../pin/kasir_pin_service.dart';
+import '../kasir/cashier_service.dart';
 import '../pin/pin_keypad.dart';
 import '../pin/pin_service.dart';
 import 'login_result.dart';
@@ -13,14 +13,15 @@ import 'login_result.dart';
 /// keypad COMPACT (tombol 72px — keypad besar lama ~110px terlalu
 /// dominan di halaman login) + tombol "Masuk sebagai Kasir" 56px.
 ///
-/// Dipakai LoginPage sesudah kasir memilih gerai yang PIN-nya sudah
-/// diatur. Widget sendiri (bukan bagian dari LoginPage) supaya bisa
-/// di-test langsung tanpa melewati langkah pilih gerai.
+/// Dipakai LoginPage sesudah kasir memilih gerai, dan layar kunci
+/// auto-lock 15 menit di _LoginGate.
 ///
-/// Verifikasi PIN SAMA seperti _enterKasir lama: salah -> error +
-/// sisa percobaan; locked -> pesan 5 menit; unavailable / notSet ->
-/// masuk langsung (offline-first, fail-open). PIN Owner TIDAK lewat
-/// sini (tetap dialog di layar pilih gerai, fail closed).
+/// Batch C8.2 — login kasir BARU: PIN diverifikasi via Edge Function
+/// `verify-cashier-pin` (cocok ke SEMUA kasir aktif — PIN berlaku di
+/// semua gerai). Sukses = identitas kasir (id + nama) dari SERVER.
+/// FAIL CLOSED: PIN salah / terkunci / belum ada kasir terdaftar /
+/// server tidak bisa dihubungi = TIDAK masuk (tidak ada lagi
+/// fail-open seperti PIN per-gerai lama C4/C5).
 class KasirPinPage extends StatefulWidget {
   const KasirPinPage({
     super.key,
@@ -60,7 +61,7 @@ class _KasirPinPageState extends State<KasirPinPage> {
     setState(() => _entered = _entered.substring(0, _entered.length - 1));
   }
 
-  void _finish() {
+  void _finish({String? cashierId, String? cashierName}) {
     // Reset _busy DULU: spinner CircularProgressIndicator tidak
     // pernah berhenti sendiri — kalau _finish dipanggil dengan
     // _busy masih true, pumpAndSettle di test (dan frame di app
@@ -69,13 +70,18 @@ class _KasirPinPageState extends State<KasirPinPage> {
     if (_busy) setState(() => _busy = false);
     OutletService.instance.selectOutlet(widget.outlet.id);
     widget.onSuccess(
-      LoginResult(outletId: widget.outlet.id, role: AppRole.kasir),
+      LoginResult(
+        outletId: widget.outlet.id,
+        role: AppRole.kasir,
+        cashierId: cashierId,
+        cashierName: cashierName,
+      ),
     );
   }
 
-  /// Masuk sebagai Kasir: PIN Kasir gerai terpilih (sudah dipastikan
-  /// diatur oleh langkah 1 — isPinSet dicek lagi di sini supaya
-  /// balapan (PIN dihapus di tengah jalan) tetap fail-open).
+  /// Masuk sebagai Kasir: PIN diverifikasi ke server (identitas dari
+  /// server). Fail closed — tidak ada jalan masuk tanpa PIN yang
+  /// cocok dengan kasir terdaftar.
   Future<void> _enterKasir() async {
     if (_entered.length != PinService.pinLength || _busy) return;
     setState(() {
@@ -84,38 +90,42 @@ class _KasirPinPageState extends State<KasirPinPage> {
     });
     final outletId = widget.outlet.id;
     final pin = _entered;
-    final set = await KasirPinService.instance.isPinSet(outletId);
+    final result = await CashierService.instance.verifyPin(
+      pin,
+      outletId: outletId,
+    );
     if (!mounted) return;
-    // Belum diatur / tidak bisa dicek (EF belum di-deploy / offline):
-    // masuk langsung — perilaku app sebelum C4 (offline-first).
-    if (set != true) {
-      _finish();
-      return;
-    }
-    final result = await KasirPinService.instance.verify(outletId, pin);
-    if (!mounted) return;
-    switch (result) {
-      case PinVerifyResult.ok:
-        _finish();
-      case PinVerifyResult.notSet:
-        // PIN dihapus di tengah jalan (balapan) — masuk langsung.
-        _finish();
-      case PinVerifyResult.wrong:
+    switch (result.result) {
+      case CashierVerifyResult.ok:
+        _finish(
+          cashierId: result.cashierId,
+          cashierName: result.name,
+        );
+      case CashierVerifyResult.wrong:
         setState(() {
           _entered = '';
           _busy = false;
-          _error = 'PIN Kasir salah — sisa '
-              '${KasirPinService.instance.remainingAttempts} percobaan.';
+          _error = 'PIN salah — sisa '
+              '${CashierService.instance.remainingAttempts} percobaan.';
         });
-      case PinVerifyResult.locked:
+      case CashierVerifyResult.locked:
         setState(() {
           _entered = '';
           _busy = false;
           _error = 'Terlalu banyak percobaan salah. Coba lagi 5 menit lagi.';
         });
-      case PinVerifyResult.unavailable:
-        // Offline di tengah jalan — kasir tetap boleh masuk (offline-first).
-        _finish();
+      case CashierVerifyResult.notFound:
+        setState(() {
+          _entered = '';
+          _busy = false;
+          _error = 'Belum ada kasir terdaftar — minta Owner daftarkan dulu.';
+        });
+      case CashierVerifyResult.unavailable:
+        setState(() {
+          _entered = '';
+          _busy = false;
+          _error = 'Tidak bisa verifikasi — cek koneksi.';
+        });
     }
   }
 
@@ -156,9 +166,18 @@ class _KasirPinPageState extends State<KasirPinPage> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Masukkan PIN Kasir 6 digit untuk gerai ini.',
+            'Masukkan PIN Kasir 6 digit.',
             textAlign: TextAlign.center,
             style: TextStyle(color: SukaTeaColors.muted),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'PIN diberikan Owner — berlaku di semua gerai.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: SukaTeaColors.muted,
+              fontSize: 12,
+            ),
           ),
           const SizedBox(height: 20),
           const Text(

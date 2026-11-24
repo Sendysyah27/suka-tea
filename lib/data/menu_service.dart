@@ -65,18 +65,15 @@ class MenuService extends ChangeNotifier {
                 category: r.category,
                 photoUrl: r.photoUrl,
                 isActive: r.isActive,
+                // Batch C8.2 WS7: SATU varian — 22oz, harga poster.
+                // priceReguler di Drift = harga tunggal itu
+                // (priceJumbo lama diabaikan — tidak lagi dibaca).
                 variants: [
                   ProductVariant(
-                    id: '${r.id}_r',
-                    name: 'Reguler',
-                    sizeOz: 16,
-                    price: r.priceReguler,
-                  ),
-                  ProductVariant(
-                    id: '${r.id}_j',
-                    name: 'Jumbo',
+                    id: '${r.id}_22oz',
+                    name: '22oz',
                     sizeOz: 22,
-                    price: r.priceJumbo,
+                    price: r.priceReguler,
                   ),
                 ],
               ),
@@ -140,13 +137,17 @@ class MenuService extends ChangeNotifier {
 
   Future<void> _saveOne(Product p) async {
     try {
+      // Batch C8.2 WS7: harga tunggal = variants.first.price.
+      // priceJumbo ditulis SAMA (kolom Drift dipertahankan supaya
+      // skema tidak berubah — nilainya tidak lagi dibaca).
+      final price = p.variants.first.price;
       await _database.into(_database.localProducts).insert(
             LocalProductsCompanion.insert(
               id: p.id,
               name: p.name,
               category: p.category,
-              priceReguler: p.variants.first.price,
-              priceJumbo: p.variants.last.price,
+              priceReguler: price,
+              priceJumbo: price,
               photoUrl: Value(p.photoUrl),
               isActive: Value(p.isActive),
             ),

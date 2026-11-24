@@ -12,11 +12,18 @@ import 'package:suka_tea/features/login/login_result.dart';
 /// Login 2 langkah (redesain 23 Nov 2026 — perintah Sendy: keypad
 /// PIN Kasir lama terlalu besar di layar depan).
 ///
+/// Batch C8.2 — login kasir BARU: field "Nama Kasir" DIHAPUS dari
+/// langkah 1 (kasir dilarang isi nama sendiri); identitas kasir
+/// datang dari server (verify-cashier-pin). PIN per-gerai lama
+/// (fail-open) MATI — tanpa Supabase, PIN tidak bisa diverifikasi =
+/// TIDAK masuk (fail closed).
+///
 /// Catatan test env: Supabase TIDAK terkonfigurasi di test (init
-/// tidak dipanggil, isConfigured false), jadi KasirPinService.isPinSet
-/// mengembalikan null -> jalur fail-open teruji. Jalur PIN sudah
-/// diatur (isPinSet == true -> layar PIN) butuh Supabase + Edge
-/// Function — diverifikasi manual di HP, bukan di sini.
+/// tidak dipanggil, isConfigured false), jadi verifyPin
+/// mengembalikan `unavailable` -> pesan "Tidak bisa verifikasi —
+/// cek koneksi." dan got tetap null. Jalur PIN cocok / salah /
+/// belum terdaftar butuh Supabase + Edge Function — diverifikasi
+/// manual di HP, bukan di sini.
 /// OutletService.init() di test jatuh ke seed di memori (Drift gagal
 /// dibuka di test env, ditangkap try/catch di init()).
 void main() {
@@ -44,12 +51,9 @@ void main() {
     await OutletService.instance.init();
   });
 
-  // URUTAN TEST DI GRUP INI PENTING (Batch C5): CashierSessionService
-  // adalah singleton — sesudah satu test berhasil masuk, nama kasir
-  // tersimpan di memori dan test berikutnya ter-prefill. Jadi test
-  // "nama kosong" HARUS jalan sebelum test pertama yang sukses masuk.
   group('Langkah 1 — pilih gerai', () {
-    testWidgets('tampil 4 gerai + 2 tombol, TANPA keypad', (tester) async {
+    testWidgets('tampil 4 gerai + 2 tombol, TANPA keypad, TANPA nama kasir',
+        (tester) async {
       await tester.pumpWidget(
         MaterialApp(home: LoginPage(onSuccess: (_) {})),
       );
@@ -65,66 +69,45 @@ void main() {
       // tidak ada label PIN Kasir.
       expect(find.text('Hapus'), findsNothing);
       expect(find.text('PIN Kasir'), findsNothing);
+      // Batch C8.2: field "Nama Kasir" DIHAPUS — tidak ada TextField
+      // sama sekali di langkah 1.
+      expect(find.text('Nama Kasir'), findsNothing);
+      expect(find.byType(TextField), findsNothing);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('nama kasir kosong = error, tidak masuk', (tester) async {
-      LoginResult? got;
-      await tester.pumpWidget(
-        MaterialApp(home: LoginPage(onSuccess: (r) => got = r)),
-      );
-      await tester.pump();
-      await tester.ensureVisible(find.text('Masuk sebagai Kasir'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Masuk sebagai Kasir'));
-      await tester.pump();
-      expect(find.text('Isi nama kasir dulu.'), findsOneWidget);
-      expect(got, isNull);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets(
-        'tap Masuk sebagai Kasir tanpa Supabase = langsung masuk (fail-open)',
+    testWidgets('tap Masuk sebagai Kasir = pindah ke layar PIN, belum masuk',
         (tester) async {
       LoginResult? got;
       await tester.pumpWidget(
         MaterialApp(home: LoginPage(onSuccess: (r) => got = r)),
       );
       await tester.pump();
-      // Batch C5: nama kasir wajib diisi dulu.
-      await tester.enterText(find.byType(TextField), 'Budi');
-      await tester.pump();
-      // Tombol ada di bawah lipatan layar tes 800x600 (halaman
-      // login pakai SingleChildScrollView) — scroll dulu supaya
-      // tap kena (ketangkep CI v27.3: tap di Offset y=639 miss).
       await tester.ensureVisible(find.text('Masuk sebagai Kasir'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Masuk sebagai Kasir'));
-      await tester.pumpAndSettle();
-      expect(got, isNotNull);
-      expect(got!.role, AppRole.kasir);
-      expect(got!.outletId, defaultOutletId);
+      await tester.pump();
+      // Langkah 2: layar PIN tampil, belum ada hasil login.
+      expect(find.text('PIN Kasir'), findsOneWidget);
+      expect(got, isNull);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('pilih Gerai 3 lalu masuk = outlet Gerai 3', (tester) async {
-      LoginResult? got;
+    testWidgets('pilih Gerai 3 lalu masuk = layar PIN Gerai 3',
+        (tester) async {
       await tester.pumpWidget(
-        MaterialApp(home: LoginPage(onSuccess: (r) => got = r)),
+        MaterialApp(home: LoginPage(onSuccess: (_) {})),
       );
       await tester.pump();
       await tester.tap(find.text('Gerai 3'));
       await tester.pump();
-      // Batch C5: nama kasir wajib diisi dulu.
-      await tester.enterText(find.byType(TextField), 'Budi');
-      await tester.pump();
       await tester.ensureVisible(find.text('Masuk sebagai Kasir'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Masuk sebagai Kasir'));
-      await tester.pumpAndSettle();
-      expect(got, isNotNull);
-      expect(got!.outletId, '00000000-0000-0000-0000-000000000003');
-      expect(got!.role, AppRole.kasir);
+      await tester.pump();
+      expect(find.text('PIN Kasir'), findsOneWidget);
+      // Nama gerai tampil 2x: di header login + di halaman PIN.
+      expect(find.text('Gerai 3'), findsNWidgets(2));
       expect(tester.takeException(), isNull);
     });
   });
@@ -189,7 +172,7 @@ void main() {
     });
 
     testWidgets(
-        'ketik 6 digit lalu masuk = sukses (unavailable -> fail-open)',
+        'ketik 6 digit lalu masuk tanpa Supabase = gagal (fail closed), tidak masuk',
         (tester) async {
       LoginResult? got;
       await tester.pumpWidget(
@@ -216,9 +199,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Masuk sebagai Kasir'));
       await tester.pumpAndSettle();
-      expect(got, isNotNull);
-      expect(got!.role, AppRole.kasir);
-      expect(got!.outletId, '00000000-0000-0000-0000-000000000002');
+      // Batch C8.2: tidak ada fail-open — server tidak bisa
+      // dihubungi = pesan jelas, TIDAK masuk.
+      expect(find.text('Tidak bisa verifikasi — cek koneksi.'), findsOneWidget);
+      expect(got, isNull);
       expect(tester.takeException(), isNull);
     });
 

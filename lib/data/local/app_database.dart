@@ -35,11 +35,16 @@ class LocalProducts extends Table {
 }
 
 /// Stok bahan baku lokal (cermin seedStock + editan Owner).
-/// Satu baris per nama bahan — nama adalah kunci.
-/// [costPerUnit] = harga bahan per satuan (rupiah) — DITENTUKAN Owner
-/// di tab Stok (Batch C1b). -1 = belum diatur (HPP bahan itu Rp0);
-/// 0 = gratis (sengaja).
+/// Satu baris per (outlet, nama bahan) — Batch C8.2 WS5: stok
+/// DIPISAH per gerai (tiap gerai punya bahan baku sendiri; Gerai 1
+/// pakai teh tidak mengurangi Gerai 2). [outletId] = gerai pemilik
+/// baris ini. [costPerUnit] = harga bahan per satuan (rupiah) —
+/// DITENTUKAN Owner di tab Stok (Batch C1b). -1 = belum diatur
+/// (HPP bahan itu Rp0); 0 = gratis (sengaja).
 class StockLevels extends Table {
+  TextColumn get outletId => text().withDefault(
+        const Constant('00000000-0000-0000-0000-000000000001'),
+      )();
   TextColumn get name => text()();
   TextColumn get unit => text()();
   RealColumn get qty => real()();
@@ -47,7 +52,7 @@ class StockLevels extends Table {
   RealColumn get costPerUnit => real().withDefault(const Constant(-1))();
 
   @override
-  Set<Column> get primaryKey => {name};
+  Set<Column> get primaryKey => {outletId, name};
 }
 
 /// Resep lokal: tiap varian memakai sejumlah bahan per cup.
@@ -73,6 +78,9 @@ class ProductRecipes extends Table {
 /// split (Batch C2); transaksi non-split = 0. paid = qrisAmount +
 /// cashAmount (tunai yang DITERIMA — bisa lebih dari sisa tunai,
 /// selisihnya kembalian); total tetap subtotal - diskon.
+/// [cashierId]/[cashierName] = kasir pencatat (Batch C8.2 WS4 —
+/// identitas dari server; Owner = '' / 'Owner'; baris lama = '' /
+/// 'Kasir' bila kosong saat tampil).
 class SaleHistory extends Table {
   TextColumn get id => text()();
   DateTimeColumn get createdAt => dateTime()();
@@ -88,6 +96,8 @@ class SaleHistory extends Table {
       )();
   IntColumn get qrisAmount => integer().withDefault(const Constant(0))();
   IntColumn get cashAmount => integer().withDefault(const Constant(0))();
+  TextColumn get cashierId => text().withDefault(const Constant(''))();
+  TextColumn get cashierName => text().withDefault(const Constant(''))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -149,9 +159,12 @@ class Outlets extends Table {
 /// + nama kasir yang terakhir masuk. Buka app lagi = langsung masuk
 /// gerai itu tanpa login ulang. Sesi Owner TIDAK PERNAH disimpan.
 /// Keluar gerai = hapus baris ini.
+/// [cashierId] = UUID kasir dari server (Batch C8.2) — null untuk
+/// sesi lama (sebelum C8.2) yang hanya menyimpan nama.
 class CashierSessions extends Table {
   TextColumn get id => text()();
   TextColumn get outletId => text()();
+  TextColumn get cashierId => text().nullable()();
   TextColumn get cashierName => text()();
   DateTimeColumn get savedAt =>
       dateTime().withDefault(currentDateAndTime)();
@@ -187,13 +200,22 @@ class Expenses extends Table {
 /// Supabase (cash_shifts.client_uuid, migrasi 009; upsert
 /// last-write-wins: event buka lalu event tutup menimpa baris yang
 /// sama). MAKSIMAL 1 shift 'open' per outlet (dijaga
-/// CashShiftService). [difference] = counted − expected (boleh
+/// CashShiftService — Batch C8.2 WS6: laci HANYA SATU, 2 kasir
+/// berbagi 1 shift). [difference] = counted − expected (boleh
 /// negatif = kurang). [closedAt]/[countedCash]/[expectedCash]/
 /// [difference] null selama shift masih open.
+/// [cashierId]/[cashierName] = kasir PEMBUKA (Batch C8.2 WS4/WS6 —
+/// tampil di kartu "Kas & Shift"); [closedByCashierId]/
+/// [closedByCashierName] = kasir/Owner PENUTUP (audit — siapa yang
+/// menutup). Baris lama = '' (tampil 'Kasir' bila kosong).
 class CashShifts extends Table {
   TextColumn get id => text()();
   TextColumn get outletId => text()();
+  TextColumn get cashierId => text().nullable()();
   TextColumn get cashierName => text()();
+  TextColumn get closedByCashierId => text().nullable()();
+  TextColumn get closedByCashierName =>
+      text().withDefault(const Constant(''))();
   DateTimeColumn get openedAt => dateTime()();
   IntColumn get openingFloat => integer()();
   DateTimeColumn get closedAt => dateTime().nullable()();
@@ -224,7 +246,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -287,6 +309,44 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(expenses);
             await m.createTable(cashShifts);
           }
+          // v9 -> v10 (24 Nov 2026, Batch C8.2):
+          // - SaleHistory + cashierId/cashierName (WS4 — kasir
+          //   pencatat per penjualan).
+          // - CashierSessions + cashierId (WS3 — identitas kasir
+          //   dari server, nullable: sesi lama hanya punya nama).
+          // - CashShifts + cashierId (pembuka) + closedByCashierId/
+          //   closedByCashierName (penutup, audit WS6).
+          // - StockLevels REBUILD: PK {name} -> {outletId, name}
+          //   (WS5 — stok per gerai). Baris lama dipindah ke outlet
+          //   utama (...0001) — sebelum C8.2 semua stok memang
+          //   milik gerai itu (hardcode). Tabel lama TIDAK dihapus,
+          //   kecuali stock_levels_old (salinan sementara rebuild).
+          if (from < 10) {
+            await m.addColumn(saleHistory, saleHistory.cashierId);
+            await m.addColumn(saleHistory, saleHistory.cashierName);
+            await m.addColumn(cashierSessions, cashierSessions.cashierId);
+            await m.addColumn(cashShifts, cashShifts.cashierId);
+            await m.addColumn(
+              cashShifts,
+              cashShifts.closedByCashierId,
+            );
+            await m.addColumn(
+              cashShifts,
+              cashShifts.closedByCashierName,
+            );
+            await m.customStatement(
+              'ALTER TABLE stock_levels RENAME TO stock_levels_old',
+            );
+            await m.createTable(stockLevels);
+            await m.customStatement(
+              'INSERT INTO stock_levels '
+              '(outlet_id, name, unit, qty, low_threshold, cost_per_unit) '
+              "SELECT '00000000-0000-0000-0000-000000000001', "
+              'name, unit, qty, low_threshold, cost_per_unit '
+              'FROM stock_levels_old',
+            );
+            await m.customStatement('DROP TABLE stock_levels_old');
+          }
         },
       );
 
@@ -300,5 +360,14 @@ class AppDatabase extends _$AppDatabase {
   Future<void> markSent(String id) async {
     await (update(outboxEntries)..where((t) => t.id.equals(id)))
         .write(const OutboxEntriesCompanion(status: Value('sent')));
+  }
+
+  /// Hapus entri outbox yang dibuang — dipakai CashShiftService saat
+  /// mengadopsi shift server (duplikat lokal yang kalah dedupe:
+  /// event buka + tutup-nya tidak boleh terkirim lagi).
+  Future<void> deleteOutboxEntries(Iterable<String> ids) async {
+    final list = ids.toList();
+    if (list.isEmpty) return;
+    await (delete(outboxEntries)..where((t) => t.id.isIn(list))).go();
   }
 }

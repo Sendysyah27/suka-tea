@@ -1,10 +1,15 @@
 import 'models.dart';
 
 /// MENU AWAL — 20 produk poster SUKA TEA, 22 Nov 2026 (disetujui Sendy).
-/// Harga poster = Reguler. Jumbo = Reguler + Rp2.000 (pola seed lama:
-/// 3K→5K, 5K→7K, 6K→8K, 8K→10K). Foto default = crop poster di
-/// assets/products/ — Owner tetap bisa ubah nama, kategori, harga, dan
-/// foto tiap produk di Kelola Menu (lokal dulu, sinkron Supabase di M1).
+/// Batch C8.2 WS7 (24 Nov 2026): SUKA TEA HANYA jual cup 22oz —
+///
+/// TIDAK ADA 16oz, TIDAK ADA pilihan ukuran. Tiap produk punya SATU
+/// varian '22oz' dengan SATU harga = harga poster (yang selama ini
+/// disebut harga "Reguler" — JANGAN tambah Rp2.000). Nama produk
+/// persis poster ("Manggo" tetap "Manggo", jangan "diperbaiki").
+/// Foto default = crop poster di assets/products/ — Owner tetap bisa
+/// ubah nama, kategori, harga, dan foto tiap produk di Kelola Menu
+/// (lokal dulu, sinkron Supabase di M1).
 /// Seed ini dipakai supaya layar Kasir bisa dites sebelum proyek Supabase
 /// + data outlet dibuat, dan jadi isi awal saat outlet dibuat.
 const List<Modifier> gulaOptions = [
@@ -59,20 +64,15 @@ const List<String> bundledProductPhotos = [
 ];
 
 List<Product> seedMenu() {
-  Product p(String id, String name, String cat, int reg, String photo) =>
+  Product p(String id, String name, String cat, int price, String photo) =>
       Product(
         id: id,
         name: name,
         category: cat,
         photoUrl: photo,
+        // Batch C8.2 WS7: SATU varian — 22oz, harga poster.
         variants: [
-          ProductVariant(id: '${id}_r', name: 'Reguler', sizeOz: 16, price: reg),
-          ProductVariant(
-            id: '${id}_j',
-            name: 'Jumbo',
-            sizeOz: 22,
-            price: reg + 2000,
-          ),
+          ProductVariant(id: '${id}_22oz', name: '22oz', sizeOz: 22, price: price),
         ],
       );
 

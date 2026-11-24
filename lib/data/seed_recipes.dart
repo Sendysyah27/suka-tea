@@ -1,8 +1,13 @@
 import 'recipe_logic.dart';
 
-/// RESEP AWAL — 20 produk poster x 2 varian (Reguler 16oz / Jumbo 22oz),
+/// RESEP AWAL — 20 produk poster x 1 varian 22oz (Batch C8.2 WS7),
 /// 22 Nov 2026. Angka per cup, ditakar dari resep stand es teh biasa.
-/// Reguler pakai Cup 16oz, Jumbo pakai Cup 22oz — JANGAN tertukar.
+/// Batch C8.2 WS7: tiap produk kini 1 resep — pakai takaran Jumbo
+/// yang lama (cup 22oz pakai takaran Jumbo: Teh 0.015, Gula 0.035,
+/// Es batu 0.20, Susu bubuk 0.030, Bubuk perasa 0.020). Resep Reguler
+/// (16oz) DIHAPUS dari seed — baris resep `_r`/`_j` lama di DB
+/// install yang sudah ada SENGAJA DIBIARKAN (tidak dihapus) supaya
+/// void-restore penjualan lama tetap menemukan resepnya.
 /// Satuan ikut seedStock: kg untuk Teh/Gula/Es batu/Susu bubuk/
 /// Bubuk perasa, pcs untuk Cup/Sedotan/Yakult/Lemon.
 /// Owner bisa ubah tiap resep di Kelola Menu → Resep (lokal dulu,
@@ -39,7 +44,7 @@ Map<String, List<RecipeLine>> seedRecipes() {
         RecipeLine(stockName: 'Susu bubuk', qty: jumbo ? 0.020 : 0.015),
       ];
 
-  // Pasangan Reguler/Jumbo per produk: {'id': builder}.
+  // Builder resep per produk: {'id': builder}.
   final builders = <String, List<RecipeLine> Function({required bool jumbo})>{
     // MILKTEA (5)
     'manggo-milktea': milktea,
@@ -80,8 +85,9 @@ Map<String, List<RecipeLine>> seedRecipes() {
 
   final out = <String, List<RecipeLine>>{};
   for (final entry in builders.entries) {
-    out['${entry.key}_r'] = entry.value(jumbo: false);
-    out['${entry.key}_j'] = entry.value(jumbo: true);
+    // Batch C8.2 WS7: SATU resep per produk — takaran Jumbo lama
+    // (cup 22oz), kunci `{id}_22oz`.
+    out['${entry.key}_22oz'] = entry.value(jumbo: true);
   }
   return out;
 }

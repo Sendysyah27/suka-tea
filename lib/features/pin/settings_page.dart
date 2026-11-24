@@ -5,6 +5,7 @@ import '../../core/widgets/screen_title.dart';
 import '../../data/outlet_service.dart';
 import '../../data/supabase_client.dart';
 import '../gerai/gerai_list_page.dart';
+import '../kasir/kasir_management_page.dart';
 import 'pin_dialog.dart';
 import 'pin_service.dart';
 
@@ -169,6 +170,48 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                           Text(
                             '4 gerai — pantau & atur',
+                            style: TextStyle(color: SukaTeaColors.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: SukaTeaColors.muted),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Baris Kelola Kasir (Batch C8.2): Owner mendaftarkan kasir
+          // (nama + PIN 6 digit, berlaku di semua gerai) — kasir
+          // login HANYA dengan PIN, nama tidak diketik sendiri.
+          Card(
+            child: InkWell(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const KasirManagementPage(),
+                ),
+              ),
+              borderRadius: BorderRadius.circular(20),
+              child: const Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.people, color: SukaTeaColors.emerald),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Kelola Kasir',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 18,
+                            ),
+                          ),
+                          Text(
+                            'Daftar kasir + PIN akses (semua gerai)',
                             style: TextStyle(color: SukaTeaColors.muted),
                           ),
                         ],

@@ -9,6 +9,8 @@ import '../core/utils/roles.dart';
 import '../core/widgets/screen_title.dart';
 import '../core/widgets/tap_feedback.dart';
 import '../data/outlet_service.dart';
+import '../data/stock_service.dart';
+import '../data/sync_service.dart';
 import '../features/kasir/kasir_page.dart';
 import '../features/katalog/katalog_page.dart';
 import '../features/keuangan/keuangan_page.dart';
@@ -75,7 +77,17 @@ class _LoginGateState extends State<_LoginGate>
       OutletService.instance.selectOutlet(outletId);
       QrisSettingsService.instance.currentOutletId = outletId;
       unawaited(QrisSettingsService.instance.load());
-      _login = LoginResult(outletId: outletId, role: AppRole.kasir);
+      // Batch C8.2: pastikan stok gerai ini ada (seed bila pertama
+      // dipakai) + tarik shift terbuka gerai ini (bisa dibuka di
+      // device lain — gate POS harus tahu).
+      unawaited(StockService.instance.ensureOutlet(outletId));
+      unawaited(SyncService.instance.refreshShifts(outletId: outletId));
+      _login = LoginResult(
+        outletId: outletId,
+        role: AppRole.kasir,
+        cashierId: session.cashierId,
+        cashierName: session.cashierName,
+      );
       session.touch();
       _startIdleTimer();
     }
@@ -108,9 +120,9 @@ class _LoginGateState extends State<_LoginGate>
     _idleTimer = null;
   }
 
-  /// Satu-satunya jalur sukses login (LoginPage langkah 1 fail-open,
-  /// langkah 2 PIN, dan PIN Owner). Sesi kasir sudah disimpan oleh
-  /// LoginPage._handleSuccess sebelum onSuccess dipanggil.
+  /// Satu-satunya jalur sukses login (langkah 2 PIN kasir dan PIN
+  /// Owner). Sesi kasir sudah disimpan oleh LoginPage._handleSuccess
+  /// sebelum onSuccess dipanggil.
   void _applyLogin(LoginResult result) {
     // Gerai aktif baru diketahui di sini (bukan di main) —
     // QRIS merchant dibaca dari Supabase untuk gerai ini.
@@ -118,6 +130,10 @@ class _LoginGateState extends State<_LoginGate>
     // halaman QRIS membaca dari memori sesudah load selesai.
     QrisSettingsService.instance.currentOutletId = result.outletId;
     unawaited(QrisSettingsService.instance.load());
+    // Batch C8.2: pastikan stok gerai ini ada + tarik shift terbuka
+    // gerai ini (bisa dibuka di device lain — gate POS harus tahu).
+    unawaited(StockService.instance.ensureOutlet(result.outletId));
+    unawaited(SyncService.instance.refreshShifts(outletId: result.outletId));
     setState(() => _login = result);
     if (result.role == AppRole.kasir) {
       CashierSessionService.instance.touch();
@@ -155,10 +171,12 @@ class _LoginGateState extends State<_LoginGate>
 
   /// Kunci ke layar PIN Kasir gerai aktif. Shell tetap ter-mount di
   /// bawah route kunci, jadi keranjang + tab yang terbuka TIDAK
-  /// hilang. PIN benar = pop + jam idle direset. Tombol kembali =
-  /// keluar gerai (sesi dihapus, balik ke layar pilih gerai).
-  /// PIN Kasir belum diatur = masuk langsung (fail-open, jalur yang
-  /// sama seperti login awal).
+  /// hilang. PIN benar = pop + jam idle direset + sesi kasir
+  /// diperbarui ke identitas pembuka kunci (bisa kasir lain —
+  /// Batch C8.2, PIN diverifikasi ulang via Edge Function).
+  /// Tombol kembali = keluar gerai (sesi dihapus, balik ke layar
+  /// pilih gerai). Tidak ada lagi fail-open: PIN salah / server
+  /// tidak bisa dihubungi = tetap terkunci.
   Future<void> _lock() async {
     if (_locked || !mounted) return;
     final login = _login;
@@ -180,7 +198,17 @@ class _LoginGateState extends State<_LoginGate>
                   unawaited(_logout());
                   Navigator.of(context).pop();
                 },
-                onSuccess: (_) {
+                onSuccess: (result) {
+                  // Pembuka kunci bisa kasir lain — perbarui sesi ke
+                  // identitas dari server (bukan nama lama).
+                  if (result.role == AppRole.kasir) {
+                    unawaited(CashierSessionService.instance.save(
+                      outletId: result.outletId,
+                      cashierId: result.cashierId,
+                      cashierName: result.cashierName ?? 'Kasir',
+                    ));
+                    setState(() => _login = result);
+                  }
                   Navigator.of(context).pop();
                 },
               ),

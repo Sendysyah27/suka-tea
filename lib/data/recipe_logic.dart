@@ -2,7 +2,7 @@ import 'models.dart';
 
 /// Satu baris resep: tiap 1 cup varian memakai [qty] [stockName].
 /// Satuan mengikuti StockItem (kg untuk Teh/Gula/Es batu, pcs untuk
-/// Cup/Sedotan/dll). Kunci resep = variant id (mis. 'manggo-milktea_r').
+/// Cup/Sedotan/dll). Kunci resep = variant id (mis. 'manggo-milktea_22oz').
 class RecipeLine {
   const RecipeLine({required this.stockName, required this.qty});
 

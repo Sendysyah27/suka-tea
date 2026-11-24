@@ -22,16 +22,16 @@ SaleRecord sale({
 
 void main() {
   final recipes = <String, List<RecipeLine>>{
-    'manggo-milktea_r': [
+    'manggo-milktea_22oz': [
       const RecipeLine(stockName: 'Teh', qty: 0.010),
       const RecipeLine(stockName: 'Gula', qty: 0.025),
-      const RecipeLine(stockName: 'Cup 16oz', qty: 1),
+      const RecipeLine(stockName: 'Cup 22oz', qty: 1),
     ],
   };
   const costs = <String, double>{
     'Teh': 120000,
     'Gula': 18000,
-    'Cup 16oz': 500,
+    'Cup 22oz': 500,
   };
 
   test('computeDailyStats: transaksi void dikecualikan', () {
@@ -42,8 +42,8 @@ void main() {
           const SaleItem(
             productId: 'manggo-milktea',
             productName: 'Manggo Milktea',
-            variantId: 'manggo-milktea_r',
-            variantName: 'Reguler',
+            variantId: 'manggo-milktea_22oz',
+            variantName: '22oz',
             qty: 2,
             unitPrice: 8000,
           ),
@@ -56,8 +56,8 @@ void main() {
           const SaleItem(
             productId: 'es-teh-lemon',
             productName: 'Es Teh Lemon',
-            variantId: 'es-teh-lemon_r',
-            variantName: 'Reguler',
+            variantId: 'es-teh-lemon_22oz',
+            variantName: '22oz',
             qty: 1,
             unitPrice: 5000,
           ),
@@ -82,8 +82,8 @@ void main() {
           const SaleItem(
             productId: 'es-teh-lemon',
             productName: 'Es Teh Lemon',
-            variantId: 'es-teh-lemon_r',
-            variantName: 'Reguler',
+            variantId: 'es-teh-lemon_22oz',
+            variantName: '22oz',
             qty: 1,
             unitPrice: 5000,
           ),
@@ -107,8 +107,8 @@ void main() {
           const SaleItem(
             productId: 'a',
             productName: 'Es Teh Lemon',
-            variantId: 'a_r',
-            variantName: 'Reguler',
+            variantId: 'a_22oz',
+            variantName: '22oz',
             qty: 3,
             unitPrice: 5000,
           ),
@@ -121,8 +121,8 @@ void main() {
           const SaleItem(
             productId: 'b',
             productName: 'Manggo Milktea',
-            variantId: 'b_r',
-            variantName: 'Reguler',
+            variantId: 'b_22oz',
+            variantName: '22oz',
             qty: 5,
             unitPrice: 8000,
           ),

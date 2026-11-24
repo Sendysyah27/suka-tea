@@ -8,7 +8,6 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/tap_feedback.dart';
 import '../../data/outlet_service.dart';
-import '../pin/kasir_pin_service.dart';
 import '../pin/pin_dialog.dart';
 import 'cashier_session.dart';
 import 'kasir_pin_page.dart';
@@ -23,10 +22,8 @@ enum _LoginStep { select, pin }
 /// Langkah 1 (depan): pilih gerai + "Masuk sebagai Kasir" +
 /// "Masuk sebagai Owner" (PIN Owner tetap di sini, dialog seperti
 /// sebelumnya). Keypad PIN Kasir TIDAK ADA di layar ini.
-/// - Tap "Masuk sebagai Kasir": cek KasirPinService.isPinSet(gerai) —
-///   belum diatur / tidak bisa dicek -> langsung masuk Kasir
-///   (fail-open, seperti sebelumnya); sudah diatur -> pindah ke
-///   langkah 2 (layar PIN, keypad kecil).
+/// - Tap "Masuk sebagai Kasir": langsung pindah ke langkah 2
+///   (layar PIN, keypad kecil).
 /// - Tap "Masuk sebagai Owner": dialog PIN Owner gerai terpilih.
 ///
 /// Langkah 2 (KasirPinPage): nama gerai + 6 dot + keypad compact
@@ -41,12 +38,12 @@ enum _LoginStep { select, pin }
 /// PIN Owner TIDAK ikut pola fail-open kasir (fail closed — PIN
 /// Owner salah / tidak bisa dicek = tetap di halaman login).
 ///
-/// Batch C5: langkah 1 juga minta NAMA KASIR (field teks di bawah
-/// daftar gerai, sebelum tombol masuk). Nama wajib diisi untuk
-/// masuk sebagai Kasir (validasi lokal, Owner tidak perlu nama) dan
-/// disimpan bersama outlet sebagai sesi kasir — buka app lagi =
-/// langsung masuk gerai itu tanpa login ulang (CashierSessionService).
-/// Sesi Owner TIDAK PERNAH disimpan.
+/// Batch C8.2 — login kasir BARU: field "Nama Kasir" DIHAPUS dari
+/// langkah 1 (kasir dilarang isi nama sendiri). PIN kasir
+/// diverifikasi via Edge Function `verify-cashier-pin` di halaman
+/// PIN — identitas kasir (id + nama) datang dari SERVER, bukan
+/// ketikan. PIN kasir per-gerai lama (C4/C5, KasirPinService) TIDAK
+/// LAGI dipakai di alur login (fail-open-nya ikut mati).
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.onSuccess});
 
@@ -60,23 +57,6 @@ class _LoginPageState extends State<LoginPage> {
   String _selectedOutletId = defaultOutletId;
   _LoginStep _step = _LoginStep.select;
   bool _busy = false;
-  final _nameController = TextEditingController();
-  String? _nameError;
-
-  @override
-  void initState() {
-    super.initState();
-    // Isi ulang nama kasir terakhir (sesi lama / ganti gerai) supaya
-    // kasir tidak mengetik ulang tiap kali.
-    _nameController.text =
-        CashierSessionService.instance.cashierName ?? '';
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    super.dispose();
-  }
 
   void _finish(AppRole role) {
     // Sama seperti KasirPinPage._finish: reset _busy dulu supaya
@@ -90,46 +70,28 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   /// Satu-satunya jalur sukses login dari halaman ini (langkah 1
-  /// fail-open + langkah 2 PIN). Sesi kasir disimpan lokal di sini
-  /// (outlet + nama kasir); sesi Owner TIDAK PERNAH disimpan.
-  /// Simpan jalan tanpa await — save() mengisi field in-memory dulu
-  /// sebelum tulis DB, jadi _LoginGate yang membaca hasSession
-  /// sesudah onSuccess sudah melihat sesi.
+  /// Owner + langkah 2 PIN kasir). Sesi kasir disimpan lokal di sini
+  /// (outlet + id/nama kasir DARI SERVER); sesi Owner TIDAK PERNAH
+  /// disimpan. Simpan jalan tanpa await — save() mengisi field
+  /// in-memory dulu sebelum tulis DB, jadi _LoginGate yang membaca
+  /// hasSession sesudah onSuccess sudah melihat sesi.
   void _handleSuccess(LoginResult result) {
     if (result.role == AppRole.kasir) {
       unawaited(CashierSessionService.instance.save(
         outletId: result.outletId,
-        cashierName: _nameController.text.trim(),
+        cashierId: result.cashierId,
+        cashierName: result.cashierName ?? 'Kasir',
       ));
     }
     widget.onSuccess(result);
   }
 
-  /// Tap "Masuk sebagai Kasir" di langkah 1: PIN Kasir sudah diatur
-  /// -> layar PIN; belum diatur / tidak bisa dicek -> masuk langsung
-  /// (fail-open, perilaku app sebelum C4, supaya kasir tetap bisa
-  /// jualan offline).
-  Future<void> _onKasirTap() async {
+  /// Tap "Masuk sebagai Kasir" di langkah 1: langsung ke layar PIN.
+  /// Tidak ada syarat nama, tidak ada cek PIN per-gerai — PIN yang
+  /// diverifikasi server di langkah 2 yang menentukan identitas.
+  void _onKasirTap() {
     if (_busy) return;
-    // Nama kasir wajib (Batch C5) — tampil di AppBar + struk dan
-    // disimpan di sesi. Validasi SEBELUM _busy supaya tombol tidak
-    // terkunci saat nama kosong.
-    if (_nameController.text.trim().isEmpty) {
-      setState(() => _nameError = 'Isi nama kasir dulu.');
-      return;
-    }
-    setState(() => _busy = true);
-    final set =
-        await KasirPinService.instance.isPinSet(_selectedOutletId);
-    if (!mounted) return;
-    if (set != true) {
-      _finish(AppRole.kasir);
-      return;
-    }
-    setState(() {
-      _busy = false;
-      _step = _LoginStep.pin;
-    });
+    setState(() => _step = _LoginStep.pin);
   }
 
   /// Masuk sebagai Owner: dialog PIN Owner gerai terpilih (sudah
@@ -192,32 +154,6 @@ class _LoginPageState extends State<LoginPage> {
                   const SizedBox(height: 8),
                   for (var i = 0; i < outlets.length; i++)
                     _outletCard(outlets[i], i + 1),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Nama Kasir',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _nameController,
-                    textCapitalization: TextCapitalization.words,
-                    textInputAction: TextInputAction.done,
-                    onChanged: (_) {
-                      if (_nameError != null) {
-                        setState(() => _nameError = null);
-                      }
-                    },
-                    decoration: InputDecoration(
-                      hintText: 'cth: Budi',
-                      errorText: _nameError,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                  ),
                   const SizedBox(height: 16),
                   const Text(
                     'Masuk sebagai Owner butuh PIN Owner gerai ini.',

@@ -12,6 +12,11 @@ import 'pin_service.dart';
 /// PIN Kasir lama tanpa PIN Kasir lama (PIN Owner TIDAK PERNAH
 /// disimpan — hanya diteruskan sekali ke server).
 /// Mengembalikan `true` lewat Navigator.pop bila berhasil.
+///
+/// DEPRECATED — Batch C8.2 (24 Nov 2026): tidak ada pemakai lagi
+/// (bagian "PIN Gerai" dihapus dari Ubah Gerai). PIN kasir kini
+/// diatur Owner di "Kelola Kasir". File ini SENGAJA DIBIARKAN
+/// (bukan dihapus) supaya rollback / audit tetap bisa.
 class KasirPinDialog extends StatefulWidget {
   const KasirPinDialog({
     super.key,

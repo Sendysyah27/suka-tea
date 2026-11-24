@@ -26,8 +26,8 @@ import 'product_photo_service.dart';
 /// Menu dibaca dari MenuService (SATU sumber dengan Kasir): edit di sini
 /// langsung tampil di Kasir dan TERSIMPAN di LocalProducts (restart
 /// tidak hilang). Owner bisa, per produk:
-/// - tambah produk baru (form nyata: nama, kategori, harga R/J, foto)
-/// - ubah nama, kategori, harga Reguler, harga Jumbo (_editProduct)
+/// - tambah produk baru (form nyata: nama, kategori, harga 22oz, foto)
+/// - ubah nama, kategori, harga 22oz (_editProduct)
 /// - ganti foto dari 20 foto poster bawaan (_changePhoto)
 /// - ganti foto dari kamera/galeri (Batch C3): upload ke Supabase
 ///   Storage lewat Edge Function + bukti PIN Owner; hanya untuk produk
@@ -64,11 +64,9 @@ class _KatalogPageState extends State<KatalogPage> {
   /// Mengembalikan Product baru / yang sudah diubah, atau null bila batal.
   Future<Product?> _productForm({Product? product}) async {
     final name = TextEditingController(text: product?.name ?? '');
-    final reguler = TextEditingController(
+    // Batch C8.2 WS7: SATU harga — 22oz (tidak ada Reguler/Jumbo).
+    final harga = TextEditingController(
       text: product?.variants.first.price.toString() ?? '',
-    );
-    final jumbo = TextEditingController(
-      text: product?.variants.last.price.toString() ?? '',
     );
     var category = product?.category ?? menuCategories.first;
     var photoUrl = product?.photoUrl;
@@ -103,16 +101,11 @@ class _KatalogPageState extends State<KatalogPage> {
                 ),
                 const SizedBox(height: 12),
                 TextField(
-                  controller: reguler,
+                  controller: harga,
                   keyboardType: TextInputType.number,
-                  decoration:
-                      const InputDecoration(labelText: 'Reguler (Rp)'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: jumbo,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Jumbo (Rp)'),
+                  decoration: const InputDecoration(
+                    labelText: 'Harga (Rp) — 22oz',
+                  ),
                 ),
                 const SizedBox(height: 12),
                 const Text(
@@ -170,11 +163,11 @@ class _KatalogPageState extends State<KatalogPage> {
       );
       return null;
     }
-    final r = int.tryParse(reguler.text) ?? product?.variants.first.price ?? 0;
-    final j = int.tryParse(jumbo.text) ?? product?.variants.last.price ?? 0;
-    if (r <= 0 || j <= 0) {
+    final price =
+        int.tryParse(harga.text) ?? product?.variants.first.price ?? 0;
+    if (price <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Harga Reguler dan Jumbo harus > 0.')),
+        const SnackBar(content: Text('Harga harus > 0.')),
       );
       return null;
     }
@@ -186,8 +179,7 @@ class _KatalogPageState extends State<KatalogPage> {
       photoUrl: photoUrl,
       isActive: product?.isActive ?? true,
       variants: [
-        ProductVariant(id: '${id}_r', name: 'Reguler', sizeOz: 16, price: r),
-        ProductVariant(id: '${id}_j', name: 'Jumbo', sizeOz: 22, price: j),
+        ProductVariant(id: '${id}_22oz', name: '22oz', sizeOz: 22, price: price),
       ],
     );
   }
@@ -633,8 +625,8 @@ class _KatalogPageState extends State<KatalogPage> {
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
-                                  '${formatRupiah(p.variants.first.price)} / '
-                                  '${formatRupiah(p.variants.last.price)}'
+                                  // Batch C8.2 WS7: harga tunggal 22oz.
+                                  '${formatRupiah(p.variants.first.price)}'
                                   '${p.isActive ? '' : ' • Habis'}',
                                   style: TextStyle(
                                     fontSize: 12,

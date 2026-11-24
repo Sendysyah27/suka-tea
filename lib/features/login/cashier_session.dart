@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../data/local/app_database.dart';
@@ -37,10 +38,15 @@ class CashierSessionService extends ChangeNotifier {
 
   AppDatabase? _db;
   String? _outletId;
+  String? _cashierId;
   String? _cashierName;
   DateTime _lastActive = DateTime.now();
 
   String? get outletId => _outletId;
+
+  /// UUID kasir dari server (tabel `cashiers`) — identitas pencatat
+  /// penjualan (Batch C8.2). Null = sesi lama (sebelum C8.2) / Owner.
+  String? get cashierId => _cashierId;
   String? get cashierName => _cashierName;
   bool get hasSession => _outletId != null;
   DateTime get lastActive => _lastActive;
@@ -51,6 +57,7 @@ class CashierSessionService extends ChangeNotifier {
           ..where((t) => t.id.equals('current')))
         .getSingleOrNull();
     _outletId = row?.outletId;
+    _cashierId = row?.cashierId;
     _cashierName = row?.cashierName;
     _lastActive = DateTime.now();
     notifyListeners();
@@ -58,6 +65,7 @@ class CashierSessionService extends ChangeNotifier {
 
   Future<void> save({
     required String outletId,
+    String? cashierId,
     required String cashierName,
   }) async {
     // Isi field in-memory DULU sebelum tulis DB: _handleSuccess
@@ -65,6 +73,7 @@ class CashierSessionService extends ChangeNotifier {
     // yang membaca hasSession sesudah itu harus sudah melihat sesi,
     // dan sesi tetap ada di memori walau tulis DB gagal (review C5 W2).
     _outletId = outletId;
+    _cashierId = cashierId;
     _cashierName = cashierName;
     _lastActive = DateTime.now();
     _db ??= AppDatabase();
@@ -72,6 +81,7 @@ class CashierSessionService extends ChangeNotifier {
           CashierSessionsCompanion.insert(
             id: 'current',
             outletId: outletId,
+            cashierId: Value(cashierId),
             cashierName: cashierName,
           ),
         );
@@ -84,6 +94,7 @@ class CashierSessionService extends ChangeNotifier {
           ..where((t) => t.id.equals('current')))
         .go();
     _outletId = null;
+    _cashierId = null;
     _cashierName = null;
     _lastActive = DateTime.now();
     notifyListeners();

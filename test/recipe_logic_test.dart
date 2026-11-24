@@ -5,11 +5,10 @@ import 'package:suka_tea/data/seed_menu.dart';
 import 'package:suka_tea/data/seed_recipes.dart';
 
 /// Unit test fungsi murni resep (tanpa Flutter/Drift).
-/// Angka acuan = seedRecipes() untuk Manggo Milktea:
-/// Reguler: Teh 0.010, Gula 0.025, Susu bubuk 0.020, Bubuk perasa 0.015,
-///   Cup 16oz 1, Es batu 0.15, Sedotan 1.
-/// Jumbo: Teh 0.015, Gula 0.035, Susu bubuk 0.030, Bubuk perasa 0.020,
-///   Cup 22oz 1, Es batu 0.20, Sedotan 1.
+/// Angka acuan = seedRecipes() untuk Manggo Milktea (Batch C8.2 WS7:
+/// SATU resep 22oz — takaran Jumbo lama): Teh 0.015, Gula 0.035,
+///   Susu bubuk 0.030, Bubuk perasa 0.020, Cup 22oz 1, Es batu 0.20,
+///   Sedotan 1.
 void main() {
   late Map<String, StockItem> stockByName;
   late Map<String, List<RecipeLine>> recipes;
@@ -26,24 +25,25 @@ void main() {
           CartItem(product: manggo, variant: variant, qty: qty),
       ];
 
-  test('deduction 2x Manggo Reguler + 1x Jumbo', () {
+  test('deduction 3x Manggo 22oz', () {
+    // Satu varian (22oz) — dua baris keranjang digabung jadi 3 cup.
     final cart = cartOf([
       (manggo.variants.first, 2),
       (manggo.variants.last, 1),
     ]);
     final d = computeDeductions(cart, recipes, stockByName);
-    expect(d['Teh'], closeTo(0.035, 1e-9));
-    expect(d['Gula'], closeTo(0.085, 1e-9));
-    expect(d['Susu bubuk'], closeTo(0.070, 1e-9));
-    expect(d['Bubuk perasa'], closeTo(0.050, 1e-9));
-    expect(d['Cup 16oz'], 2);
-    expect(d['Cup 22oz'], 1);
-    expect(d['Es batu'], closeTo(0.50, 1e-9));
+    expect(d['Teh'], closeTo(0.045, 1e-9));
+    expect(d['Gula'], closeTo(0.105, 1e-9));
+    expect(d['Susu bubuk'], closeTo(0.090, 1e-9));
+    expect(d['Bubuk perasa'], closeTo(0.060, 1e-9));
+    expect(d['Cup 22oz'], 3);
+    expect(d.containsKey('Cup 16oz'), isFalse);
+    expect(d['Es batu'], closeTo(0.60, 1e-9));
     expect(d['Sedotan'], 3);
   });
 
   test('shortage terdeteksi saat stok kurang', () {
-    // Teh seed 2.5 kg -> turunkan jadi 0.02 kg (butuh 0.035 kg).
+    // Teh seed 2.5 kg -> turunkan jadi 0.02 kg (butuh 0.045 kg).
     stockByName['Teh'] =
         const StockItem(name: 'Teh', unit: 'kg', qty: 0.02, lowThreshold: 1);
     final cart = cartOf([
@@ -54,9 +54,9 @@ void main() {
     expect(shortages, hasLength(1));
     expect(shortages.first.stockName, 'Teh');
     expect(shortages.first.unit, 'kg');
-    expect(shortages.first.needed, closeTo(0.035, 1e-9));
+    expect(shortages.first.needed, closeTo(0.045, 1e-9));
     expect(shortages.first.available, 0.02);
-    expect(shortages.first.missing, closeTo(0.015, 1e-9));
+    expect(shortages.first.missing, closeTo(0.025, 1e-9));
   });
 
   test('tidak ada shortage saat stok cukup', () {
@@ -64,16 +64,11 @@ void main() {
     expect(findShortages(cart, recipes, stockByName), isEmpty);
   });
 
-  test('Cup 16oz vs 22oz tidak tertukar', () {
-    final regulerOnly = cartOf([(manggo.variants.first, 1)]);
-    final dReg = computeDeductions(regulerOnly, recipes, stockByName);
-    expect(dReg['Cup 16oz'], 1);
-    expect(dReg.containsKey('Cup 22oz'), isFalse);
-
-    final jumboOnly = cartOf([(manggo.variants.last, 1)]);
-    final dJum = computeDeductions(jumboOnly, recipes, stockByName);
-    expect(dJum['Cup 22oz'], 1);
-    expect(dJum.containsKey('Cup 16oz'), isFalse);
+  test('hanya Cup 22oz yang dipakai (tidak ada Cup 16oz)', () {
+    final cart = cartOf([(manggo.variants.first, 1)]);
+    final d = computeDeductions(cart, recipes, stockByName);
+    expect(d['Cup 22oz'], 1);
+    expect(d.containsKey('Cup 16oz'), isFalse);
   });
 
   test('topping memotong stok: 1 cup +Boba +Selasih, qty 2', () {
@@ -95,9 +90,9 @@ void main() {
     final d = computeDeductions(cart, recipes, stockByName);
     expect(d['Boba'], 2);
     expect(d['Selasih'], 2);
-    // Resep tetap jalan: Teh 0.010 x 2 cup.
-    expect(d['Teh'], closeTo(0.020, 1e-9));
-    expect(d['Cup 16oz'], 2);
+    // Resep tetap jalan: Teh 0.015 x 2 cup.
+    expect(d['Teh'], closeTo(0.030, 1e-9));
+    expect(d['Cup 22oz'], 2);
   });
 
   test('topping tanpa bahan stok dilewati (tidak gagal)', () {
@@ -116,10 +111,10 @@ void main() {
     ];
     final d = computeDeductions(cart, recipes, stockByName);
     expect(d.containsKey('Boba'), isFalse);
-    expect(d['Teh'], closeTo(0.010, 1e-9));
+    expect(d['Teh'], closeTo(0.015, 1e-9));
   });
 
-  test('seed resep mencakup semua 20 produk x 2 varian', () {
+  test('seed resep mencakup semua 20 produk x 1 varian (22oz)', () {
     final menu = seedMenu();
     expect(menu, hasLength(20));
     for (final p in menu) {

@@ -31,6 +31,13 @@ import 'shift_sheets.dart';
 /// shift gerai aktif. Kasir + Owner boleh buka/tutup shift; expected
 /// dihitung dari data lokal HP ini (tunai masuk jendela shift −
 /// pengeluaran tunai jendela yang sama).
+///
+/// Batch C8.2 WS6: laci HANYA SATU — 2 kasir berbagi 1 shift per
+/// gerai (yang beda hanya akses/PIN). Expected tutup kas diambil dari
+/// SERVER bila online (semua kasir + semua device gerai itu); bila
+/// offline, hitungan lokal berlabel "perkiraan (offline)". Shift
+/// yang dibuka di device lain ditarik berkala (refreshShifts) supaya
+/// kartu "Kas & Shift" + gate POS melihatnya.
 class LaporanPage extends StatefulWidget {
   const LaporanPage({super.key, required this.role, required this.onExitGerai});
 
@@ -50,33 +57,40 @@ class _LaporanPageState extends State<LaporanPage> {
       CashierSessionService.instance.cashierName ??
       (widget.role == AppRole.owner ? 'Owner' : 'Kasir');
 
-  /// Buka shift baru (Batch C7). null dari sheet = batal; null dari
-  /// service = masih ada shift open (dialog penolakan).
-  Future<void> _openShift() async {
-    final openingFloat = await showOpenShiftSheet(context);
-    if (openingFloat == null) return;
-    final shift = await CashShiftService.instance.openNewShift(
-      openingFloat: openingFloat,
-      cashierName: _cashierName,
-    );
-    if (!mounted) return;
-    if (shift == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Masih ada shift terbuka — tutup dulu sebelum buka yang baru.',
-          ),
-        ),
-      );
-      return;
-    }
-    unawaited(SyncService.instance.syncNow());
+  /// UUID kasir pembuka/penutup dari server; Owner (tanpa sesi) = ''.
+  String get _cashierId =>
+      CashierSessionService.instance.cashierId ?? '';
+
+  @override
+  void initState() {
+    super.initState();
+    // Tarik shift terbuka gerai ini (bisa dibuka di device lain).
+    unawaited(SyncService.instance.refreshShifts());
   }
 
-  /// Tutup shift [shift]: hitung expected live, buka sheet input
-  /// uang dihitung + preview selisih, lalu tutup + ringkasan.
+  /// Buka shift baru (Batch C7, alur via openShiftFlow C8.2).
+  /// null dari sheet = batal; null dari service = masih ada shift
+  /// open (snackbar penolakan dari openShiftFlow).
+  Future<void> _openShift() async {
+    final shift = await openShiftFlow(
+      context,
+      cashierId: _cashierId,
+      cashierName: _cashierName,
+    );
+    if (shift != null) unawaited(SyncService.instance.syncNow());
+  }
+
+  /// Tutup shift [shift]: expected diambil dari SERVER dulu (semua
+  /// kasir + semua device gerai itu); gagal/offline = hitungan lokal
+  /// berlabel "perkiraan (offline)" di sheet. Lalu sheet input uang
+  /// dihitung + preview selisih, lalu tutup + ringkasan.
   Future<void> _closeShift(CashShift shift) async {
     final now = DateTime.now();
+    final server = await SyncService.instance.fetchShiftExpected(
+      outletId: shift.outletId,
+      from: shift.openedAt,
+      to: now,
+    );
     final cashIn = cashInWindow(
       SaleHistoryService.instance.sales,
       outletId: shift.outletId,
@@ -89,23 +103,36 @@ class _LaporanPageState extends State<LaporanPage> {
       from: shift.openedAt,
       to: now,
     );
-    final expected = expectedCash(
-      openingFloat: shift.openingFloat,
-      cashIn: cashIn,
-      cashExpenses: cashOut,
-    );
+    // Server mengembalikan cash_in/cash_out TANPA modal awal —
+    // expected lengkap = modal + cash_in − cash_out (sama rumusnya
+    // dengan hitungan lokal, lihat expectedCash di cash.dart).
+    final expected = server == null
+        ? expectedCash(
+            openingFloat: shift.openingFloat,
+            cashIn: cashIn,
+            cashExpenses: cashOut,
+          )
+        : shift.openingFloat + server.cashIn - server.cashOut;
     final input = await showCloseShiftSheet(
       context,
       shift: shift,
       expected: expected,
-      cashIn: cashIn,
-      cashExpenses: cashOut,
+      // Rincian di sheet harus cocok dengan expected yang ditampilkan:
+      // angka server bila expected dari server, angka lokal bila offline.
+      cashIn: server?.cashIn ?? cashIn,
+      cashExpenses: server?.cashOut ?? cashOut,
+      expectedLabel: server == null
+          ? 'Expected perkiraan (offline) — hanya penjualan HP ini.'
+          : null,
     );
     if (input == null) return;
     final closed = await CashShiftService.instance.closeShift(
       shift,
       countedCash: input.countedCash,
       note: input.note,
+      closedByCashierId: _cashierId,
+      closedByCashierName: _cashierName,
+      expectedOverride: expected,
     );
     if (!mounted) return;
     if (closed == null) {
@@ -146,8 +173,8 @@ class _LaporanPageState extends State<LaporanPage> {
   }
 
   /// Konfirmasi keluar gerai (Batch C5): sesi kasir dihapus — buka
-  /// app lagi harus pilih gerai + isi nama + PIN lagi. Keranjang
-  /// yang belum dibayar ikut hilang (shell dibuat ulang per login).
+  /// app lagi harus pilih gerai + PIN kasir lagi. Keranjang yang
+  /// belum dibayar ikut hilang (shell dibuat ulang per login).
   Future<void> _confirmExitGerai() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -155,7 +182,7 @@ class _LaporanPageState extends State<LaporanPage> {
         title: const Text('Ganti gerai?'),
         content: const Text(
           'Sesi kasir di gerai ini dihapus. Untuk masuk lagi harus '
-          'pilih gerai, isi nama kasir, dan PIN gerai.',
+          'pilih gerai dan masukkan PIN kasir.',
         ),
         actions: [
           TextButton(
@@ -438,7 +465,10 @@ class _LaporanPageState extends State<LaporanPage> {
               ],
             ),
             const SizedBox(height: 8),
-            _shiftRow('Kasir', open.cashierName),
+            _shiftRow(
+              'Dibuka oleh',
+              open.cashierName.isEmpty ? 'Kasir' : open.cashierName,
+            ),
             _shiftRow('Dibuka', formatShiftTime(open.openedAt)),
             _shiftRow('Modal awal', formatRupiah(open.openingFloat)),
             _shiftRow('Tunai masuk', formatRupiah(cashIn)),
@@ -489,6 +519,8 @@ class _LaporanPageState extends State<LaporanPage> {
     final when = closedAt == null
         ? formatShiftDayTime(s.openedAt)
         : '${formatShiftDayTime(s.openedAt)} – ${formatShiftTime(closedAt)}';
+    final opener = s.cashierName.isEmpty ? 'Kasir' : s.cashierName;
+    final closer = s.closedByCashierName;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
@@ -513,8 +545,9 @@ class _LaporanPageState extends State<LaporanPage> {
             ],
           ),
           Text(
-            '${s.cashierName} • Dihitung ${formatRupiah(s.countedCash ?? 0)}'
-            ' / Expected ${formatRupiah(s.expectedCash ?? 0)}',
+            '$opener • Dihitung ${formatRupiah(s.countedCash ?? 0)}'
+            ' / Expected ${formatRupiah(s.expectedCash ?? 0)}'
+            '${closer.isEmpty ? '' : ' • Ditutup $closer'}',
             style: const TextStyle(color: SukaTeaColors.muted),
           ),
         ],

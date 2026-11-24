@@ -115,6 +115,8 @@ class SaleRecord {
     this.outletId = defaultOutletId,
     this.qrisAmount = 0,
     this.cashAmount = 0,
+    this.cashierId = '',
+    this.cashierName = '',
   });
 
   final String id;
@@ -144,6 +146,17 @@ class SaleRecord {
   /// paid = qrisAmount + cashAmount.
   final int qrisAmount;
   final int cashAmount;
+
+  /// Kasir pencatat (Batch C8.2 WS4 — identitas dari server;
+  /// Owner = '' / 'Owner'; tanpa sesi = '' / 'Kasir'; baris lama
+  /// sebelum v10 = '' / '' — tampil sebagai 'Kasir').
+  final String cashierId;
+  final String cashierName;
+
+  /// Nama kasir untuk tampil (struk / Riwayat / Pantau Gerai) —
+  /// fallback 'Kasir' bila kosong (baris lama / tanpa sesi).
+  String get displayCashierName =>
+      cashierName.isEmpty ? 'Kasir' : cashierName;
 
   /// Subtotal sebelum diskon (total + diskon).
   int get subtotal => total + discount;
@@ -183,6 +196,8 @@ class SaleRecord {
         outletId: outletId,
         qrisAmount: qrisAmount ?? this.qrisAmount,
         cashAmount: cashAmount ?? this.cashAmount,
+        cashierId: cashierId,
+        cashierName: cashierName,
       );
 
   factory SaleRecord.fromJson(Map<String, dynamic> json) {
@@ -206,6 +221,8 @@ class SaleRecord {
       outletId: json['outletId'] as String? ?? defaultOutletId,
       qrisAmount: (json['qrisAmount'] as num? ?? 0).toInt(),
       cashAmount: (json['cashAmount'] as num? ?? 0).toInt(),
+      cashierId: json['cashierId'] as String? ?? '',
+      cashierName: json['cashierName'] as String? ?? '',
     );
   }
 
@@ -259,6 +276,8 @@ class SaleRecord {
       outletId: txn['outlet_id'] as String? ?? defaultOutletId,
       qrisAmount: (txn['qris_amount'] as num? ?? 0).toInt(),
       cashAmount: (txn['cash_amount'] as num? ?? 0).toInt(),
+      cashierId: txn['cashier_id'] as String? ?? '',
+      cashierName: txn['cashier_name'] as String? ?? '',
     );
   }
 
@@ -275,6 +294,8 @@ class SaleRecord {
         'outletId': outletId,
         'qrisAmount': qrisAmount,
         'cashAmount': cashAmount,
+        'cashierId': cashierId,
+        'cashierName': cashierName,
       };
 }
 
@@ -461,6 +482,8 @@ class SaleHistoryService extends ChangeNotifier {
               'outletId': r.outletId,
               'qrisAmount': r.qrisAmount,
               'cashAmount': r.cashAmount,
+              'cashierId': r.cashierId,
+              'cashierName': r.cashierName,
             }),
           )
           .toList()
@@ -479,6 +502,10 @@ class SaleHistoryService extends ChangeNotifier {
   /// diskon; [discount] dicatat supaya bisa diaudit di Riwayat.
   /// [outletId] null = gerai aktif sesi ini. [qrisAmount]/[cashAmount]
   /// = bagian split (Batch C2); transaksi non-split = 0.
+  /// [cashierId]/[cashierName] = kasir pencatat dari sesi aktif
+  /// (Batch C8.2 WS4) — pemanggil (kasir_page) yang mengisi:
+  /// Owner = '' / 'Owner', kasir = id/nama dari server, tanpa sesi
+  /// = '' / 'Kasir'. Default '' / '' (baris lama tampil 'Kasir').
   /// [id] (Batch C6): bila diisi, dipakai sebagai id record — kasir
   /// mengisinya dengan client_uuid yang SAMA dengan yang dikirim ke
   /// outbox, supaya event void nanti menunjuk baris Supabase yang
@@ -493,6 +520,8 @@ class SaleHistoryService extends ChangeNotifier {
     String? outletId,
     int qrisAmount = 0,
     int cashAmount = 0,
+    String cashierId = '',
+    String cashierName = '',
     String? id,
   }) async {
     final record = SaleRecord(
@@ -507,6 +536,8 @@ class SaleHistoryService extends ChangeNotifier {
       outletId: outletId ?? OutletService.instance.currentOutletId,
       qrisAmount: qrisAmount,
       cashAmount: cashAmount,
+      cashierId: cashierId,
+      cashierName: cashierName,
     );
     _sales = [record, ..._sales];
     notifyListeners();
@@ -527,6 +558,8 @@ class SaleHistoryService extends ChangeNotifier {
               outletId: Value(record.outletId),
               qrisAmount: Value(record.qrisAmount),
               cashAmount: Value(record.cashAmount),
+              cashierId: Value(record.cashierId),
+              cashierName: Value(record.cashierName),
             ),
           );
     } catch (e) {
@@ -571,6 +604,8 @@ class SaleHistoryService extends ChangeNotifier {
         'change': record.change,
         'qris_amount': record.qrisAmount,
         'cash_amount': record.cashAmount,
+        'cashier_id': record.cashierId,
+        'cashier_name': record.cashierName,
         'is_void': true,
         'created_at': record.createdAt.toIso8601String(),
         'items': record.items
