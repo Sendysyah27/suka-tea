@@ -255,7 +255,7 @@ class SaleRecord {
       paid: (txn['paid'] as num? ?? 0).toInt(),
       change: (txn['change_amount'] as num? ?? 0).toInt(),
       discount: (txn['discount'] as num? ?? 0).toInt(),
-      isVoid: txn['status'] as String? == 'void',
+      isVoid: (txn['status'] as String?) == 'void',
       outletId: txn['outlet_id'] as String? ?? defaultOutletId,
       qrisAmount: (txn['qris_amount'] as num? ?? 0).toInt(),
       cashAmount: (txn['cash_amount'] as num? ?? 0).toInt(),

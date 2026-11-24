@@ -314,6 +314,6 @@ PushOutcome applyPushResults(
     }
   }
   final sent = allIds.where(okIds.contains).toList();
-  failed.addAll(allIds.where((id) => !okIds.contains));
+  failed.addAll(allIds.where((id) => !okIds.contains(id)));
   return (sentIds: sent, failedIds: failed);
 }
