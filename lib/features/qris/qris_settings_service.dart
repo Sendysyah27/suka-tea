@@ -75,11 +75,7 @@ class QrisSettingsService {
   /// baru diketahui di halaman Login, bukan di main()). Null = belum
   /// ada outlet. Payload itu GLOBAL (satu untuk semua gerai), jadi
   /// ganti outlet tidak me-reset status load.
-  String? _currentOutletId;
-  String? get currentOutletId => _currentOutletId;
-  set currentOutletId(String? value) {
-    _currentOutletId = value;
-  }
+  String? currentOutletId;
 
   String? _staticPayload;
   bool _loaded = false;

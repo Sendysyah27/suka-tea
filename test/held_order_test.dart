@@ -155,7 +155,7 @@ void main() {
         ],
       );
       final order = await HeldOrderService.instance.hold([
-        const CartItem(
+        CartItem(
           product: hilang,
           variant: ProductVariant(
             id: 'produk-hilang_r',

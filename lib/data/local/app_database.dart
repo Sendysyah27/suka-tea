@@ -334,18 +334,18 @@ class AppDatabase extends _$AppDatabase {
               cashShifts,
               cashShifts.closedByCashierName,
             );
-            await m.customStatement(
+            await m.database.customStatement(
               'ALTER TABLE stock_levels RENAME TO stock_levels_old',
             );
             await m.createTable(stockLevels);
-            await m.customStatement(
+            await m.database.customStatement(
               'INSERT INTO stock_levels '
               '(outlet_id, name, unit, qty, low_threshold, cost_per_unit) '
               "SELECT '00000000-0000-0000-0000-000000000001', "
               'name, unit, qty, low_threshold, cost_per_unit '
               'FROM stock_levels_old',
             );
-            await m.customStatement('DROP TABLE stock_levels_old');
+            await m.database.customStatement('DROP TABLE stock_levels_old');
           }
         },
       );

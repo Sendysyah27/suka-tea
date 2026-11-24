@@ -91,6 +91,9 @@ class _LaporanPageState extends State<LaporanPage> {
       from: shift.openedAt,
       to: now,
     );
+    // Context dipakai lagi di bawah (showCloseShiftSheet) — halaman
+    // bisa saja sudah ditinggal saat expected server kembali.
+    if (!mounted) return;
     final cashIn = cashInWindow(
       SaleHistoryService.instance.sales,
       outletId: shift.outletId,
