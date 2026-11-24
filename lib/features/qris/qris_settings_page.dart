@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/utils/roles.dart';
+import '../pin/pin_dialog.dart';
 import 'qris_scan_logic.dart';
 import 'qris_scan_page.dart';
 import 'qris_service.dart';
@@ -69,7 +70,26 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
       setState(() => _error = error);
       return;
     }
-    final result = await QrisSettingsService.instance.save(payload);
+    // Bukti Owner — PIN diverifikasi server, diteruskan sekali ke
+    // Edge Function `set-qris-payload` (Batch C8: tulis langsung
+    // diblokir RLS). ownerPin di-assign di dalam closure
+    // onPinVerified, jadi TIDAK ter-promote: cek null + `!` wajib di
+    // tiap pemakaian (pelajaran CI v27.1 — pola sama seperti
+    // _uploadPhoto di Katalog).
+    String? ownerPin;
+    final pinOk = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PinEntryDialog(
+        outletId: QrisSettingsService.instance.currentOutletId,
+        onPinVerified: (pin) => ownerPin = pin,
+      ),
+    );
+    if (pinOk != true || ownerPin == null || !mounted) return;
+    final result = await QrisSettingsService.instance.save(
+      payload,
+      ownerPin: ownerPin!,
+    );
     if (!mounted) return;
     if (!result.ok) {
       setState(() {
@@ -193,12 +213,36 @@ class _QrisSettingsPageState extends State<QrisSettingsPage> {
             const SizedBox(height: 8),
             TextButton(
               onPressed: () async {
+                // Hapus juga butuh bukti Owner (Batch C8: hapus baris
+                // di Supabase lewat `set-qris-payload` delete:true).
+                // ownerPin di-assign di dalam closure onPinVerified,
+                // jadi TIDAK ter-promote: cek null + `!` wajib di tiap
+                // pemakaian (pelajaran CI v27.1).
+                String? ownerPin;
+                final pinOk = await showDialog<bool>(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (_) => PinEntryDialog(
+                    outletId: QrisSettingsService.instance.currentOutletId,
+                    onPinVerified: (pin) => ownerPin = pin,
+                  ),
+                );
+                if (pinOk != true || ownerPin == null || !mounted) return;
                 final messenger = ScaffoldMessenger.of(context);
-                await QrisSettingsService.instance.clear();
+                final deleted = await QrisSettingsService.instance.clear(
+                  ownerPin: ownerPin!,
+                );
                 if (!mounted) return;
                 setState(() => _savedMerchant = null);
                 messenger.showSnackBar(
-                  const SnackBar(content: Text('QRIS merchant dihapus.')),
+                  SnackBar(
+                    content: Text(
+                      deleted
+                          ? 'QRIS merchant dihapus.'
+                          : 'Dihapus di perangkat saja — baris di Supabase '
+                              'belum terhapus. Coba lagi saat online.',
+                    ),
+                  ),
                 );
               },
               child: const Text('Hapus QRIS merchant'),
