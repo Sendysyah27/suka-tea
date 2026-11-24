@@ -105,8 +105,9 @@ void main() {
       await tester.tap(find.text('Masuk sebagai Kasir'));
       await tester.pump();
       expect(find.text('PIN Kasir'), findsOneWidget);
-      // Nama gerai tampil 2x: di header login + di halaman PIN.
-      expect(find.text('Gerai 3'), findsNWidgets(2));
+      // Nama gerai tampil 1x di halaman PIN (header login hanya
+      // wordmark + tagline, bukan nama gerai).
+      expect(find.text('Gerai 3'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
