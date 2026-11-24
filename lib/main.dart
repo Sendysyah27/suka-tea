@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'app/app.dart';
 import 'app/splash_screen.dart';
+import 'data/cash_shift_service.dart';
+import 'data/expense_service.dart';
 import 'data/held_order_service.dart';
 import 'data/menu_service.dart';
 import 'data/outlet_service.dart';
@@ -46,6 +48,12 @@ Future<void> main() async {
   await SaleHistoryService.instance.init();
   // Order Pending di Kasir dari Drift (kosong bila belum ada).
   await HeldOrderService.instance.init();
+  // Pengeluaran dari Drift (Batch C7) — Keuangan memakai daftar ini
+  // untuk laba bersih + seksi Pengeluaran.
+  await ExpenseService.instance.init();
+  // Shift kas dari Drift (Batch C7) — Laporan memakai shift open +
+  // riwayat closed gerai aktif.
+  await CashShiftService.instance.init();
   // Sinkronisasi Supabase (Batch C6): flush antrean outbox yang
   // masih pending + retry berkala 60 dtk selama ada pending.
   // Fire-and-forget — TIDAK PERNAH memblokir jualan: gagal sync =

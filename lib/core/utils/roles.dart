@@ -10,6 +10,12 @@ extension AppRoleX on AppRole {
   bool get canManageMenu => this == AppRole.owner;
   bool get canManageStock => this == AppRole.owner;
   bool get canExportSheets => this == AppRole.owner;
+
+  /// PENANDA LAMA — tidak dipakai di mana pun. Dulu tutup kasir
+  /// manual hanya Owner; sejak Batch C7, buka/tutup SHIFT boleh
+  /// Kasir maupun Owner (lihat CashShiftService). Getter ini
+  /// dibiarkan apa adanya (bersih-bersih = batch W8 terpisah) —
+  /// JANGAN dipakai untuk gate shift C7.
   bool get canCloseShift => this == AppRole.owner;
 
   /// Hanya Owner yang boleh kelola topping (Batch C1).

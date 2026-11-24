@@ -1,24 +1,36 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'dart:async';
 
-import '../../core/theme/app_icons.dart';
+import 'package:flutter/material.dart';
+
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/cash.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/tap_feedback.dart';
+import '../../data/cash_shift_service.dart';
+import '../../data/expense_service.dart';
 import '../../data/outlet_service.dart';
 import '../../data/sale_history.dart';
 import '../../data/sheets_export.dart';
+import '../../data/sync_service.dart';
+import '../../features/login/cashier_session.dart';
+import '../keuangan/expense_sheet.dart';
 import '../riwayat/riwayat_page.dart';
+import 'shift_sheets.dart';
 
-/// Laporan & Tutup Kasir — rekap per cara bayar + rekonsiliasi kas tunai
-/// + export ke Google Sheets (Edge Function, Owner saja). Desain v2:
-/// kartu radius 20, tombol 56px.
+/// Laporan & Tutup Kas — rekap hari ini + shift kas (buka/tutup,
+/// expected, selisih) + export ke Google Sheets (Edge Function,
+/// Owner saja). Desain v2: kartu radius 20, tombol 56px.
 ///
 /// DATA NYATA dari riwayat penjualan hari ini: penjualan tunai, produk
-/// terlaris (top 3), dan tombol ke Riwayat. Modal awal laci diisi kasir
-/// (bukan angka contoh). Bila belum ada transaksi hari ini, tampil
-/// state kosong yang jujur.
+/// terlaris (top 3), dan tombol ke Riwayat.
+///
+/// Batch C7: rekonsiliasi manual lama (input modal awal + hitung laci
+/// di halaman, tidak tersimpan) DIGANTI shift kas persisten — Buka
+/// Shift (modal awal) → Tutup Kas (uang dihitung + selisih) → riwayat
+/// shift gerai aktif. Kasir + Owner boleh buka/tutup shift; expected
+/// dihitung dari data lokal HP ini (tunai masuk jendela shift −
+/// pengeluaran tunai jendela yang sama).
 class LaporanPage extends StatefulWidget {
   const LaporanPage({super.key, required this.role, required this.onExitGerai});
 
@@ -33,23 +45,104 @@ class LaporanPage extends StatefulWidget {
 }
 
 class _LaporanPageState extends State<LaporanPage> {
-  final _openingController = TextEditingController();
-  final _countedController = TextEditingController();
-  int? _selisih;
+  /// Nama pencatat shift: sesi kasir aktif; Owner (tanpa sesi) = 'Owner'.
+  String get _cashierName =>
+      CashierSessionService.instance.cashierName ??
+      (widget.role == AppRole.owner ? 'Owner' : 'Kasir');
 
-  int get _openingCash => int.tryParse(_openingController.text) ?? 0;
-
-  void _hitungSelisih(int tunaiSales) {
-    final counted = int.tryParse(_countedController.text);
-    if (counted == null) return;
-    setState(() => _selisih = counted - (_openingCash + tunaiSales));
+  /// Buka shift baru (Batch C7). null dari sheet = batal; null dari
+  /// service = masih ada shift open (dialog penolakan).
+  Future<void> _openShift() async {
+    final openingFloat = await showOpenShiftSheet(context);
+    if (openingFloat == null) return;
+    final shift = await CashShiftService.instance.openNewShift(
+      openingFloat: openingFloat,
+      cashierName: _cashierName,
+    );
+    if (!mounted) return;
+    if (shift == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Masih ada shift terbuka — tutup dulu sebelum buka yang baru.',
+          ),
+        ),
+      );
+      return;
+    }
+    unawaited(SyncService.instance.syncNow());
   }
 
-  @override
-  void dispose() {
-    _openingController.dispose();
-    _countedController.dispose();
-    super.dispose();
+  /// Tutup shift [shift]: hitung expected live, buka sheet input
+  /// uang dihitung + preview selisih, lalu tutup + ringkasan.
+  Future<void> _closeShift(CashShift shift) async {
+    final now = DateTime.now();
+    final cashIn = cashInWindow(
+      SaleHistoryService.instance.sales,
+      outletId: shift.outletId,
+      from: shift.openedAt,
+      to: now,
+    );
+    final cashOut = cashExpensesInWindow(
+      ExpenseService.instance.expenses,
+      outletId: shift.outletId,
+      from: shift.openedAt,
+      to: now,
+    );
+    final expected = expectedCash(
+      openingFloat: shift.openingFloat,
+      cashIn: cashIn,
+      cashExpenses: cashOut,
+    );
+    final input = await showCloseShiftSheet(
+      context,
+      shift: shift,
+      expected: expected,
+      cashIn: cashIn,
+      cashExpenses: cashOut,
+    );
+    if (input == null) return;
+    final closed = await CashShiftService.instance.closeShift(
+      shift,
+      countedCash: input.countedCash,
+      note: input.note,
+    );
+    if (!mounted) return;
+    if (closed == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Shift sudah ditutup.')),
+      );
+      return;
+    }
+    unawaited(SyncService.instance.syncNow());
+    final diff = closed.difference ?? 0;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Shift ditutup — selisih ${formatRupiah(diff)} '
+          '(${diff == 0 ? 'pas' : diff > 0 ? 'lebih' : 'kurang'}).',
+        ),
+      ),
+    );
+  }
+
+  /// Tambah pengeluaran (Batch C7, fix review Jhon): halaman ini
+  /// bisa dibuka Kasir maupun Owner, jadi kasir bisa mencatat
+  /// pengeluaran laci di tengah shift — KeuanganPage Owner-only,
+  /// jadi tanpa tombol ini kasir tidak punya jalan masuk. Nama
+  /// pencatat dari sesi kasir aktif; Owner (tanpa sesi) = 'Owner'.
+  /// Sesudah simpan, sync fire-and-forget (pola C6).
+  Future<void> _addExpense() async {
+    final input = await showExpenseSheet(context);
+    if (input == null) return;
+    await ExpenseService.instance.addExpense(
+      category: input.category,
+      description: input.description,
+      amount: input.amount,
+      isCash: input.isCash,
+      cashierName: _cashierName,
+    );
+    unawaited(SyncService.instance.syncNow());
   }
 
   /// Konfirmasi keluar gerai (Batch C5): sesi kasir dihapus — buka
@@ -82,7 +175,14 @@ class _LaporanPageState extends State<LaporanPage> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: SaleHistoryService.instance,
+      // + CashShiftService + ExpenseService (Batch C7): angka live
+      // shift (tunai masuk / expected sejauh ini) berubah saat ada
+      // penjualan atau pengeluaran baru.
+      listenable: Listenable.merge([
+        SaleHistoryService.instance,
+        CashShiftService.instance,
+        ExpenseService.instance,
+      ]),
       builder: (context, _) {
         // Transaksi void DIKECUALIKAN (Batch C1): tutup kasir +
         // terlaris tidak menghitung transaksi yang sudah di-void.
@@ -95,7 +195,6 @@ class _LaporanPageState extends State<LaporanPage> {
         final tunaiSales =
             today.fold(0, (sum, s) => sum + s.cashInDrawer);
         final top = topProducts(today);
-        final expected = _openingCash + tunaiSales;
         return ListView(
           padding: const EdgeInsets.all(12),
           children: [
@@ -106,7 +205,7 @@ class _LaporanPageState extends State<LaporanPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Tutup Kasir — hari ini',
+                      'Rekap hari ini',
                       style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 18,
@@ -157,67 +256,45 @@ class _LaporanPageState extends State<LaporanPage> {
                   ),
               const SizedBox(height: 12),
             ],
-            TextField(
-              controller: _openingController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Modal awal laci (Rp)',
+            const SizedBox(height: 12),
+            const Text(
+              'Kas & Shift',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            _shiftCard(context),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: TapFeedback(
+                child: OutlinedButton.icon(
+                  onPressed: _addExpense,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Tambah Pengeluaran'),
+                ),
               ),
-              onChanged: (_) => setState(() => _selisih = null),
             ),
             const SizedBox(height: 12),
-            _row('Kas yang seharusnya ada', expected),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _countedController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Hitung kas tunai di laci (Rp)',
-                hintText: 'Masukkan hasil hitungan…',
+            SizedBox(
+              width: double.infinity,
+              child: TapFeedback(
+                child: FilledButton(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => RiwayatPage(role: widget.role),
+                      ),
+                    );
+                  },
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
+                  child: const Text('Lihat Riwayat'),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TapFeedback(
-                    child: OutlinedButton.icon(
-                      onPressed: () => _hitungSelisih(tunaiSales),
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(0, 56),
-                      ),
-                      icon: SvgPicture.asset(
-                        AppIcons.tutupKasir,
-                        width: 20,
-                        height: 20,
-                        colorFilter: const ColorFilter.mode(
-                          SukaTeaColors.emerald,
-                          BlendMode.srcIn,
-                        ),
-                      ),
-                      label: const Text('Hitung Selisih'),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TapFeedback(
-                    child: FilledButton(
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => RiwayatPage(role: widget.role),
-                          ),
-                        );
-                      },
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size(0, 56),
-                      ),
-                      child: const Text('Lihat Riwayat'),
-                    ),
-                  ),
-                ),
-              ],
             ),
             const SizedBox(height: 12),
             // Export Sheets bukan bagian frame FigCraft 07, tapi
@@ -249,46 +326,6 @@ class _LaporanPageState extends State<LaporanPage> {
                   ),
                 ),
               ),
-            if (_selisih != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'Selisih kas',
-                              style: TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                            Text(
-                              formatRupiah(_selisih!),
-                              style: TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 18,
-                                color: _selisih == 0
-                                    ? SukaTeaColors.emeraldDark
-                                    : SukaTeaColors.danger,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _selisih == 0
-                              ? 'Pas — tidak ada selisih.'
-                              : 'Ada selisih — cek kembali hitungan laci.',
-                          style: const TextStyle(color: SukaTeaColors.muted),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
             // Ganti Gerai (Batch C5): keluar dari gerai aktif — sesi
             // kasir dihapus, kembali ke layar pilih gerai. Buka app
             // lagi langsung masuk gerai selama sesi belum dihapus.
@@ -309,6 +346,202 @@ class _LaporanPageState extends State<LaporanPage> {
           ],
         );
       },
+    );
+  }
+
+  /// Kartu "Kas & Shift" (Batch C7): belum ada shift open → tombol
+  /// Buka Shift; ada yang open → angka live + tombol Tutup Kas;
+  /// di bawahnya riwayat shift closed gerai aktif (maks 5 terakhir).
+  Widget _shiftCard(BuildContext context) {
+    final open = CashShiftService.instance.openShift;
+    if (open == null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Belum ada shift terbuka.',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Buka shift di awal jualan supaya tutup kas tercatat.',
+                style: TextStyle(color: SukaTeaColors.muted),
+              ),
+              const SizedBox(height: 12),
+              TapFeedback(
+                child: FilledButton(
+                  onPressed: _openShift,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
+                  child: const Text('Buka Shift'),
+                ),
+              ),
+              ..._closedHistory(),
+            ],
+          ),
+        ),
+      );
+    }
+    final now = DateTime.now();
+    final cashIn = cashInWindow(
+      SaleHistoryService.instance.sales,
+      outletId: open.outletId,
+      from: open.openedAt,
+      to: now,
+    );
+    final cashOut = cashExpensesInWindow(
+      ExpenseService.instance.expenses,
+      outletId: open.outletId,
+      from: open.openedAt,
+      to: now,
+    );
+    final expected = expectedCash(
+      openingFloat: open.openingFloat,
+      cashIn: cashIn,
+      cashExpenses: cashOut,
+    );
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Shift terbuka',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: SukaTeaColors.emerald,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Text(
+                    'OPEN',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _shiftRow('Kasir', open.cashierName),
+            _shiftRow('Dibuka', formatShiftTime(open.openedAt)),
+            _shiftRow('Modal awal', formatRupiah(open.openingFloat)),
+            _shiftRow('Tunai masuk', formatRupiah(cashIn)),
+            _shiftRow('Pengeluaran tunai', '-${formatRupiah(cashOut)}'),
+            const Divider(height: 24),
+            _shiftRow(
+              'Expected sejauh ini',
+              formatRupiah(expected),
+              bold: true,
+            ),
+            const SizedBox(height: 12),
+            TapFeedback(
+              child: FilledButton(
+                onPressed: () => _closeShift(open),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(0, 56),
+                ),
+                child: const Text('Tutup Kas'),
+              ),
+            ),
+            ..._closedHistory(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Riwayat shift closed gerai aktif, terbaru dulu (maks 5).
+  /// Selisih hijau bila pas, merah bila ada selisih.
+  List<Widget> _closedHistory() {
+    final closed =
+        CashShiftService.instance.closedShifts().take(5).toList();
+    if (closed.isEmpty) return const [];
+    return [
+      const SizedBox(height: 16),
+      const Text(
+        'Riwayat shift (gerai ini)',
+        style: TextStyle(fontWeight: FontWeight.w700),
+      ),
+      const SizedBox(height: 8),
+      for (final s in closed) _closedShiftRow(s),
+    ];
+  }
+
+  Widget _closedShiftRow(CashShift s) {
+    final diff = s.difference ?? 0;
+    final closedAt = s.closedAt;
+    final when = closedAt == null
+        ? formatShiftDayTime(s.openedAt)
+        : '${formatShiftDayTime(s.openedAt)} – ${formatShiftTime(closedAt)}';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                when,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              Text(
+                formatRupiah(diff),
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: diff == 0
+                      ? SukaTeaColors.emeraldDark
+                      : SukaTeaColors.danger,
+                ),
+              ),
+            ],
+          ),
+          Text(
+            '${s.cashierName} • Dihitung ${formatRupiah(s.countedCash ?? 0)}'
+            ' / Expected ${formatRupiah(s.expectedCash ?? 0)}',
+            style: const TextStyle(color: SukaTeaColors.muted),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _shiftRow(String label, String value, {bool bold = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

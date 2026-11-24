@@ -8,6 +8,10 @@ import 'dart:math';
 /// - kind 'transaction': payload penjualan (lihat [normalizeSaleEvent]).
 /// - kind 'stock_movement': payload mutasi stok (lihat
 ///   [normalizeStockEvent]).
+/// - kind 'expense' (Batch C7): payload pengeluaran (lihat
+///   [normalizeExpenseEvent]); hapus = is_deleted true.
+/// - kind 'shift' (Batch C7): payload shift kas (lihat
+///   [normalizeShiftEvent]); upsert last-write-wins by client_uuid.
 /// Kunci idempotency = client_uuid (kolom unique di `transactions`
 /// dan `stock_movements`). Entri outbox LAMA (sebelum C6) memakai
 /// client_uuid string angka mikROdetik (bukan UUID) — server
@@ -230,6 +234,136 @@ Map<String, dynamic> normalizeStockEvent({
       'transaction_client_uuid':
           txnRaw is String && txnRaw.isNotEmpty ? txnRaw : null,
       'items': items,
+    },
+  };
+}
+
+/// Angka nullable (null = tidak ada) — [allowNegative] true untuk
+/// selisih tutup kas (boleh kurang = negatif).
+int? _asNullableInt(
+  dynamic value,
+  String field, {
+  bool allowNegative = false,
+}) {
+  if (value == null) return null;
+  if (value is! num) throw ArgumentError('$field bukan angka: $value');
+  final v = value.toInt();
+  if (!allowNegative && v < 0) {
+    throw ArgumentError('$field negatif: $v');
+  }
+  return v;
+}
+
+/// Normalisasi event pengeluaran ('expense') dari satu baris outbox.
+/// Hapus = is_deleted true: hanya client_uuid (+ outlet_id) yang
+/// dibaca server — field lain boleh tidak ada. Selain itu amount
+/// wajib > 0 (CHECK Supabase expenses.amount > 0).
+Map<String, dynamic> normalizeExpenseEvent({
+  required String outboxId,
+  required Map<String, dynamic> rawPayload,
+  required DateTime entryCreatedAt,
+  required String fallbackOutletId,
+}) {
+  final clientUuid = rawPayload['client_uuid'];
+  if (clientUuid is! String || clientUuid.isEmpty) {
+    throw const FormatException('client_uuid kosong');
+  }
+  final outletRaw = rawPayload['outlet_id'];
+  final outletId = (outletRaw is String && outletRaw.isNotEmpty)
+      ? outletRaw
+      : fallbackOutletId;
+  final createdRaw = rawPayload['created_at'];
+  final createdAt = (createdRaw is String && createdRaw.isNotEmpty)
+      ? createdRaw
+      : entryCreatedAt.toIso8601String();
+  if (rawPayload['is_deleted'] == true) {
+    return {
+      'outbox_id': outboxId,
+      'kind': 'expense',
+      'client_uuid': clientUuid,
+      'outlet_id': outletId,
+      'created_at': createdAt,
+      'payload': {'is_deleted': true},
+    };
+  }
+  final category = _asString(rawPayload['category'], 'category');
+  final amount = _asNonNegInt(rawPayload['amount'], 'amount');
+  if (amount == 0) throw ArgumentError('amount harus > 0: 0');
+  final description = rawPayload['description'];
+  final cashierName = rawPayload['cashier_name'];
+  return {
+    'outbox_id': outboxId,
+    'kind': 'expense',
+    'client_uuid': clientUuid,
+    'outlet_id': outletId,
+    'created_at': createdAt,
+    'payload': {
+      'category': category,
+      'description': description is String ? description : '',
+      'amount': amount,
+      'is_cash': rawPayload['is_cash'] != false,
+      'cashier_name': cashierName is String ? cashierName : '',
+      'is_deleted': false,
+    },
+  };
+}
+
+/// Normalisasi event shift kas ('shift'). Upsert last-write-wins
+/// by client_uuid: event buka (closed_* null, status 'open') lalu
+/// event tutup (closed_* terisi, status 'closed') menimpa baris
+/// yang sama. [difference] boleh negatif (kurang).
+Map<String, dynamic> normalizeShiftEvent({
+  required String outboxId,
+  required Map<String, dynamic> rawPayload,
+  required DateTime entryCreatedAt,
+  required String fallbackOutletId,
+}) {
+  final clientUuid = rawPayload['client_uuid'];
+  if (clientUuid is! String || clientUuid.isEmpty) {
+    throw const FormatException('client_uuid kosong');
+  }
+  final outletRaw = rawPayload['outlet_id'];
+  final outletId = (outletRaw is String && outletRaw.isNotEmpty)
+      ? outletRaw
+      : fallbackOutletId;
+  final openedRaw = rawPayload['opened_at'];
+  if (openedRaw is! String || openedRaw.isEmpty) {
+    throw const FormatException('opened_at kosong');
+  }
+  final openingFloat =
+      _asNonNegInt(rawPayload['opening_float'], 'opening_float');
+  final statusRaw = rawPayload['status'];
+  final status = statusRaw == 'closed' ? 'closed' : 'open';
+  final closedRaw = rawPayload['closed_at'];
+  final closedAt =
+      closedRaw is String && closedRaw.isNotEmpty ? closedRaw : null;
+  if (status == 'closed' && closedAt == null) {
+    throw const FormatException('shift closed tanpa closed_at');
+  }
+  final cashierName = rawPayload['cashier_name'];
+  final note = rawPayload['note'];
+  return {
+    'outbox_id': outboxId,
+    'kind': 'shift',
+    'client_uuid': clientUuid,
+    'outlet_id': outletId,
+    'created_at': openedRaw,
+    'payload': {
+      'cashier_name': cashierName is String ? cashierName : '',
+      'opened_at': openedRaw,
+      'opening_float': openingFloat,
+      'closed_at': closedAt,
+      'counted_cash':
+          _asNullableInt(rawPayload['counted_cash'], 'counted_cash'),
+      'expected_cash':
+          _asNullableInt(rawPayload['expected_cash'], 'expected_cash'),
+      'difference': _asNullableInt(
+        rawPayload['difference'],
+        'difference',
+        allowNegative: true,
+      ),
+      'status': status,
+      'note': note is String ? note : '',
     },
   };
 }

@@ -160,6 +160,53 @@ class CashierSessions extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Pengeluaran (Batch C7): satu baris per pengeluaran yang dicatat
+/// kasir/Owner. [id] = client_uuid (UUID v4) — kunci idempotency
+/// sync ke Supabase (kolom expenses.client_uuid, migrasi 009).
+/// [isCash] = true berarti keluar dari laci tunai (mengurangi
+/// expected tutup kas); false = non-tunai (tidak sentuh laci).
+/// [amount] > 0 (CHECK di Supabase expenses.amount > 0).
+/// Hapus = baris lokal dihapus + event 'expense' is_deleted=true
+/// (server hapus by client_uuid) — lihat ExpenseService.
+class Expenses extends Table {
+  TextColumn get id => text()();
+  TextColumn get outletId => text()();
+  TextColumn get category => text()();
+  TextColumn get description => text().withDefault(const Constant(''))();
+  IntColumn get amount => integer()();
+  BoolColumn get isCash => boolean().withDefault(const Constant(true))();
+  TextColumn get cashierName => text().withDefault(const Constant(''))();
+  DateTimeColumn get createdAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Shift kas (Batch C7): satu baris per shift buka s.d. tutup.
+/// [id] = client_uuid (UUID v4) — kunci idempotency sync ke
+/// Supabase (cash_shifts.client_uuid, migrasi 009; upsert
+/// last-write-wins: event buka lalu event tutup menimpa baris yang
+/// sama). MAKSIMAL 1 shift 'open' per outlet (dijaga
+/// CashShiftService). [difference] = counted − expected (boleh
+/// negatif = kurang). [closedAt]/[countedCash]/[expectedCash]/
+/// [difference] null selama shift masih open.
+class CashShifts extends Table {
+  TextColumn get id => text()();
+  TextColumn get outletId => text()();
+  TextColumn get cashierName => text()();
+  DateTimeColumn get openedAt => dateTime()();
+  IntColumn get openingFloat => integer()();
+  DateTimeColumn get closedAt => dateTime().nullable()();
+  IntColumn get countedCash => integer().nullable()();
+  IntColumn get expectedCash => integer().nullable()();
+  IntColumn get difference => integer().nullable()();
+  TextColumn get status => text().withDefault(const Constant('open'))();
+  TextColumn get note => text().withDefault(const Constant(''))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 @DriftDatabase(tables: [
   OutboxEntries,
   LocalProducts,
@@ -170,12 +217,14 @@ class CashierSessions extends Table {
   Toppings,
   Outlets,
   CashierSessions,
+  Expenses,
+  CashShifts,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -230,6 +279,13 @@ class AppDatabase extends _$AppDatabase {
           // TIDAK dihapus.
           if (from < 8) {
             await m.createTable(cashierSessions);
+          }
+          // v8 -> v9 (24 Nov 2026, Batch C7 tutup kas + pengeluaran):
+          // tabel baru Expenses + CashShifts. Tabel lama TIDAK
+          // dihapus.
+          if (from < 9) {
+            await m.createTable(expenses);
+            await m.createTable(cashShifts);
           }
         },
       );

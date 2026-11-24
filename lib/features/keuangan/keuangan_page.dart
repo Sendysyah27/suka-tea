@@ -1,11 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/cash.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
+import '../../core/widgets/tap_feedback.dart';
+import '../../data/expense_service.dart';
 import '../../data/models.dart';
 import '../../data/sale_history.dart';
 import '../../data/stock_service.dart';
+import '../../data/sync_service.dart';
+import '../../features/login/cashier_session.dart';
+import 'expense_sheet.dart';
 
 /// Keuangan — HANYA Owner. Desain v2: hero card emerald gelap untuk
 /// omzet + laba, lalu rincian per cara bayar.
@@ -13,8 +21,10 @@ import '../../data/stock_service.dart';
 /// DATA NYATA dari riwayat penjualan hari ini (bukan lagi angka contoh):
 /// omzet, jumlah transaksi, jumlah cup, rata-rata per transaksi, dan
 /// HPP + laba ESTIMASI (resep x harga bahan yang diatur Owner di tab
-/// Stok — bukan lagi estimasi pasar). Pengeluaran harian belum dicatat
-/// di app, jadi belum dikurangi dari laba.
+/// Stok — bukan lagi estimasi pasar). Laba BERSIH (Batch C7) = omzet −
+/// HPP (estimasi) − pengeluaran hari ini; pengeluaran dicatat di
+/// seksi Pengeluaran di bawah (Kasir + Owner boleh tambah, Owner
+/// boleh hapus).
 class KeuanganPage extends StatelessWidget {
   const KeuanganPage({super.key, required this.role});
 
@@ -37,16 +47,22 @@ class KeuanganPage extends StatelessWidget {
     return ListenableBuilder(
       // Dengarkan juga StockService: harga bahan yang diubah Owner di
       // tab Stok langsung mengubah HPP/laba di halaman ini.
+      // + ExpenseService (Batch C7): pengeluaran hari ini langsung
+      // mengubah laba bersih + daftar pengeluaran di halaman ini.
       listenable: Listenable.merge([
         SaleHistoryService.instance,
         StockService.instance,
+        ExpenseService.instance,
       ]),
       builder: (context, _) {
         // Transaksi void DIKECUALIKAN (Batch C1): omzet, laba, dan
         // rincian tidak menghitung transaksi yang sudah di-void.
         final today =
             SaleHistoryService.instance.activeSalesOn(DateTime.now());
-        if (today.isEmpty) {
+        final expensesTodayList =
+            ExpenseService.instance.expensesOn(DateTime.now());
+        final expensesToday = totalExpenses(expensesTodayList);
+        if (today.isEmpty && expensesTodayList.isEmpty) {
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(24),
@@ -61,11 +77,16 @@ class KeuanganPage extends StatelessWidget {
         }
         // HPP dari harga bahan yang diatur Owner di tab Stok
         // (Batch C1b) — bukan lagi const estimasi di seed_menu.
+        // computeDailyStats dengan daftar kosong = semua 0 (aman
+        // bila hari ini baru ada pengeluaran, belum ada penjualan).
         final stats = computeDailyStats(
           today,
           StockService.instance.recipes,
           StockService.instance.costsByName,
         );
+        // Laba BERSIH (Batch C7) = omzet − HPP (estimasi) −
+        // pengeluaran hari ini. Label "Laba (estimasi)" dipertahankan.
+        final labaBersih = stats.labaEstimate - expensesToday;
         return ListView(
           padding: const EdgeInsets.all(12),
           children: [
@@ -102,7 +123,7 @@ class KeuanganPage extends StatelessWidget {
                         style: TextStyle(color: Colors.white70),
                       ),
                       Text(
-                        formatRupiah(stats.labaEstimate),
+                        formatRupiah(labaBersih),
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
@@ -153,20 +174,159 @@ class KeuanganPage extends StatelessWidget {
               '-${formatRupiah(stats.hppEstimate)}',
               dotColor: SukaTeaColors.danger,
             ),
+            if (expensesToday > 0)
+              _row(
+                'Pengeluaran hari ini',
+                '-${formatRupiah(expensesToday)}',
+                dotColor: SukaTeaColors.danger,
+              ),
             const Padding(
               padding: EdgeInsets.only(top: 8),
               child: Text(
-                'HPP dihitung dari resep x harga bahan yang diatur Owner '
-                'di tab Stok. Pengeluaran harian belum dicatat, jadi belum '
-                'dikurangi dari laba.',
+                'Laba (estimasi) = omzet − HPP (estimasi) − pengeluaran '
+                'hari ini. HPP dihitung dari resep x harga bahan yang '
+                'diatur Owner di tab Stok.',
                 style: TextStyle(color: SukaTeaColors.muted),
               ),
             ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Pengeluaran',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                ),
+                Text(
+                  '${expensesTodayList.length} catatan',
+                  style: const TextStyle(color: SukaTeaColors.muted),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: TapFeedback(
+                child: OutlinedButton.icon(
+                  onPressed: () => _addExpense(context),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 56),
+                  ),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Tambah Pengeluaran'),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (expensesTodayList.isEmpty)
+              const Text(
+                'Belum ada pengeluaran hari ini.',
+                style: TextStyle(color: SukaTeaColors.muted),
+              )
+            else
+              for (final e in expensesTodayList) _expenseRow(context, e),
           ],
         );
       },
     );
   }
+
+  /// Sheet tambah pengeluaran (Batch C7) — halaman ini Owner-only;
+  /// Kasir tambah lewat Laporan → Tambah Pengeluaran (fix review
+  /// Jhon — kasir butuh jalan masuk di tengah shift). Nama pencatat
+  /// dari sesi kasir aktif, fallback 'Owner'. Sesudah simpan, sync
+  /// fire-and-forget (pola C6).
+  Future<void> _addExpense(BuildContext context) async {
+    final input = await showExpenseSheet(context);
+    if (input == null) return;
+    final cashierName =
+        CashierSessionService.instance.cashierName ?? 'Owner';
+    await ExpenseService.instance.addExpense(
+      category: input.category,
+      description: input.description,
+      amount: input.amount,
+      isCash: input.isCash,
+      cashierName: cashierName,
+    );
+    unawaited(SyncService.instance.syncNow());
+  }
+
+  /// Hapus pengeluaran (HANYA Owner — halaman ini Owner-only).
+  /// Konfirmasi dulu; hapus lokal + antre event is_deleted=true.
+  Future<void> _confirmDeleteExpense(
+    BuildContext context,
+    Expense expense,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Hapus pengeluaran?'),
+        content: Text(
+          '${expense.category} • ${formatRupiah(expense.amount)}'
+          '${expense.description.isNotEmpty ? '\n${expense.description}' : ''}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Ya, hapus'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await ExpenseService.instance.deleteExpense(expense.id);
+      unawaited(SyncService.instance.syncNow());
+    }
+  }
+
+  Widget _expenseRow(BuildContext context, Expense e) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    e.category,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  if (e.description.isNotEmpty)
+                    Text(
+                      e.description,
+                      style: const TextStyle(color: SukaTeaColors.muted),
+                    ),
+                  Text(
+                    '${e.isCash ? 'Tunai' : 'Non-tunai'}'
+                    ' • ${e.cashierName} • ${_clock(e.createdAt)}',
+                    style: const TextStyle(color: SukaTeaColors.muted),
+                  ),
+                ],
+              ),
+            ),
+            Text(
+              '-${formatRupiah(e.amount)}',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Hapus pengeluaran',
+              onPressed: () => _confirmDeleteExpense(context, e),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _clock(DateTime d) =>
+      '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
   Widget _row(String label, String value, {Color? dotColor}) {
     return Card(

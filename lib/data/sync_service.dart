@@ -39,7 +39,9 @@ typedef FlushResult = ({
 /// - Transport throw / jawaban rusak = SEMUA event dianggap gagal
 ///   (jangan tandai terkirim tanpa konfirmasi server).
 /// - Urutan pengiriman = urutan createdAt antrean (FIFO) — penting
-///   supaya event void tidak tertukar dengan penjualan asalnya.
+///   supaya event void tidak tertukar dengan penjualan asalnya, dan
+///   event hapus pengeluaran / tutup shift selalu sesudah event
+///   tambah / buka baris yang sama.
 Future<FlushResult> flushOutboxEntries(
   List<OutboxEntry> pending,
   SyncTransport transport,
@@ -60,20 +62,7 @@ Future<FlushResult> flushOutboxEntries(
         skipped.add(entry.id);
         continue;
       }
-      final event = entry.kind == 'stock_movement'
-          ? normalizeStockEvent(
-              outboxId: entry.id,
-              rawPayload: raw,
-              entryCreatedAt: entry.createdAt,
-              fallbackOutletId: defaultOutletId,
-            )
-          : normalizeSaleEvent(
-              outboxId: entry.id,
-              rawPayload: raw,
-              entryCreatedAt: entry.createdAt,
-              fallbackOutletId: defaultOutletId,
-            );
-      events.add(event);
+      events.add(_normalizeEntry(entry, raw));
     } catch (e) {
       debugPrint('Sync: antrean ${entry.id} dilewati (payload tidak '
           'valid): $e');
@@ -106,6 +95,46 @@ Future<FlushResult> flushOutboxEntries(
       skippedIds: skipped,
     );
   }
+}
+
+/// Pilih normalizer per kind antrean. Kind tak dikenal jatuh ke
+/// [normalizeSaleEvent] (perilaku lama C6) — normalizer itu throw
+/// karena field penjualan tidak ada, jadi entri masuk failed tanpa
+/// memblokir antrean lain.
+Map<String, dynamic> _normalizeEntry(
+  OutboxEntry entry,
+  Map<String, dynamic> raw,
+) {
+  if (entry.kind == 'stock_movement') {
+    return normalizeStockEvent(
+      outboxId: entry.id,
+      rawPayload: raw,
+      entryCreatedAt: entry.createdAt,
+      fallbackOutletId: defaultOutletId,
+    );
+  }
+  if (entry.kind == 'expense') {
+    return normalizeExpenseEvent(
+      outboxId: entry.id,
+      rawPayload: raw,
+      entryCreatedAt: entry.createdAt,
+      fallbackOutletId: defaultOutletId,
+    );
+  }
+  if (entry.kind == 'shift') {
+    return normalizeShiftEvent(
+      outboxId: entry.id,
+      rawPayload: raw,
+      entryCreatedAt: entry.createdAt,
+      fallbackOutletId: defaultOutletId,
+    );
+  }
+  return normalizeSaleEvent(
+    outboxId: entry.id,
+    rawPayload: raw,
+    entryCreatedAt: entry.createdAt,
+    fallbackOutletId: defaultOutletId,
+  );
 }
 
 /// Sinkronisasi Supabase per-gerai (Batch C6).

@@ -1,4 +1,4 @@
-// SUKA TEA — Edge Function `sync-sales` (Batch C6)
+// SUKA TEA — Edge Function `sync-sales` (Batch C6 + C7)
 // Sinkronisasi penjualan + mutasi stok per-gerai, dan baca live
 // untuk Pantau Gerai Owner.
 //
@@ -12,6 +12,10 @@
 //     transactions: [...], items: [{ transaction_client_uuid,
 //     name_snapshot, qty, unit_price, modifiers_json }] }.
 //   400 input tidak valid / 500 error Supabase.
+//
+// Batch C7: kind 'expense' (upsert pengeluaran by client_uuid;
+// is_deleted true = hapus baris) + kind 'shift' (upsert shift kas
+// by client_uuid, last-write-wins: event tutup menimpa event buka).
 //
 // JALUR TULIS: Edge Function ini (bukan tulis langsung dari app).
 // RLS 001 menuntut auth.uid() membership — anon key tidak punya
@@ -322,6 +326,112 @@ async function pushStockMovement(
   return { applied_items: applied };
 }
 
+/// Upsert satu pengeluaran; is_deleted true = hapus baris by
+/// client_uuid (keputusan C7: hapus = event, bukan hapus langsung —
+/// antrean yang sama dipakai semua jenis sync, hapus offline tetap
+/// jalan lalu tersinkron saat online).
+async function pushExpense(
+  supabase: Supabase,
+  ev: Record<string, unknown>,
+): Promise<{ deleted: boolean }> {
+  const outletId = String(ev.outlet_id ?? "");
+  if (!UUID_RE.test(outletId)) throw new Error("outlet_id bukan UUID");
+  const p = ev.payload as Record<string, unknown> | undefined;
+  if (p == null || typeof p !== "object") throw new Error("payload hilang");
+  const clientUuid = await normalizeClientUuid(String(ev.client_uuid ?? ""));
+  if (p.is_deleted === true) {
+    const { error: delErr } = await supabase
+      .from("expenses")
+      .delete()
+      .eq("client_uuid", clientUuid);
+    if (delErr) throw new Error(`hapus pengeluaran gagal: ${delErr.message}`);
+    return { deleted: true };
+  }
+  const category = String(p.category ?? "");
+  if (category === "") throw new Error("category kosong");
+  const amount = toPosInt(p.amount, "amount");
+  const isCash = p.is_cash !== false;
+  const cashierName =
+    typeof p.cashier_name === "string" ? p.cashier_name : "";
+  const description =
+    typeof p.description === "string" ? p.description : "";
+  const createdAt = String(ev.created_at ?? new Date().toISOString());
+  const { error: upErr } = await supabase
+    .from("expenses")
+    .upsert(
+      {
+        outlet_id: outletId,
+        category,
+        description,
+        amount,
+        is_cash: isCash,
+        cashier_name: cashierName,
+        client_uuid: clientUuid,
+        created_at: createdAt,
+      },
+      { onConflict: "client_uuid" },
+    );
+  if (upErr) throw new Error(`upsert pengeluaran gagal: ${upErr.message}`);
+  return { deleted: false };
+}
+
+/// Upsert satu shift kas (last-write-wins by client_uuid): event
+/// buka (status 'open', closed_* null) lalu event tutup (status
+/// 'closed') menimpa baris yang sama. difference boleh negatif
+/// (kurang) — tidak ada CHECK di bawah 0 untuk kolom itu.
+async function pushShift(
+  supabase: Supabase,
+  ev: Record<string, unknown>,
+): Promise<{ status: string }> {
+  const outletId = String(ev.outlet_id ?? "");
+  if (!UUID_RE.test(outletId)) throw new Error("outlet_id bukan UUID");
+  const p = ev.payload as Record<string, unknown> | undefined;
+  if (p == null || typeof p !== "object") throw new Error("payload hilang");
+  const clientUuid = await normalizeClientUuid(String(ev.client_uuid ?? ""));
+  const cashierName =
+    typeof p.cashier_name === "string" ? p.cashier_name : "";
+  const openedAt = String(p.opened_at ?? "");
+  if (Number.isNaN(Date.parse(openedAt))) {
+    throw new Error("opened_at bukan tanggal");
+  }
+  const openingFloat = toNonNegInt(p.opening_float ?? 0, "opening_float");
+  const statusRaw = String(p.status ?? "open");
+  const status = statusRaw === "closed" ? "closed" : "open";
+  const closedRaw = p.closed_at;
+  const closedAt =
+    typeof closedRaw === "string" && closedRaw !== "" ? closedRaw : null;
+  if (status === "closed" && closedAt == null) {
+    throw new Error("shift closed tanpa closed_at");
+  }
+  if (closedAt != null && Number.isNaN(Date.parse(closedAt))) {
+    throw new Error("closed_at bukan tanggal");
+  }
+  const optInt = (v: unknown, field: string): number | null => {
+    if (v == null) return null;
+    return Math.trunc(toNumber(v, field));
+  };
+  const { error: upErr } = await supabase
+    .from("cash_shifts")
+    .upsert(
+      {
+        outlet_id: outletId,
+        cashier_name: cashierName,
+        opened_at: openedAt,
+        opening_float: openingFloat,
+        closed_at: closedAt,
+        counted_cash: optInt(p.counted_cash, "counted_cash"),
+        expected_cash: optInt(p.expected_cash, "expected_cash"),
+        difference: optInt(p.difference, "difference"),
+        status,
+        note: typeof p.note === "string" ? p.note : "",
+        client_uuid: clientUuid,
+      },
+      { onConflict: "client_uuid" },
+    );
+  if (upErr) throw new Error(`upsert shift gagal: ${upErr.message}`);
+  return { status };
+}
+
 /// Baca transaksi gerai untuk Pantau Gerai live.
 /// Hari dalam WIB (toko di UTC+7): from 00:00 WIB s.d. to+1 00:00 WIB.
 async function pull(
@@ -428,6 +538,10 @@ Deno.serve(async (req: Request) => {
             await pushTransaction(supabase, ev);
           } else if (ev.kind === "stock_movement") {
             await pushStockMovement(supabase, ev);
+          } else if (ev.kind === "expense") {
+            await pushExpense(supabase, ev);
+          } else if (ev.kind === "shift") {
+            await pushShift(supabase, ev);
           } else {
             throw new Error(`kind tidak dikenal: ${String(ev.kind ?? "")}`);
           }
