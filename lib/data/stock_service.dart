@@ -9,6 +9,7 @@ import 'models.dart';
 import 'outlet_service.dart';
 import 'c10_models.dart';
 import 'master_sync.dart';
+import 'menu_service.dart';
 import 'recipe_logic.dart';
 import 'seed_menu.dart';
 import 'seed_recipes.dart';
@@ -27,21 +28,28 @@ String stockTouchedKey(String outletId, String name) => '$outletId|$name';
 
 /// Rencana merge stok server -> lokal (Batch C9, MURNI).
 /// Aturan per item server:
-/// - tidak ada level lokal -> sisipkan utuh (qty + meta server).
+/// - tidak ada level lokal -> sisipkan utuh (qty + meta server),
+///   KECUALI biaya server 0 -> disisipkan sebagai -1 ("belum
+///   diatur", Batch C10.1 Bug 2b — server 0 = tidak ada info biaya).
 /// - level lokal ada TAPI belum pernah disentuh device ini
 ///   ([touchedKeys] tidak berisi kuncinya — seed segar yang belum
 ///   pernah kena penjualan/koreksi/harga di HP ini) -> ADOPSI
-///   utuh dari server (qty + meta). Ini jalan HP baru / gerai yang
-///   belum pernah dipakai di HP ini mendapat angka server yang
-///   benar, bukan angka seed.
+///   utuh dari server (qty + meta), KECUALI biaya server 0 ->
+///   tetap -1 (alasan yang sama).
 /// - level lokal sudah disentuh -> qty TIDAK PERNAH ditimpa dari
 ///   pull (qty digerakkan delta oleh mutasi; level absolut server
 ///   bisa ketinggalan) — hanya meta (unit, lowThreshold, cost)
 ///   yang diambil dari server, DAN hanya bila tidak ada mutasi
 ///   pending untuk nama itu ([pendingNames] — mutasi pending
 ///   membawa meta yang lebih baru dari server).
-/// - item lokal yang tidak ada di server -> dibiarkan (bisa jadi
-///   bahan baru yang mutasi pembuatannya belum terkirim).
+/// - BIAYA (Batch C10.1 Bug 2b): biaya server hanya diadopsi bila
+///   > 0. Server 0 = tidak ada info biaya (CHECK `cost >= 0` di
+///   DB + tulisan 0 lama dari clamp -1 era C9) — jangan pernah
+///   menimpa biaya lokal (baik yang sudah diatur Owner maupun
+///   -1 "belum diatur") dengan 0. Biaya 0 yang asli (gratis,
+///   diatur Owner) tidak bisa dibedakan dari 0 lama di pull —
+///   Owner bisa atur ulang di HP ini; Stok menampilkan
+///   "belum diatur" bila biayanya -1, jadi kasus itu ketahuan.
 StockMergePlan planStockMerge({
   required List<StockItem> local,
   required List<StockItem> server,
@@ -58,20 +66,35 @@ StockMergePlan planStockMerge({
     if (s.name.isEmpty) continue;
     final existing = localByName[s.name];
     if (existing == null) {
-      toInsert.add(s.copyWith(outletId: outletId));
+      // Batch C10.1 Bug 2b: biaya server 0 = tidak ada info —
+      // sisipkan sebagai -1 ("belum diatur"), bukan 0.
+      toInsert.add(
+        s.copyWith(
+          outletId: outletId,
+          costPerUnit: s.costPerUnit == 0 ? -1 : s.costPerUnit,
+        ),
+      );
       continue;
     }
     final key = stockTouchedKey(outletId, s.name);
     if (!touchedKeys.contains(key)) {
-      // Seed segar — adopsi utuh dari server.
-      toUpdate.add(s.copyWith(outletId: outletId));
+      // Seed segar — adopsi utuh dari server (biaya 0 -> -1,
+      // alasan yang sama).
+      toUpdate.add(
+        s.copyWith(
+          outletId: outletId,
+          costPerUnit: s.costPerUnit == 0 ? -1 : s.costPerUnit,
+        ),
+      );
       continue;
     }
     if (pendingNames.contains(s.name)) continue;
     toUpdate.add(existing.copyWith(
       unit: s.unit,
       lowThreshold: s.lowThreshold,
-      costPerUnit: s.costPerUnit,
+      // Batch C10.1 Bug 2b: biaya server hanya diadopsi bila > 0 —
+      // server 0 tidak pernah menimpa biaya lokal.
+      costPerUnit: s.costPerUnit > 0 ? s.costPerUnit : existing.costPerUnit,
       // Batch C10 WS0: masa simpan ikut dari server (meta, bukan qty).
       shelfLifeDays: s.shelfLifeDays,
     ));
@@ -256,6 +279,26 @@ class StockService extends ChangeNotifier {
         );
       }
     }
+    // Batch C10.1 Bug 2b: backfill juga untuk gerai LAIN yang sudah
+    // ada level lokalnya (bukan cuma gerai aktif) — supaya HPP
+    // "Semua gerai" konsisten antar gerai di HP yang sama. Lokal
+    // saja (tanpa antre event) — gerai non-aktif bukan tanggung
+    // jawab HP ini untuk sinkron biayanya; event backfill tetap
+    // hanya untuk gerai aktif seperti di atas.
+    var otherBackfilled = false;
+    for (final entry in _levelsByOutlet.entries) {
+      if (entry.key == _activeOutletId) continue;
+      final f = backfillCosts(entry.value, seedStockCostPerUnit);
+      var diff = false;
+      for (var i = 0; i < f.length; i++) {
+        if (f[i].costPerUnit != entry.value[i].costPerUnit) diff = true;
+      }
+      if (diff) {
+        _levelsByOutlet[entry.key] = f;
+        otherBackfilled = true;
+      }
+    }
+    if (otherBackfilled) await _saveAllLevels();
     _initialized = true;
     notifyListeners();
   }
@@ -372,6 +415,29 @@ class StockService extends ChangeNotifier {
   /// dilihat — HPP dihitung dari stok gerai itu).
   Map<String, double> costsByNameFor(String outletId) =>
       costsFromLevels(levelsFor(outletId));
+
+  /// true = ada bahan resep produk AKTIF yang biayanya belum diatur
+  /// di gerai [outletId] — [costPerUnit] < 0, atau bahannya belum ada
+  /// di level gerai itu (Batch C10.1 Bug 2b). Dipakai Keuangan +
+  /// Dashboard Owner: HPP tidak bisa dihitung jujur bila ada bahan
+  /// resep yang biayanya belum diatur — tampil "belum diatur",
+  /// bukan Rp0. Resep global; "aktif" = produknya aktif di menu
+  /// (MenuService) — resep produk nonaktif tidak dihitung.
+  bool hasUnsetCostsFor(String outletId) {
+    final byName = stockByNameFor(outletId);
+    final activeIds = <String>{
+      for (final p in MenuService.instance.products)
+        if (p.isActive) p.id,
+    };
+    for (final entry in _recipes.entries) {
+      if (!activeIds.contains(_productIdOfVariant(entry.key))) continue;
+      for (final line in entry.value) {
+        final item = byName[line.stockName];
+        if (item == null || item.costPerUnit < 0) return true;
+      }
+    }
+    return false;
+  }
 
   /// Peta biaya murni dari daftar level (dipakai costsByName + test).
   /// -1 (belum diatur) dihitung Rp0 untuk HPP — biaya tidak boleh
@@ -637,12 +703,14 @@ String _productIdOfVariant(String variantId) =>
       if (i < 0) {
         // Bahan belum ada di HP ini — buat baris qty 0 (qty nyata
         // datang dari mergePulledStock / kiriman berikutnya).
+        // Batch C10.1 Bug 2b: biaya server 0 = tidak ada info —
+        // simpan -1 ("belum diatur"), bukan 0.
         final item = StockItem(
           name: name,
           unit: unit ?? 'pcs',
           qty: 0,
           lowThreshold: low ?? 0,
-          costPerUnit: cost ?? -1,
+          costPerUnit: (cost == null || cost == 0) ? -1 : cost,
           outletId: outletId,
           shelfLifeDays: shelf ?? 0,
         );
@@ -653,7 +721,10 @@ String _productIdOfVariant(String variantId) =>
         final updated = levels[i].copyWith(
           unit: unit,
           lowThreshold: low,
-          costPerUnit: cost,
+          // Batch C10.1 Bug 2b: biaya server 0 = tidak ada info —
+          // jangan timpa biaya lokal (copyWith null = pertahankan
+          // nilai lama). Hanya biaya > 0 yang diadopsi.
+          costPerUnit: (cost == null || cost <= 0) ? null : cost,
           shelfLifeDays: shelf,
         );
         if (updated.unit != levels[i].unit ||
@@ -732,8 +803,11 @@ String _productIdOfVariant(String variantId) =>
         if (oldName != null) 'old_name': oldName,
         'unit': item.unit,
         'low_threshold': item.lowThreshold,
-        'cost_per_unit':
-            item.costPerUnit < 0 ? 0 : item.costPerUnit.round(),
+        // Batch C10.1 Bug 2b: biaya belum diatur (-1) JANGAN dikirim
+        // sebagai 0 — kunci dihilangkan supaya server tidak menimpa
+        // harga yang sudah diatur dengan 0 (sentinel hancur).
+        if (item.costPerUnit >= 0)
+          'cost_per_unit': item.costPerUnit.round(),
         'shelf_life_days': item.shelfLifeDays,
       },
     ));
@@ -772,8 +846,11 @@ String _productIdOfVariant(String variantId) =>
             'unit': before.unit,
             'qty_after': qty,
             'low_threshold': lowThreshold,
-            'cost_per_unit':
-                before.costPerUnit < 0 ? 0 : before.costPerUnit.round(),
+            // Batch C10.1 Bug 2b: biaya belum diatur (-1) JANGAN
+            // dikirim sebagai 0 — kunci dihilangkan (lihat
+            // _enqueueStockConfig).
+            if (before.costPerUnit >= 0)
+              'cost_per_unit': before.costPerUnit.round(),
             'delta': qty - before.qty,
           },
         ],
@@ -820,7 +897,10 @@ String _productIdOfVariant(String variantId) =>
             'unit': unit,
             'qty_after': qty,
             'low_threshold': lowThreshold,
-            'cost_per_unit': 0,
+            // Batch C10.1 Bug 2b: bahan baru biayanya -1 ("belum
+            // diatur") — JANGAN kirim 0 (server akan mengira
+            // biayanya 0). Kunci dihilangkan; biaya dikirim bila
+            // Owner mengisinya lewat _enqueueStockConfig.
             'delta': qty,
           },
         ],
@@ -857,9 +937,18 @@ String _productIdOfVariant(String variantId) =>
     for (final item in [...plan.toInsert, ...plan.toUpdate]) {
       updated[item.name] = item;
     }
-    _levelsByOutlet[outletId] = updated.values.toList();
+    // Batch C10.1 Bug 2b: backfill biaya seed sesudah merge — bahan
+    // yang biayanya masih -1 (mis. server 0 = tidak ada info, atau
+    // bahan baru dari server) dan seed punya nilai > 0 mendapat
+    // biaya seed, supaya HPP konsisten antar gerai/HP. Teh Masak +
+    // topping (seed 0) tetap -1 sampai Owner mengisinya.
+    final filled = backfillCosts(
+      updated.values.toList(),
+      seedStockCostPerUnit,
+    );
+    _levelsByOutlet[outletId] = filled;
     notifyListeners();
-    for (final item in [...plan.toInsert, ...plan.toUpdate]) {
+    for (final item in filled) {
       await _saveOneLevel(item);
     }
   }
@@ -943,10 +1032,11 @@ String _productIdOfVariant(String variantId) =>
         'unit': before.unit,
         'qty_after': afterQty,
         'low_threshold': before.lowThreshold,
-        // -1 = harga belum diatur Owner -> server terima 0
-        // (sama seperti HPP lokal yang menghitungnya Rp0).
-        'cost_per_unit':
-            before.costPerUnit < 0 ? 0 : before.costPerUnit.round(),
+        // Batch C10.1 Bug 2b: biaya belum diatur (-1) JANGAN
+        // dikirim sebagai 0 — kunci dihilangkan (lihat
+        // _enqueueStockConfig).
+        if (before.costPerUnit >= 0)
+          'cost_per_unit': before.costPerUnit.round(),
         'delta': -entry.value,
       });
     }
@@ -992,8 +1082,11 @@ String _productIdOfVariant(String variantId) =>
         'unit': before.unit,
         'qty_after': updated[i].qty,
         'low_threshold': before.lowThreshold,
-        'cost_per_unit':
-            before.costPerUnit < 0 ? 0 : before.costPerUnit.round(),
+        // Batch C10.1 Bug 2b: biaya belum diatur (-1) JANGAN
+        // dikirim sebagai 0 — kunci dihilangkan (lihat
+        // _enqueueStockConfig).
+        if (before.costPerUnit >= 0)
+          'cost_per_unit': before.costPerUnit.round(),
         'delta': entry.value,
       });
     }
@@ -1128,8 +1221,11 @@ String _productIdOfVariant(String variantId) =>
         'unit': before.unit,
         'qty_after': afterQty,
         'low_threshold': before.lowThreshold,
-        'cost_per_unit':
-            before.costPerUnit < 0 ? 0 : before.costPerUnit.round(),
+        // Batch C10.1 Bug 2b: biaya belum diatur (-1) JANGAN
+        // dikirim sebagai 0 — kunci dihilangkan (lihat
+        // _enqueueStockConfig).
+        if (before.costPerUnit >= 0)
+          'cost_per_unit': before.costPerUnit.round(),
         'delta': realDelta,
       });
     }

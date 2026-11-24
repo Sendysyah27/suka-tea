@@ -358,7 +358,17 @@ async function pushStockMovement(
         : "pcs";
     const qtyAfter = toNumber(item.qty_after, "item.qty_after");
     const lowThreshold = toNumber(item.low_threshold ?? 0, "item.low_threshold");
-    const cost = toNonNegInt(item.cost_per_unit ?? 0, "item.cost_per_unit");
+    // Batch C10.1 Bug 2b: cost_per_unit yang TIDAK DIKIRIM atau 0
+    // = biaya belum diatur — JANGAN menimpa harga server dengan 0
+    // (sentinel -1 app hancur; itu akar HPP Rp0). Harga hanya
+    // diubah bila item membawa biaya > 0. Biaya 0 yang asli
+    // (gratis, diatur Owner) sampai lewat event master
+    // 'stock_item_config', bukan lewat mutasi.
+    const rawCost = item.cost_per_unit;
+    const hasCost = typeof rawCost === "number" && rawCost > 0;
+    const cost = hasCost
+      ? toNonNegInt(rawCost, "item.cost_per_unit")
+      : 0;
     const delta = toNumber(item.delta, "item.delta");
 
     // 1) Pastikan baris stok gerai ini ada. Baris baru memakai
@@ -384,9 +394,16 @@ async function pushStockMovement(
         (existingStock as { qty: number }).qty ?? 0,
       );
       rowPreExisted = true;
+      const stockPatch: Record<string, unknown> = {
+        unit,
+        low_threshold: lowThreshold,
+      };
+      // Hanya bila item membawa biaya: tanpa biaya, harga server
+      // dibiarkan (jangan timpa dengan 0 — lihat hasCost di atas).
+      if (hasCost) stockPatch["cost"] = cost;
       const { error: updErr } = await supabase
         .from("stock_items")
-        .update({ unit, low_threshold: lowThreshold, cost })
+        .update(stockPatch)
         .eq("id", stockId);
       if (updErr) {
         throw new Error(`update stok gagal: ${updErr.message}`);

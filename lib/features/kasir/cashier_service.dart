@@ -105,6 +105,28 @@ bool isValidCashierName(String name) {
   return trimmed.isNotEmpty && trimmed.length <= 50;
 }
 
+/// Body dasar panggilan Edge Function kasir yang butuh bukti Owner
+/// (list/register/set-pin/set-active).
+///
+/// PIN Owner GLOBAL (koreksi Sendy 24 Nov 2026, Batch C10.1): SATU
+/// PIN untuk semua gerai — hash-nya hanya ada di baris outlet global
+/// (...0001). Jadi [outlet_id] yang dikirim SELALU baris global,
+/// BUKAN gerai yang sedang dipilih (gerai lain akan dijawab EF
+/// `not_set` bila mengirim outlet_id-nya sendiri). Fungsi ini sengaja
+/// TIDAK menerima outlet_id — tidak ada jalan untuk mengirim yang
+/// salah. Dipakai keempat metode Owner di [CashierService]; tes
+/// menegaskan body-nya selalu global (test/cashier_service_test.dart).
+Map<String, dynamic> cashierOwnerBody({
+  required String ownerPin,
+  Map<String, dynamic> extra = const {},
+}) {
+  return {
+    'outlet_id': PinService.defaultOutletId,
+    'owner_pin': ownerPin,
+    ...extra,
+  };
+}
+
 /// Registri kasir (Batch C8.2): Owner mendaftarkan kasir (nama + PIN
 /// 6 digit, berlaku di semua gerai); kasir login HANYA dengan PIN —
 /// identitas (id + nama) datang dari server, bukan ketikan kasir.
@@ -207,12 +229,10 @@ class CashierService {
     try {
       final res = await SupabaseService.instance.client.functions.invoke(
         'register-cashier',
-        body: {
-          'outlet_id': _outletId,
-          'owner_pin': ownerPin,
-          'name': name.trim(),
-          'pin': pin,
-        },
+        body: cashierOwnerBody(
+          ownerPin: ownerPin,
+          extra: {'name': name.trim(), 'pin': pin},
+        ),
       );
       final data = res.data;
       if (data is Map && data['ok'] == true) {
@@ -245,7 +265,7 @@ class CashierService {
     try {
       final res = await SupabaseService.instance.client.functions.invoke(
         'list-cashiers',
-        body: {'outlet_id': _outletId, 'owner_pin': ownerPin},
+        body: cashierOwnerBody(ownerPin: ownerPin),
       );
       return parseCashierListResponse(res.data);
     } catch (e) {
@@ -270,12 +290,10 @@ class CashierService {
     try {
       final res = await SupabaseService.instance.client.functions.invoke(
         'set-cashier-pin',
-        body: {
-          'outlet_id': _outletId,
-          'owner_pin': ownerPin,
-          'cashier_id': cashierId,
-          'pin': pin,
-        },
+        body: cashierOwnerBody(
+          ownerPin: ownerPin,
+          extra: {'cashier_id': cashierId, 'pin': pin},
+        ),
       );
       final data = res.data;
       if (data is Map && data['ok'] == true) {
@@ -298,12 +316,10 @@ class CashierService {
     try {
       final res = await SupabaseService.instance.client.functions.invoke(
         'set-cashier-active',
-        body: {
-          'outlet_id': _outletId,
-          'owner_pin': ownerPin,
-          'cashier_id': cashierId,
-          'active': active,
-        },
+        body: cashierOwnerBody(
+          ownerPin: ownerPin,
+          extra: {'cashier_id': cashierId, 'active': active},
+        ),
       );
       final data = res.data;
       return data is Map && data['ok'] == true;

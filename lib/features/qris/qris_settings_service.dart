@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../data/supabase_client.dart';
+import '../pin/pin_service.dart';
 import 'qris_service.dart';
 
 /// Hasil mentah Edge Function `get-qris-payload` ->
@@ -110,7 +111,9 @@ class QrisSettingsService {
     try {
       final res = await SupabaseService.instance.client.functions.invoke(
         'get-qris-payload',
-        body: {'outlet_id': currentOutletId},
+        // Batch C10.1 Bug 1: kirim baris global — EF get-qris-payload
+        // memang selalu baca baris global; konsisten dengan save().
+        body: {'outlet_id': PinService.defaultOutletId},
       );
       final parsed = parseGetQrisResponse(res.data);
       if (!parsed.ok) {
@@ -176,7 +179,11 @@ class QrisSettingsService {
       final res = await SupabaseService.instance.client.functions.invoke(
         'set-qris-payload',
         body: {
-          'outlet_id': currentOutletId,
+          // Batch C10.1 Bug 1: PIN Owner GLOBAL — kirim baris
+          // global (...0001), BUKAN gerai yang sedang dipilih
+          // (hash PIN hanya ada di baris global; gerai lain akan
+          // dijawab EF `not_set`).
+          'outlet_id': PinService.defaultOutletId,
           'pin': ownerPin,
           'value': payload,
         },
@@ -218,7 +225,8 @@ class QrisSettingsService {
       final res = await SupabaseService.instance.client.functions.invoke(
         'set-qris-payload',
         body: {
-          'outlet_id': currentOutletId,
+          // Batch C10.1 Bug 1: PIN Owner GLOBAL — lihat save().
+          'outlet_id': PinService.defaultOutletId,
           'pin': ownerPin,
           'delete': true,
         },

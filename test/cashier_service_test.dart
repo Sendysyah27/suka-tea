@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:suka_tea/features/kasir/cashier_service.dart';
+import 'package:suka_tea/features/pin/pin_service.dart';
 
 /// Parser jawaban Edge Function kasir (Batch C8.2) — level fungsi saja.
 /// Jaringan asli TIDAK BISA di-test di CI (butuh Supabase + PIN Owner),
@@ -139,6 +140,35 @@ void main() {
       expect(isValidCashierName('   '), isFalse);
       expect(isValidCashierName('a' * 51), isFalse);
       expect(isValidCashierName('a' * 50), isTrue);
+    });
+  });
+
+  group('cashierOwnerBody (Batch C10.1 Bug 1 — PIN Owner GLOBAL)', () {
+    test('outlet_id SELALU baris global ...0001', () {
+      final body = cashierOwnerBody(ownerPin: '123456');
+      expect(body['outlet_id'], '00000000-0000-0000-0000-000000000001');
+      expect(body['owner_pin'], '123456');
+    });
+
+    test('extra digabung, outlet_id tetap global (tidak bisa ditimpa)', () {
+      // Keempat metode Owner (list/register/set-pin/set-active)
+      // membangun body lewat fungsi ini — gerai yang dipilih
+      // (Gerai 2/3/4) TIDAK PERNAH masuk body: builder ini sengaja
+      // tidak menerima outlet_id, jadi tidak ada jalan untuk
+      // mengirim outlet_id gerai lain (itu akar bug 24 Nov 20:10:
+      // EF menjawab not_set di gerai selain Gerai 1).
+      final body = cashierOwnerBody(
+        ownerPin: '123456',
+        extra: {'name': 'Budi', 'pin': '654321'},
+      );
+      expect(body['outlet_id'], '00000000-0000-0000-0000-000000000001');
+      expect(body['name'], 'Budi');
+      expect(body['pin'], '654321');
+      expect(
+        body['outlet_id'],
+        PinService.defaultOutletId,
+        reason: 'sama dengan konstanta global PinService',
+      );
     });
   });
 }

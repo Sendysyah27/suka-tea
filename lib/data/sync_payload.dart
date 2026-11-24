@@ -279,18 +279,26 @@ Map<String, dynamic> normalizeStockEvent({
   final items = <Map<String, dynamic>>[];
   for (final raw in itemsRaw) {
     if (raw is! Map) throw const FormatException('item stok bukan Map');
-    items.add({
+    // Batch C10.1 Bug 2b: cost_per_unit yang TIDAK ADA atau 0 =
+    // biaya belum diatur — JANGAN diisi 0 (server akan menimpa
+    // harga dengan 0 dan sentinel -1 hancur). Biaya 0 yang asli
+    // (gratis, diatur Owner) tetap sampai server lewat event master
+    // 'stock_item_config' (lihat _enqueueStockConfig), bukan lewat
+    // mutasi stok — jadi mutasi hanya membawa biaya bila > 0.
+    final item = <String, dynamic>{
       'name': _asString(raw['name'], 'item.name'),
       'unit': raw['unit'] is String ? raw['unit'] as String : 'pcs',
       'qty_after': _asNumber(raw['qty_after'], 'item.qty_after'),
       'low_threshold': raw.containsKey('low_threshold')
           ? _asNumber(raw['low_threshold'], 'item.low_threshold')
           : 0.0,
-      'cost_per_unit': raw.containsKey('cost_per_unit')
-          ? _asNonNegInt(raw['cost_per_unit'], 'item.cost_per_unit')
-          : 0,
       'delta': _asNumber(raw['delta'], 'item.delta'),
-    });
+    };
+    if (raw.containsKey('cost_per_unit')) {
+      final cost = _asNonNegInt(raw['cost_per_unit'], 'item.cost_per_unit');
+      if (cost > 0) item['cost_per_unit'] = cost;
+    }
+    items.add(item);
   }
   final clientUuid = rawPayload['client_uuid'];
   if (clientUuid is! String || clientUuid.isEmpty) {

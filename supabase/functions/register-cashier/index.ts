@@ -35,6 +35,12 @@ const WINDOW_MINUTES = 10;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// PIN Owner GLOBAL (koreksi Sendy 24 Nov 2026, Batch C10.1): SATU
+// PIN untuk semua gerai — hash + rate limit selalu baris global
+// (...0001); outlet_id dari client hanya divalidasi formatnya,
+// tidak dipakai untuk lookup PIN.
+const GLOBAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -42,8 +48,10 @@ function json(body: unknown, status = 200) {
   });
 }
 
-/// Verifikasi PIN Owner gerai [outletId] (pola set-qris-payload).
-/// Mengembalikan null bila cocok, Response error bila tidak.
+/// Verifikasi PIN Owner GLOBAL (pola set-qris-payload) — [outletId]
+/// HARUS baris global ...0001 (pemanggil menormalisasi dulu,
+/// Batch C10.1). Mengembalikan null bila cocok, Response error
+/// bila tidak.
 async function verifyOwnerPin(
   supabase: ReturnType<typeof createClient>,
   outletId: string,
@@ -97,11 +105,11 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "Edge Function belum dikonfigurasi" }, 501);
     }
     const body = await req.json().catch(() => ({}));
-    const outletId = String(body.outlet_id ?? "");
+    const outletIdRaw = String(body.outlet_id ?? "");
     const ownerPin = String(body.owner_pin ?? "");
     const name = String(body.name ?? "").trim();
     const pin = String(body.pin ?? "");
-    if (!UUID_RE.test(outletId) || !/^\d{6}$/.test(ownerPin)) {
+    if (!UUID_RE.test(outletIdRaw) || !/^\d{6}$/.test(ownerPin)) {
       return json(
         { ok: false, error: "outlet_id (UUID) + owner_pin 6 digit wajib" },
         400,
@@ -118,6 +126,9 @@ Deno.serve(async (req: Request) => {
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
+    // PIN Owner GLOBAL (Batch C10.1) — outlet_id pemanggil
+    // diabaikan untuk verifikasi PIN + rate limit.
+    const outletId = GLOBAL_OUTLET_ID;
     const ownerErr = await verifyOwnerPin(supabase, outletId, ownerPin);
     if (ownerErr != null) return ownerErr;
 

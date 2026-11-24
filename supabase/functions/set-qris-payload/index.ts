@@ -15,8 +15,8 @@
 //
 // Batch C8.2: payload kini SATU untuk SEMUA gerai + SEMUA device.
 // Nilai disimpan PLAINTEXT, SELALU di baris outlet global ...0001
-// (outlet_id pemanggil DIABAIKAN untuk baris tulis — hanya dipakai
-// untuk verifikasi PIN Owner gerai itu + audit pin_attempts).
+// (outlet_id pemanggil DIABAIKAN untuk baris tulis DAN verifikasi
+// PIN — PIN Owner GLOBAL, selalu baris ...0001, Batch C10.1).
 // Enkripsi per-perangkat (Batch C2/C8, format `enc:v1:`) DIHAPUS:
 // kunci cuma ada di satu HP, jadi payload yang disimpan di POVA
 // tidak bisa dipakai POCO ("belum di setting", 24 Nov 2026).
@@ -72,11 +72,11 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "Edge Function belum dikonfigurasi" }, 501);
     }
     const body = await req.json().catch(() => ({}));
-    const outletId = String(body.outlet_id ?? "");
+    const outletIdRaw = String(body.outlet_id ?? "");
     const pin = String(body.pin ?? "");
     const value = String(body.value ?? "");
     const isDelete = body.delete === true;
-    if (!UUID_RE.test(outletId) || !/^\d{6}$/.test(pin)) {
+    if (!UUID_RE.test(outletIdRaw) || !/^\d{6}$/.test(pin)) {
       return json(
         { ok: false, error: "outlet_id (UUID) + pin Owner 6 digit wajib" },
         400,
@@ -97,6 +97,10 @@ Deno.serve(async (req: Request) => {
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
+
+    // PIN Owner GLOBAL (Batch C10.1) — outlet_id pemanggil
+    // diabaikan untuk verifikasi PIN + rate limit.
+    const outletId = GLOBAL_OUTLET_ID;
 
     // --- Bukti Owner: verifikasi PIN (pola upload-product-photo) ---
     const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000)

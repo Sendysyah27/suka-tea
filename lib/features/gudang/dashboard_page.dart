@@ -199,6 +199,13 @@ class _DashboardPageState extends State<DashboardPage> {
                 .fold<int>(0, (s, e) => s + e.amount);
           }
           final labaBersih = totalOmzet - totalHpp - totalExpense;
+          // Batch C10.1 Bug 2b — HPP JUJUR (sama seperti Keuangan):
+          // bila ada bahan resep produk aktif yang biayanya belum
+          // diatur di SATU gerai tersinkron saja, HPP + laba bersih
+          // halaman ini "belum diatur" (bukan Rp0 yang menyesatkan).
+          final hppUnset = outlets
+              .where((o) => SyncService.instance.hasSynced(o.id))
+              .any((o) => StockService.instance.hasUnsetCostsFor(o.id));
 
           // ---- Tren 7 hari (semua gerai yang sudah sync) ----
           final trend = <int>[];
@@ -568,7 +575,10 @@ class _DashboardPageState extends State<DashboardPage> {
                     GudangRow(label: 'Omzet', value: formatRupiah(totalOmzet)),
                     GudangRow(
                       label: 'HPP (estimasi)',
-                      value: formatRupiah(totalHpp),
+                      // Batch C10.1 Bug 2b: biaya belum diatur ->
+                      // "belum diatur", bukan Rp0.
+                      value:
+                          hppUnset ? 'belum diatur' : formatRupiah(totalHpp),
                     ),
                     GudangRow(
                       label: 'Pengeluaran',
@@ -576,10 +586,12 @@ class _DashboardPageState extends State<DashboardPage> {
                     ),
                     GudangRow(
                       label: 'Laba bersih',
-                      value: formatRupiah(labaBersih),
-                      valueColor: labaBersih < 0
-                          ? SukaTeaColors.danger
-                          : SukaTeaColors.emeraldDark,
+                      value: hppUnset ? '—' : formatRupiah(labaBersih),
+                      valueColor: hppUnset
+                          ? null
+                          : (labaBersih < 0
+                              ? SukaTeaColors.danger
+                              : SukaTeaColors.emeraldDark),
                     ),
                   ],
                 ),

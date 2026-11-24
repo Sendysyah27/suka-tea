@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'c10_models.dart';
 import 'local/app_database.dart';
 import 'local/outbox_service.dart';
+import 'seed_menu.dart';
 import 'stock_service.dart';
 import 'sync_payload.dart';
 
@@ -216,21 +217,36 @@ class BrewService extends ChangeNotifier {
     // Biaya Teh Masak per liter (weighted): (kg x harga Teh Kering)
     // / liter dihasilkan. costPerUnit lama = 0 (belum pernah masak)
     // atau rata-rata tertimbang dengan stok yang masih ada.
-    final kgCost = StockService.instance.stockByNameFor(outletId)[tehKeringName]?.costPerUnit ?? 0;
-    if (kgCost > 0) {
-      final oldCost = stock[tehMasakName]?.costPerUnit ?? 0;
+    //
+    // Batch C10.1 Bug 2b: Teh Kering yang biayanya belum diatur (-1)
+    // JANGAN membuat Teh Masak tanpa biaya — pakai estimasi seed Teh
+    // Kering sebagai default (angka seed yang sama dipakai
+    // backfillCosts; BUKAN angka karangan). 0 = gratis yang diatur
+    // Owner, tetap 0 (jangan diganti estimasi). setCostFor dipanggil
+    // bila newCost >= 0 (termasuk 0 = gratis) supaya biaya Teh Masak
+    // SELALU sampai ke server lewat event master 'stock_item_config'
+    // — HP lain jadi bisa hitung HPP teh tanpa menunggu Owner
+    // mengisi harga manual.
+    final kgCostRaw =
+        StockService.instance.stockByNameFor(outletId)[tehKeringName]
+                ?.costPerUnit ??
+            -1;
+    final kgCost = kgCostRaw < 0
+        ? (seedStockCostPerUnit[tehKeringName] ?? 0)
+        : kgCostRaw;
+    if (kgCost >= 0) {
+      final oldCostRaw = stock[tehMasakName]?.costPerUnit ?? 0;
+      final oldCost = oldCostRaw < 0 ? 0 : oldCostRaw;
       final oldLiters = expiredYesterday ? 0.0 : carriedOver;
       final newLiters = oldLiters + litersMade;
       final newCost = newLiters > 0
           ? (oldCost * oldLiters + kgCost * kgUsed) / newLiters
           : 0.0;
-      if (newCost > 0) {
-        await StockService.instance.setCostFor(
-          outletId,
-          tehMasakName,
-          newCost,
-        );
-      }
+      await StockService.instance.setCostFor(
+        outletId,
+        tehMasakName,
+        newCost,
+      );
     }
     final id = newClientUuid();
     final record = BrewRecord(

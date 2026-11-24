@@ -8,6 +8,7 @@ import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
 import '../../core/widgets/tap_feedback.dart';
 import '../../data/expense_service.dart';
+import '../../data/menu_service.dart';
 import '../../data/models.dart';
 import '../../data/outlet_service.dart';
 import '../../data/sale_history.dart';
@@ -59,12 +60,15 @@ class _KeuanganPageState extends State<KeuanganPage> {
       // tab Stok langsung mengubah HPP/laba di halaman ini.
       // + ExpenseService (Batch C7): pengeluaran hari ini langsung
       // mengubah laba bersih + daftar pengeluaran di halaman ini.
+      // + MenuService (Batch C10.1): produk aktif/nonaktif menentukan
+      // [StockService.hasUnsetCostsFor] — HPP "belum diatur".
       listenable: Listenable.merge([
         SaleHistoryService.instance,
         StockService.instance,
         ExpenseService.instance,
         SyncService.instance,
         OutletService.instance,
+        MenuService.instance,
       ]),
       builder: (context, _) {
         // Transaksi void DIKECUALIKAN (Batch C1): omzet, laba, dan
@@ -129,6 +133,19 @@ class _KeuanganPageState extends State<KeuanganPage> {
         // Laba BERSIH (Batch C7) = omzet − HPP (estimasi) −
         // pengeluaran hari ini. Label "Laba (estimasi)" dipertahankan.
         final labaBersih = stats.labaEstimate - expensesToday;
+        // Batch C10.1 Bug 2b — HPP JUJUR: bila ada bahan resep produk
+        // AKTIF yang biayanya belum diatur di gerai yang dihitung,
+        // HPP + laba TIDAK ditampilkan sebagai angka (Rp0 menyesatkan
+        // — itu bug yang dilaporkan Sendy 24 Nov: HPP Rp0 padahal
+        // 12 cup terjual). Mode "Semua gerai": cukup SATU gerai yang
+        // tersinkron dan belum diatur → semua HPP/laba halaman ini
+        // "belum diatur" (HPP tidak bisa dijumlah jujur bila satu
+        // gerai biayanya kosong).
+        final hppUnset = _selectedOutletId == null
+            ? outletIds
+                .where((id) => SyncService.instance.hasSynced(id))
+                .any((id) => StockService.instance.hasUnsetCostsFor(id))
+            : StockService.instance.hasUnsetCostsFor(_selectedOutletId!);
         return ListView(
           padding: const EdgeInsets.all(12),
           children: [
@@ -155,9 +172,12 @@ class _KeuanganPageState extends State<KeuanganPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Batch C10.1 Bug 2a: label diberi fontSize eksplisit
+                  // (jangan andalkan default) supaya tidak kepotong di
+                  // text scale besar.
                   const Text(
                     'Omzet hari ini',
-                    style: TextStyle(color: Colors.white70),
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
                   ),
                   const SizedBox(height: 6),
                   Text(
@@ -171,19 +191,37 @@ class _KeuanganPageState extends State<KeuanganPage> {
                   const SizedBox(height: 12),
                   const Divider(color: Colors.white24, height: 1),
                   const SizedBox(height: 12),
+                  // Batch C10.1 Bug 2a: ANTI-CLIP — label + nilai
+                  // dibungkus Flexible (bukan Text polos) supaya di
+                  // layar sempit / text scale besar, NILAI yang
+                  // mengecil/ellipsis, bukan LABEL yang kepotong
+                  // (bug screenshot 24 Nov 20:08: "Laba (estimasi"
+                  // terpotong di tepi kanan kartu hijau).
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'Laba (estimasi)',
-                        style: TextStyle(color: Colors.white70),
+                      const Flexible(
+                        flex: 1,
+                        child: Text(
+                          'Laba (estimasi)',
+                          style: TextStyle(color: Colors.white70),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                      Text(
-                        formatRupiah(labaBersih),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 18,
+                      Flexible(
+                        flex: 1,
+                        fit: FlexFit.loose,
+                        child: Text(
+                          // Batch C10.1 Bug 2b: HPP belum diatur ->
+                          // laba tidak ditampilkan sebagai angka.
+                          hppUnset ? '—' : formatRupiah(labaBersih),
+                          textAlign: TextAlign.right,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 18,
+                          ),
                         ),
                       ),
                     ],
@@ -227,7 +265,9 @@ class _KeuanganPageState extends State<KeuanganPage> {
             const SizedBox(height: 8),
             _row(
               'HPP (estimasi)',
-              '-${formatRupiah(stats.hppEstimate)}',
+              // Batch C10.1 Bug 2b: biaya belum diatur -> "belum
+              // diatur", BUKAN "-Rp0".
+              hppUnset ? 'belum diatur' : '-${formatRupiah(stats.hppEstimate)}',
               dotColor: SukaTeaColors.danger,
             ),
             if (expensesToday > 0)
@@ -236,13 +276,17 @@ class _KeuanganPageState extends State<KeuanganPage> {
                 '-${formatRupiah(expensesToday)}',
                 dotColor: SukaTeaColors.danger,
               ),
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
               child: Text(
                 'Laba (estimasi) = omzet − HPP (estimasi) − pengeluaran '
                 'hari ini. HPP dihitung dari resep x harga bahan yang '
-                'diatur Owner di tab Stok.',
-                style: TextStyle(color: SukaTeaColors.muted),
+                'diatur Owner di tab Stok.'
+                '${hppUnset ? ' Harga bahan belum diatur — atur di tab Stok supaya HPP dan laba tampil.' : ''}',
+                style: const TextStyle(
+                  color: SukaTeaColors.muted,
+                  fontSize: 14,
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -253,9 +297,19 @@ class _KeuanganPageState extends State<KeuanganPage> {
                   'Pengeluaran',
                   style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
                 ),
-                Text(
-                  '${expensesTodayList.length} catatan',
-                  style: const TextStyle(color: SukaTeaColors.muted),
+                // Batch C10.1 Bug 2a: ANTI-CLIP — jumlah catatan
+                // mengecil/ellipsis di text scale besar
+                // ('Pengeluaran' 267px + '0 catatan' 191px = 458px
+                // vs lebar 336px di 360dp + 1.5x -> overflow 122px).
+                // Judul dipertahankan utuh; yang mengalah jumlahnya.
+                Flexible(
+                  fit: FlexFit.loose,
+                  child: Text(
+                    '${expensesTodayList.length} catatan',
+                    style: const TextStyle(color: SukaTeaColors.muted),
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                  ),
                 ),
               ],
             ),
@@ -293,16 +347,24 @@ class _KeuanganPageState extends State<KeuanganPage> {
       padding: const EdgeInsets.only(bottom: 12),
       child: DropdownButtonFormField<String?>(
         initialValue: _selectedOutletId,
+        // Batch C10.1 Bug 2a: ANTI-CLIP — isExpanded + ellipsis di
+        // tiap item supaya nama gerai panjang ("Gerai 1 — Stand
+        // Utama") tidak meledakkan Row dropdown di text scale
+        // besar (overflow 199px di 360dp + 1.5x).
+        isExpanded: true,
         decoration: const InputDecoration(labelText: 'Gerai'),
         items: [
           const DropdownMenuItem<String?>(
             value: null,
-            child: Text('Semua gerai'),
+            child: Text(
+              'Semua gerai',
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
           for (final o in OutletService.instance.outlets)
             DropdownMenuItem<String?>(
               value: o.id,
-              child: Text(o.name),
+              child: Text(o.name, overflow: TextOverflow.ellipsis),
             ),
         ],
         onChanged: (v) => setState(() => _selectedOutletId = v),
@@ -465,9 +527,17 @@ class _KeuanganPageState extends State<KeuanganPage> {
               const SizedBox(width: 12),
             ],
             Expanded(child: Text(label)),
-            Text(
-              value,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+            // Batch C10.1 Bug 2a: ANTI-CLIP — nilai panjang
+            // (mis. 'Rp999.999.999' / '1 transaksi • 1 cup') di
+            // text scale besar harus ellipsis, bukan overflow
+            // (overflow 108px di 360dp + 1.5x).
+            Flexible(
+              child: Text(
+                value,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+              ),
             ),
           ],
         ),

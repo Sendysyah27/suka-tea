@@ -6,8 +6,11 @@
 // sama saja dengan "siapa pun boleh tulis". Di sini bukti Owner adalah
 // PIN Owner gerai itu (dibuktikan server-side dengan bcrypt, sama
 // seperti verify-owner-pin) + upload dilakukan service_role yang
-// melewati RLS. Bucket `product-photos` (migrasi 007) hanya punya
-// policy SELECT publik; tidak ada policy tulis untuk anon.
+// melewati RLS. Batch C10.1: PIN Owner GLOBAL (satu PIN semua
+// gerai) — verifikasi PIN + rate limit selalu baris global ...0001;
+// outlet_id ASLI tetap dipakai untuk path storage (itu outlet
+// produknya, bukan baris PIN). Bucket `product-photos` (migrasi 007)
+// hanya punya policy SELECT publik; tidak ada policy tulis untuk anon.
 //
 // POST { outlet_id, product_id, owner_pin, image_base64 } ->
 //   { ok:true, public_url, path }  (200)
@@ -38,6 +41,11 @@ const WINDOW_MINUTES = 10;
 // Foto hasil image_picker (max 1024px, quality 85) umumnya < 300 KB.
 // Batas 2 MB menahan upload raksasa yang tidak sengaja.
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+
+// PIN Owner GLOBAL (koreksi Sendy 24 Nov 2026, Batch C10.1): SATU
+// PIN untuk semua gerai — hash + rate limit selalu baris global
+// (...0001). Path storage tetap memakai outlet_id ASLI.
+const GLOBAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -82,12 +90,17 @@ Deno.serve(async (req: Request) => {
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
+    // PIN Owner GLOBAL (Batch C10.1) — verifikasi PIN + rate limit
+    // selalu baris ...0001. [outletId] ASLI tetap dipakai untuk
+    // path storage (lihat [path] di atas).
+    const pinOutletId = GLOBAL_OUTLET_ID;
+
     // --- Bukti Owner: verifikasi PIN (pola verify-owner-pin) ---
     const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000).toISOString();
     const { count } = await supabase
       .from("pin_attempts")
       .select("id", { count: "exact", head: true })
-      .eq("outlet_id", outletId)
+      .eq("outlet_id", pinOutletId)
       .eq("success", false)
       .gte("created_at", since);
     if ((count ?? 0) >= MAX_FAILURES) {
@@ -96,7 +109,7 @@ Deno.serve(async (req: Request) => {
     const { data: row, error: readError } = await supabase
       .from("app_settings")
       .select("value")
-      .eq("outlet_id", outletId)
+      .eq("outlet_id", pinOutletId)
       .eq("key", "owner_pin_hash")
       .maybeSingle();
     // Jangan telan error baca: SELECT yang gagal (mis. GRANT belum ada)
@@ -110,7 +123,7 @@ Deno.serve(async (req: Request) => {
     }
     const match = await bcrypt.compare(ownerPin, hash);
     await supabase.from("pin_attempts").insert({
-      outlet_id: outletId,
+      outlet_id: pinOutletId,
       success: match,
     });
     if (!match) {
