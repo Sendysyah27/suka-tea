@@ -124,7 +124,19 @@ List<Product> seedMenu() {
 }
 
 List<StockItem> seedStock() => const [
-      StockItem(name: 'Teh', unit: 'kg', qty: 2.5, lowThreshold: 1),
+      // Batch C10 WS4: 'Teh' (daun kering, kg) bernama 'Teh Kering'
+      // — awet, dibawa antar hari. 'Teh Masak' (liter) adalah teh
+      // yang SUDAH dimasak — hangus tiap ganti hari (shelfLifeDays 1)
+      // dan dipakai resep tiap cup (0,4 L/cup). Stok awal Teh Masak
+      // 0 — harus dimasak dulu sebelum jualan.
+      StockItem(name: 'Teh Kering', unit: 'kg', qty: 2.5, lowThreshold: 1),
+      StockItem(
+        name: 'Teh Masak',
+        unit: 'liter',
+        qty: 0,
+        lowThreshold: 0,
+        shelfLifeDays: 1,
+      ),
       StockItem(name: 'Gula', unit: 'kg', qty: 5, lowThreshold: 2),
       StockItem(name: 'Cup 16oz', unit: 'pcs', qty: 120, lowThreshold: 50),
       StockItem(name: 'Cup 22oz', unit: 'pcs', qty: 80, lowThreshold: 50),
@@ -149,7 +161,11 @@ List<StockItem> seedStock() => const [
 /// aktual; UI wajib menulis "estimasi". Bahan yang tidak ada di peta
 /// ini dihitung Rp0.
 const Map<String, double> seedStockCostPerUnit = {
-  'Teh': 120000,
+  // Batch C10 WS4: 'Teh' -> 'Teh Kering' (nama baru). Teh Masak
+  // tidak punya harga seed — biayanya dihitung dari Teh Kering
+  // yang dipakai saat masak (lihat BrewService.brew).
+  'Teh Kering': 120000,
+  'Teh Masak': 0,
   'Gula': 18000,
   'Cup 16oz': 500,
   'Cup 22oz': 600,

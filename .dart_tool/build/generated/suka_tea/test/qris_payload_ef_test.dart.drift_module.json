@@ -1,8 +1,0 @@
-{
-  "elements": {},
-  "imports": [
-    "package:flutter_test/flutter_test.dart",
-    "package:suka_tea/features/qris/qris_service.dart",
-    "package:suka_tea/features/qris/qris_settings_service.dart"
-  ]
-}

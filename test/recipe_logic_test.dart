@@ -6,7 +6,9 @@ import 'package:suka_tea/data/seed_recipes.dart';
 
 /// Unit test fungsi murni resep (tanpa Flutter/Drift).
 /// Angka acuan = seedRecipes() untuk Manggo Milktea (Batch C8.2 WS7:
-/// SATU resep 22oz — takaran Jumbo lama): Teh 0.015, Gula 0.035,
+/// SATU resep 22oz — takaran Jumbo lama). Batch C10 WS4: 'Teh'
+/// 0.015 kg/cup DIGANTI 'Teh Masak' 0.4 L/cup (teh yang sudah
+/// dimasak — hangus harian); takaran lain tetap: Gula 0.035,
 ///   Susu bubuk 0.030, Bubuk perasa 0.020, Cup 22oz 1, Es batu 0.20,
 ///   Sedotan 1.
 void main() {
@@ -32,7 +34,7 @@ void main() {
       (manggo.variants.last, 1),
     ]);
     final d = computeDeductions(cart, recipes, stockByName);
-    expect(d['Teh'], closeTo(0.045, 1e-9));
+    expect(d['Teh Masak'], closeTo(1.2, 1e-9));
     expect(d['Gula'], closeTo(0.105, 1e-9));
     expect(d['Susu bubuk'], closeTo(0.090, 1e-9));
     expect(d['Bubuk perasa'], closeTo(0.060, 1e-9));
@@ -43,23 +45,34 @@ void main() {
   });
 
   test('shortage terdeteksi saat stok kurang', () {
-    // Teh seed 2.5 kg -> turunkan jadi 0.02 kg (butuh 0.045 kg).
-    stockByName['Teh'] =
-        const StockItem(name: 'Teh', unit: 'kg', qty: 0.02, lowThreshold: 1);
+    // Teh Masak seed 0 L -> isi 0.5 L (butuh 1.2 L untuk 3 cup).
+    stockByName['Teh Masak'] = const StockItem(
+      name: 'Teh Masak',
+      unit: 'liter',
+      qty: 0.5,
+      lowThreshold: 0,
+    );
     final cart = cartOf([
       (manggo.variants.first, 2),
       (manggo.variants.last, 1),
     ]);
     final shortages = findShortages(cart, recipes, stockByName);
     expect(shortages, hasLength(1));
-    expect(shortages.first.stockName, 'Teh');
-    expect(shortages.first.unit, 'kg');
-    expect(shortages.first.needed, closeTo(0.045, 1e-9));
-    expect(shortages.first.available, 0.02);
-    expect(shortages.first.missing, closeTo(0.025, 1e-9));
+    expect(shortages.first.stockName, 'Teh Masak');
+    expect(shortages.first.unit, 'liter');
+    expect(shortages.first.needed, closeTo(1.2, 1e-9));
+    expect(shortages.first.available, 0.5);
+    expect(shortages.first.missing, closeTo(0.7, 1e-9));
   });
 
   test('tidak ada shortage saat stok cukup', () {
+    // Seed Teh Masak 0 L -> isi 5 L supaya cukup untuk 2 cup (0.8 L).
+    stockByName['Teh Masak'] = const StockItem(
+      name: 'Teh Masak',
+      unit: 'liter',
+      qty: 5,
+      lowThreshold: 0,
+    );
     final cart = cartOf([(manggo.variants.first, 2)]);
     expect(findShortages(cart, recipes, stockByName), isEmpty);
   });
@@ -90,8 +103,8 @@ void main() {
     final d = computeDeductions(cart, recipes, stockByName);
     expect(d['Boba'], 2);
     expect(d['Selasih'], 2);
-    // Resep tetap jalan: Teh 0.015 x 2 cup.
-    expect(d['Teh'], closeTo(0.030, 1e-9));
+    // Resep tetap jalan: Teh Masak 0.4 L x 2 cup.
+    expect(d['Teh Masak'], closeTo(0.8, 1e-9));
     expect(d['Cup 22oz'], 2);
   });
 
@@ -111,7 +124,7 @@ void main() {
     ];
     final d = computeDeductions(cart, recipes, stockByName);
     expect(d.containsKey('Boba'), isFalse);
-    expect(d['Teh'], closeTo(0.015, 1e-9));
+    expect(d['Teh Masak'], closeTo(0.4, 1e-9));
   });
 
   test('seed resep mencakup semua 20 produk x 1 varian (22oz)', () {

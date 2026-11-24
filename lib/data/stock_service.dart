@@ -7,6 +7,8 @@ import 'local/app_database.dart';
 import 'local/outbox_service.dart';
 import 'models.dart';
 import 'outlet_service.dart';
+import 'c10_models.dart';
+import 'master_sync.dart';
 import 'recipe_logic.dart';
 import 'seed_menu.dart';
 import 'seed_recipes.dart';
@@ -70,6 +72,8 @@ StockMergePlan planStockMerge({
       unit: s.unit,
       lowThreshold: s.lowThreshold,
       costPerUnit: s.costPerUnit,
+      // Batch C10 WS0: masa simpan ikut dari server (meta, bukan qty).
+      shelfLifeDays: s.shelfLifeDays,
     ));
   }
   return (toInsert: toInsert, toUpdate: toUpdate);
@@ -96,6 +100,13 @@ class StockService extends ChangeNotifier {
   Map<String, List<StockItem>> _levelsByOutlet = {};
   Map<String, List<RecipeLine>> _recipes = {};
   bool _initialized = false;
+
+  /// updatedAt lokal per kunci merge master-data (Batch C10 WS0 —
+  /// in-memory saja; kunci yang masih punya event pending dilindungi
+  /// [OutboxService.pendingMasterKeys], jadi restart tidak bisa
+  /// menimpa perubahan yang belum terkirim).
+  final Map<String, DateTime> _recipeUpdatedAt = {};
+  final Map<String, DateTime> _stockConfigUpdatedAt = {};
 
   /// Nama bahan yang device ini PERNAH kirim mutasinya (kunci
   /// "$outletId|$name" — lihat [stockTouchedKey]). Dimuat sekali
@@ -154,6 +165,8 @@ class StockService extends ChangeNotifier {
             lowThreshold: r.lowThreshold,
             costPerUnit: r.costPerUnit,
             outletId: r.outletId,
+            // Batch C10 WS4: masa simpan dari Drift (default 0).
+            shelfLifeDays: r.shelfLifeDays,
           ),
         );
       }
@@ -328,7 +341,14 @@ class StockService extends ChangeNotifier {
   /// menyentuh stok yang sudah ada. Outlet yang sudah lengkap TIDAK
   /// disentuh. Dipanggil dari init (gerai aktif), login/restore,
   /// dan Pantau Gerai (gerai yang dilihat).
+  /// Batch C10 WS1: GUDANG (pseudo-outlet) TIDAK PERNAH di-seed —
+  /// gudang mulai KOSONG, isinya hanya dari stok masuk + kiriman
+  /// yang dibalik; baris gudang muncul saat pertama ada stok masuk.
   Future<void> ensureOutlet(String outletId) async {
+    if (outletId == gudangOutletId) {
+      _levelsByOutlet.putIfAbsent(outletId, () => const <StockItem>[]);
+      return;
+    }
     final existing = _levelsByOutlet[outletId];
     var list = existing ?? const <StockItem>[];
     // Outlet belum dikenal = baru -> seed + simpan.
@@ -378,6 +398,13 @@ class StockService extends ChangeNotifier {
         return s.copyWith(costPerUnit: seed);
       }).toList();
 
+/// Id produk dari id varian ('manggo-milktea_22oz' -> 'manggo-milktea').
+/// Dipakai payload resep master (server menyimpan product_id juga).
+String _productIdOfVariant(String variantId) =>
+    variantId.endsWith('_22oz')
+        ? variantId.substring(0, variantId.length - 5)
+        : variantId;
+
   /// Ubah harga per satuan satu bahan gerai aktif (HANYA Owner —
   /// dicek di UI). false = bahan tidak ada atau biaya negatif.
   /// Batch C9: harga HARUS tersinkron — event 'stock_movement'
@@ -415,12 +442,19 @@ class StockService extends ChangeNotifier {
       },
       'ubah harga (lokal tetap sah)',
     );
+    // Batch C10 WS0: harga bahan = konfigurasi master — HP lain
+    // harus tahu tanpa menunggu mutasi berikutnya.
+    await _enqueueStockConfig(_activeOutletId, updated[i]);
     return true;
   }
 
   /// Ganti satu resep varian (dipakai editor Resep). [lines] disalin.
+  /// Batch C10 WS0: tiap baris yang berubah/dihapus diantrekan sebagai
+  /// event 'master' entity 'recipe' (kunci '$variantId|$stockName')
+  /// supaya resep baru dipakai HP lain di penjualan berikutnya.
   Future<void> setRecipe(String variantId, List<RecipeLine> lines) async {
     final clean = lines.where((l) => l.qty > 0).toList();
+    final old = _recipes[variantId] ?? const <RecipeLine>[];
     _recipes[variantId] = List.unmodifiable(clean);
     notifyListeners();
     try {
@@ -439,6 +473,270 @@ class StockService extends ChangeNotifier {
     } catch (e) {
       debugPrint('StockService setRecipe gagal simpan: $e');
     }
+    // Event master: baris baru/berubah = upsert, baris yang hilang
+    // dari resep baru = is_deleted. updatedAt = sekarang (UTC).
+    // 'unit' ikut dikirim (EF butuh satuan baku bahan bila baris
+    // stock_items kanonik belum ada — resep tidak menyimpan satuan).
+    final now = DateTime.now().toUtc();
+    final oldByName = {for (final l in old) l.stockName: l.qty};
+    final newByName = {for (final l in clean) l.stockName: l.qty};
+    String unitOf(String name) {
+      for (final levels in _levelsByOutlet.values) {
+        for (final s in levels) {
+          if (s.name == name) return s.unit;
+        }
+      }
+      return 'pcs';
+    }
+    for (final entry in newByName.entries) {
+      if (oldByName[entry.key] == entry.value) continue;
+      _recipeUpdatedAt[recipeMergeKey(variantId, entry.key)] = now;
+      await _enqueueMaster(MasterChange(
+        entity: MasterEntity.recipe,
+        id: recipeMergeKey(variantId, entry.key),
+        updatedAt: now,
+        data: {
+          'variant_id': variantId,
+          'product_id': _productIdOfVariant(variantId),
+          'stock_name': entry.key,
+          'qty': entry.value,
+          'unit': unitOf(entry.key),
+        },
+      ));
+    }
+    for (final name in oldByName.keys) {
+      if (newByName.containsKey(name)) continue;
+      _recipeUpdatedAt[recipeMergeKey(variantId, name)] = now;
+      await _enqueueMaster(MasterChange(
+        entity: MasterEntity.recipe,
+        id: recipeMergeKey(variantId, name),
+        updatedAt: now,
+        isDeleted: true,
+        data: {
+          'variant_id': variantId,
+          'product_id': _productIdOfVariant(variantId),
+          'stock_name': name,
+          'qty': 0,
+          'unit': unitOf(name),
+        },
+      ));
+    }
+  }
+
+  /// Terapkan resep hasil pull server (Batch C10 WS0): perubahan
+  /// yang menang LWW (bukan pending) diterapkan ke memori + Drift.
+  /// Baris is_deleted = hapus baris resep itu. Tidak pernah throw.
+  Future<void> mergePulledRecipes(List<MasterChange> serverChanges) async {
+    if (!_initialized) return;
+    final pending = await OutboxService.instance.pendingMasterKeys();
+    final plan = planMasterMerge(
+      serverChanges: serverChanges,
+      localUpdatedAt: Map<String, DateTime>.of(_recipeUpdatedAt),
+      pendingKeys: pending,
+    );
+    if (plan.isEmpty) return;
+    var changed = false;
+    for (final change in plan) {
+      final variantId = change.data['variant_id'] as String? ?? '';
+      final stockName = change.data['stock_name'] as String? ?? '';
+      if (variantId.isEmpty || stockName.isEmpty) continue;
+      _recipeUpdatedAt[change.id] = change.updatedAt;
+      final lines = List<RecipeLine>.of(_recipes[variantId] ?? const []);
+      final i = lines.indexWhere((l) => l.stockName == stockName);
+      if (change.isDeleted) {
+        if (i < 0) continue;
+        lines.removeAt(i);
+        try {
+          await (_database.delete(_database.productRecipes)
+                ..where((t) =>
+                    t.variantId.equals(variantId) &
+                    t.stockName.equals(stockName)))
+              .go();
+        } catch (e) {
+          debugPrint('StockService hapus resep pull gagal: $e');
+        }
+      } else {
+        final qty = (change.data['qty'] as num? ?? 0).toDouble();
+        if (qty <= 0) continue;
+        final line = RecipeLine(stockName: stockName, qty: qty);
+        if (i < 0) {
+          lines.add(line);
+        } else {
+          lines[i] = line;
+        }
+        try {
+          await _database.into(_database.productRecipes).insert(
+                ProductRecipesCompanion.insert(
+                  variantId: variantId,
+                  stockName: stockName,
+                  qty: qty,
+                ),
+                mode: InsertMode.insertOrReplace,
+              );
+        } catch (e) {
+          debugPrint('StockService simpan resep pull gagal: $e');
+        }
+      }
+      _recipes[variantId] = List.unmodifiable(lines);
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
+
+  /// Terapkan konfigurasi bahan hasil pull server (Batch C10 WS0):
+  /// meta (unit, ambang, harga, masa simpan) + ganti nama
+  /// (data['old_name']). Qty TIDAK PERNAH disentuh di sini (qty
+  /// digerakkan delta oleh mutasi / mergePulledStock).
+  Future<void> mergePulledStockConfigs(
+    List<MasterChange> serverChanges,
+  ) async {
+    if (!_initialized) return;
+    final pending = await OutboxService.instance.pendingMasterKeys();
+    final plan = planMasterMerge(
+      serverChanges: serverChanges,
+      localUpdatedAt: Map<String, DateTime>.of(_stockConfigUpdatedAt),
+      pendingKeys: pending,
+    );
+    if (plan.isEmpty) return;
+    var changed = false;
+    for (final change in plan) {
+      final outletId = change.data['outlet_id'] as String? ?? '';
+      final name = change.data['name'] as String? ?? '';
+      if (outletId.isEmpty || name.isEmpty || change.isDeleted) continue;
+      _stockConfigUpdatedAt[change.id] = change.updatedAt;
+      final oldName = change.data['old_name'] as String?;
+      var levels = _levelsByOutlet[outletId] ?? const <StockItem>[];
+      // Ganti nama: baris lama diganti namanya (resep ikut — nama
+      // bahan adalah kunci resep). Bila nama baru sudah ada, lewati.
+      if (oldName != null && oldName.isNotEmpty && oldName != name) {
+        final oi = levels.indexWhere((s) => s.name == oldName);
+        if (oi >= 0 && !levels.any((s) => s.name == name)) {
+          final renamed = levels[oi].copyWith(name: name);
+          levels = [...levels]..[oi] = renamed;
+          _levelsByOutlet[outletId] = levels;
+          await _applyRecipeRenameLocal(oldName, name);
+          try {
+            await (_database.delete(_database.stockLevels)
+                  ..where((t) =>
+                      t.outletId.equals(outletId) &
+                      t.name.equals(oldName)))
+                .go();
+            await _saveOneLevel(renamed);
+          } catch (e) {
+            debugPrint('StockService ganti nama pull gagal: $e');
+          }
+          changed = true;
+        }
+      }
+      levels = _levelsByOutlet[outletId] ?? const <StockItem>[];
+      final i = levels.indexWhere((s) => s.name == name);
+      final unit = change.data['unit'] as String?;
+      final low = (change.data['low_threshold'] as num?)?.toDouble();
+      final cost = (change.data['cost_per_unit'] as num?)?.toDouble();
+      final shelf = (change.data['shelf_life_days'] as num?)?.toInt();
+      if (i < 0) {
+        // Bahan belum ada di HP ini — buat baris qty 0 (qty nyata
+        // datang dari mergePulledStock / kiriman berikutnya).
+        final item = StockItem(
+          name: name,
+          unit: unit ?? 'pcs',
+          qty: 0,
+          lowThreshold: low ?? 0,
+          costPerUnit: cost ?? -1,
+          outletId: outletId,
+          shelfLifeDays: shelf ?? 0,
+        );
+        _levelsByOutlet[outletId] = [...levels, item];
+        await _saveOneLevel(item);
+        changed = true;
+      } else {
+        final updated = levels[i].copyWith(
+          unit: unit,
+          lowThreshold: low,
+          costPerUnit: cost,
+          shelfLifeDays: shelf,
+        );
+        if (updated.unit != levels[i].unit ||
+            updated.lowThreshold != levels[i].lowThreshold ||
+            updated.costPerUnit != levels[i].costPerUnit ||
+            updated.shelfLifeDays != levels[i].shelfLifeDays) {
+          _levelsByOutlet[outletId] = [...levels]..[i] = updated;
+          await _saveOneLevel(updated);
+          changed = true;
+        }
+      }
+    }
+    if (changed) notifyListeners();
+  }
+
+  /// Ganti nama bahan di SEMUA resep (memori + Drift) — dipakai
+  /// renameStock (lokal) + mergePulledStockConfigs (pull).
+  /// TIDAK mengantre event master (pemanggil yang memutuskan).
+  Future<void> _applyRecipeRenameLocal(
+    String oldName,
+    String newName,
+  ) async {
+    final newRecipes = <String, List<RecipeLine>>{};
+    for (final entry in _recipes.entries) {
+      newRecipes[entry.key] = entry.value
+          .map(
+            (l) => l.stockName == oldName
+                ? RecipeLine(stockName: newName, qty: l.qty)
+                : l,
+          )
+          .toList();
+    }
+    _recipes = newRecipes;
+    try {
+      await (_database.update(_database.productRecipes)
+            ..where((t) => t.stockName.equals(oldName)))
+          .write(ProductRecipesCompanion(stockName: Value(newName)));
+    } catch (e) {
+      debugPrint('StockService ganti nama resep gagal: $e');
+    }
+  }
+
+  /// Antrekan satu event master-data ke outbox (Batch C10 WS0).
+  /// Gagal antre tidak menggagalkan perubahan lokal (kasir tetap
+  /// jalan; perubahan tersinkron saat event berhasil diantrekan
+  /// berikutnya — pemanggil syncNow memicu timer 10 detik).
+  Future<void> _enqueueMaster(MasterChange change) async {
+    try {
+      await OutboxService.instance.enqueueSale(
+        change.toEventPayload(),
+        kind: 'master',
+      );
+    } catch (e) {
+      debugPrint('StockService antre master gagal: $e');
+    }
+  }
+
+  /// Antrekan event konfigurasi bahan (Batch C10 WS0): meta bahan
+  /// (unit, ambang, harga, masa simpan) — dipanggil sesudah
+  /// updateCost / updateStock / addStockItem / renameStock.
+  Future<void> _enqueueStockConfig(
+    String outletId,
+    StockItem item, {
+    String? oldName,
+  }) async {
+    final now = DateTime.now().toUtc();
+    final key = stockConfigMergeKey(outletId, item.name);
+    _stockConfigUpdatedAt[key] = now;
+    await _enqueueMaster(MasterChange(
+      entity: MasterEntity.stockItemConfig,
+      id: key,
+      updatedAt: now,
+      data: {
+        'outlet_id': outletId,
+        'name': item.name,
+        if (oldName != null) 'old_name': oldName,
+        'unit': item.unit,
+        'low_threshold': item.lowThreshold,
+        'cost_per_unit':
+            item.costPerUnit < 0 ? 0 : item.costPerUnit.round(),
+        'shelf_life_days': item.shelfLifeDays,
+      },
+    ));
   }
 
   /// Ubah jumlah + ambang satu bahan gerai aktif. Harga per satuan
@@ -482,6 +780,8 @@ class StockService extends ChangeNotifier {
       },
       'koreksi stok (lokal tetap sah)',
     );
+    // Batch C10 WS0: ambang + jumlah koreksi = konfigurasi master.
+    await _enqueueStockConfig(_activeOutletId, updated[i]);
   }
 
   /// Tambah bahan baru di gerai aktif. false = nama sudah ada di
@@ -527,6 +827,9 @@ class StockService extends ChangeNotifier {
       },
       'tambah bahan (lokal tetap sah)',
     );
+    // Batch C10 WS0: bahan baru = konfigurasi master (nama + satuan
+    // + ambang harus dikenal HP lain sebelum resep memakainya).
+    await _enqueueStockConfig(_activeOutletId, item);
     return true;
   }
 
@@ -715,6 +1018,10 @@ class StockService extends ChangeNotifier {
   /// ada. Resep yang memakai bahan ini ikut diganti namanya supaya
   /// deduksi tetap jalan. (Resep global — ganti nama berlaku di
   /// semua gerai, karena resep dibagikan.)
+  /// Batch C10 WS0: ganti nama diantrekan sebagai event master
+  /// 'stock_item_config' (data['old_name']) + event 'recipe' untuk
+  /// tiap varian yang memakai bahan ini — HP lain tidak boleh
+  /// membangkitkan lagi nama lama dari pull (gap C9).
   Future<bool> renameStock(String oldName, String newName) async {
     if (oldName == newName) return true;
     final levels = _levelsByOutlet[_activeOutletId] ?? const <StockItem>[];
@@ -725,17 +1032,7 @@ class StockService extends ChangeNotifier {
     updated[i] = updated[i].copyWith(name: newName);
     _levelsByOutlet[_activeOutletId] = updated;
     // Resep memakai nama bahan sebagai kunci — ganti juga di memori.
-    final newRecipes = <String, List<RecipeLine>>{};
-    for (final entry in _recipes.entries) {
-      newRecipes[entry.key] = entry.value
-          .map(
-            (l) => l.stockName == oldName
-                ? RecipeLine(stockName: newName, qty: l.qty)
-                : l,
-          )
-          .toList();
-    }
-    _recipes = newRecipes;
+    await _applyRecipeRenameLocal(oldName, newName);
     notifyListeners();
     try {
       await (_database.delete(_database.stockLevels)
@@ -744,14 +1041,214 @@ class StockService extends ChangeNotifier {
                 t.name.equals(oldName)))
           .go();
       await _saveOneLevel(updated[i]);
-      await (_database.update(_database.productRecipes)
-            ..where((t) => t.stockName.equals(oldName)))
-          .write(
-            ProductRecipesCompanion(stockName: Value(newName)),
-          );
     } catch (e) {
       debugPrint('StockService rename gagal simpan: $e');
     }
+    await _enqueueStockConfig(
+      _activeOutletId,
+      updated[i],
+      oldName: oldName,
+    );
+    // Resep yang memakai bahan ini: baris lama dihapus + baris baru
+    // dibuat (kunci merge berubah karena nama berubah).
+    final now = DateTime.now().toUtc();
+    for (final entry in _recipes.entries) {
+      final line =
+          entry.value.where((l) => l.stockName == newName).toList();
+      if (line.isEmpty) continue;
+      _recipeUpdatedAt[recipeMergeKey(entry.key, newName)] = now;
+      await _enqueueMaster(MasterChange(
+        entity: MasterEntity.recipe,
+        id: recipeMergeKey(entry.key, newName),
+        updatedAt: now,
+        data: {
+          'variant_id': entry.key,
+          'product_id': _productIdOfVariant(entry.key),
+          'stock_name': newName,
+          'qty': line.first.qty,
+        },
+      ));
+      _recipeUpdatedAt[recipeMergeKey(entry.key, oldName)] = now;
+      await _enqueueMaster(MasterChange(
+        entity: MasterEntity.recipe,
+        id: recipeMergeKey(entry.key, oldName),
+        updatedAt: now,
+        isDeleted: true,
+        data: {
+          'variant_id': entry.key,
+          'product_id': _productIdOfVariant(entry.key),
+          'stock_name': oldName,
+          'qty': 0,
+        },
+      ));
+    }
+    return true;
+  }
+
+  /// Ubah level stok satu gerai untuk banyak bahan SEKALIGUS
+  /// (Batch C10 — dipakai BrewService saat kedaluwarsa + opname
+  /// saat "Sesuaikan stok" + kiriman yang dibalik). [deltas] =
+  /// nama bahan -> selisih (negatif = kurang, positif = tambah).
+  /// Stok di-clamp di 0. Satu event 'stock_movement' reason
+  /// [reason] (bukan satu event per bahan — idempotency per item
+  /// dijamin server seperti C9). Qty yang berubah dihitung dari
+  /// level saat ini; bahan yang tidak ada di gerai itu dilewati.
+  /// [enqueueMovement] false = ubah lokal SAJA tanpa event mutasi
+  /// (dipakai stok masuk / masak teh — event kind-nya sendiri
+  /// ('stock_in' / 'brew') yang membawa delta ke server; event
+  /// mutasi tambahan akan dobel-terapkan di server).
+  /// Mengembalikan peta nama -> delta yang BENAR-BENAR diterapkan
+  /// (sesudah clamp) — pemanggil memakai ini untuk catatan.
+  Future<Map<String, double>> adjustLevels(
+    String outletId,
+    Map<String, double> deltas, {
+    required String reason,
+    String? clientUuid,
+    String? transactionClientUuid,
+    bool enqueueMovement = true,
+  }) async {
+    final levels = _levelsByOutlet[outletId] ?? const <StockItem>[];
+    if (levels.isEmpty) return const {};
+    final updated = [...levels];
+    final applied = <String, double>{};
+    final syncItems = <Map<String, dynamic>>[];
+    for (final entry in deltas.entries) {
+      if (entry.value == 0) continue;
+      final i = updated.indexWhere((s) => s.name == entry.key);
+      if (i < 0) continue;
+      final before = updated[i];
+      final afterQty =
+          (before.qty + entry.value).clamp(0.0, double.infinity);
+      final realDelta = afterQty - before.qty;
+      if (realDelta == 0) continue;
+      updated[i] = before.copyWith(qty: afterQty);
+      applied[before.name] = realDelta;
+      syncItems.add({
+        'name': before.name,
+        'unit': before.unit,
+        'qty_after': afterQty,
+        'low_threshold': before.lowThreshold,
+        'cost_per_unit':
+            before.costPerUnit < 0 ? 0 : before.costPerUnit.round(),
+        'delta': realDelta,
+      });
+    }
+    if (applied.isEmpty) return const {};
+    _levelsByOutlet[outletId] = updated;
+    notifyListeners();
+    await _saveAllLevels();
+    if (enqueueMovement) {
+      await _enqueueStockMovement(
+        {
+          'client_uuid': clientUuid ?? newClientUuid(),
+          'outlet_id': outletId,
+          'reason': reason,
+          if (transactionClientUuid != null)
+            'transaction_client_uuid': transactionClientUuid,
+          'items': syncItems,
+        },
+        'adjustLevels $reason (lokal tetap sah)',
+      );
+    }
+    return applied;
+  }
+
+  /// Pastikan satu bahan ada di gerai [outletId] (Batch C10 WS1 —
+  /// gudang): bila belum ada, buat baris qty 0 (unit + ambang dari
+  /// argumen). Dipakai stok masuk gudang untuk bahan baru.
+  Future<void> ensureStockItem(
+    String outletId,
+    String name,
+    String unit, {
+    double lowThreshold = 0,
+  }) async {
+    final levels = _levelsByOutlet[outletId] ?? const <StockItem>[];
+    if (levels.any((s) => s.name == name)) return;
+    final item = StockItem(
+      name: name,
+      unit: unit,
+      qty: 0,
+      lowThreshold: lowThreshold,
+      outletId: outletId,
+    );
+    _levelsByOutlet[outletId] = [...levels, item];
+    notifyListeners();
+    await _saveOneLevel(item);
+  }
+
+  /// Ubah harga per satuan satu bahan di gerai [outletId] mana pun
+  /// (Batch C10 WS4 — gudang + gerai: biaya Teh Masak dihitung dari
+  /// Teh Kering saat masak). Menyelaraskan konfigurasi master
+  /// (event 'master' stock_item_config) seperti updateCost.
+  Future<void> setCostFor(
+    String outletId,
+    String name,
+    double cost,
+  ) async {
+    if (!isValidCost(cost)) return;
+    final levels = _levelsByOutlet[outletId] ?? const <StockItem>[];
+    final i = levels.indexWhere((s) => s.name == name);
+    if (i < 0) return;
+    if (levels[i].costPerUnit == cost) return;
+    final updated = [...levels];
+    updated[i] = updated[i].copyWith(costPerUnit: cost);
+    _levelsByOutlet[outletId] = updated;
+    notifyListeners();
+    await _saveOneLevel(updated[i]);
+    await _enqueueStockConfig(outletId, updated[i]);
+  }
+
+  /// Pindahkan stok antar outlet (Batch C10 WS3 — kirim paket):
+  /// [fromOutletId] berkurang, [toOutletId] bertambah, SEKALIGUS.
+  /// "Atomik" di sisi lokal: kedua sisi diubah di memori + disimpan
+  /// dalam satu panggilan — bila simpan gagal, memori tetap yang
+  /// dipakai (pola StockService) dan event 'stock_send' TIDAK
+  /// diantrekan (pemanggil yang mengantre sesudah transfer sukses).
+  /// false = gudang tidak cukup (dicek dulu — tidak ada yang diubah).
+  /// [items] = nama bahan -> jumlah (wajib > 0).
+  /// Bahan yang belum ada di gerai tujuan dibuat dengan qty kiriman
+  /// (unit + ambang + harga ikut bahan gudang).
+  Future<bool> transferStock({
+    required String fromOutletId,
+    required String toOutletId,
+    required Map<String, double> items,
+  }) async {
+    final from = _levelsByOutlet[fromOutletId] ?? const <StockItem>[];
+    final fromByName = {for (final s in from) s.name: s};
+    for (final entry in items.entries) {
+      if (entry.value <= 0) return false;
+      final have = fromByName[entry.key]?.qty ?? 0;
+      if (have < entry.value) return false;
+    }
+    final updatedFrom = [...from];
+    var updatedTo = [...(_levelsByOutlet[toOutletId] ?? const <StockItem>[])];
+    for (final entry in items.entries) {
+      final fi = updatedFrom.indexWhere((s) => s.name == entry.key);
+      final before = updatedFrom[fi];
+      updatedFrom[fi] = before.copyWith(qty: before.qty - entry.value);
+      final ti = updatedTo.indexWhere((s) => s.name == entry.key);
+      if (ti < 0) {
+        updatedTo = [
+          ...updatedTo,
+          StockItem(
+            name: before.name,
+            unit: before.unit,
+            qty: entry.value,
+            lowThreshold: before.lowThreshold,
+            costPerUnit: before.costPerUnit,
+            outletId: toOutletId,
+            shelfLifeDays: before.shelfLifeDays,
+          ),
+        ];
+      } else {
+        updatedTo[ti] =
+            updatedTo[ti].copyWith(qty: updatedTo[ti].qty + entry.value);
+      }
+    }
+    _levelsByOutlet[fromOutletId] = updatedFrom;
+    _levelsByOutlet[toOutletId] = updatedTo;
+    notifyListeners();
+    await _saveAllLevels();
     return true;
   }
 
@@ -767,6 +1264,7 @@ class StockService extends ChangeNotifier {
               qty: item.qty,
               lowThreshold: item.lowThreshold,
               costPerUnit: Value(item.costPerUnit),
+              shelfLifeDays: Value(item.shelfLifeDays),
             ),
             mode: InsertMode.insertOrReplace,
           );
@@ -790,6 +1288,7 @@ class StockService extends ChangeNotifier {
                   qty: item.qty,
                   lowThreshold: item.lowThreshold,
                   costPerUnit: Value(item.costPerUnit),
+                  shelfLifeDays: Value(item.shelfLifeDays),
                 ),
                 mode: InsertMode.insertOrReplace,
               );

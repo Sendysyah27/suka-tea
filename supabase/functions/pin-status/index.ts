@@ -1,8 +1,11 @@
 // SUKA TEA — Edge Function `pin-status`
-// Cek apakah PIN Owner sudah diatur untuk satu outlet — tanpa membocorkan
+// Cek apakah PIN Owner GLOBAL sudah diatur — tanpa membocorkan
 // hash atau nilai PIN. Dipakai halaman Pengaturan untuk menampilkan status.
+// GLOBAL (koreksi Sendy 24 Nov 2026): satu PIN untuk semua gerai —
+// selalu cek baris outlet global (...0001); outlet_id dari client
+// DIABAIKAN.
 //
-// POST { outlet_id } -> { ok:true, set:boolean }
+// POST {} (outlet_id diterima tapi diabaikan) -> { ok:true, set:boolean }
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
@@ -10,6 +13,10 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// Baris PIN Owner GLOBAL — satu PIN untuk semua gerai (koreksi Sendy
+// 24 Nov 2026). PIN yang dulu dibuat di Gerai 1 tersimpan di baris ini.
+const GLOBAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -28,11 +35,8 @@ Deno.serve(async (req: Request) => {
     if (!supabaseUrl || !serviceKey) {
       return json({ ok: false, error: "Edge Function belum dikonfigurasi" }, 501);
     }
-    const body = await req.json().catch(() => ({}));
-    const outletId = String(body.outlet_id ?? "");
-    if (!outletId) {
-      return json({ ok: false, error: "outlet_id wajib" }, 400);
-    }
+    // PIN Owner GLOBAL — outlet_id dari client diabaikan.
+    const outletId = GLOBAL_OUTLET_ID;
     const supabase = createClient(supabaseUrl, serviceKey);
     const { data: row } = await supabase
       .from("app_settings")

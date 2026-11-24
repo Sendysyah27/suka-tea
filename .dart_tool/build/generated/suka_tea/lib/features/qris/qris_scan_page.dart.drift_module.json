@@ -1,8 +1,0 @@
-{
-  "elements": {},
-  "imports": [
-    "package:flutter/material.dart",
-    "package:mobile_scanner/mobile_scanner.dart",
-    "package:suka_tea/core/theme/app_theme.dart"
-  ]
-}

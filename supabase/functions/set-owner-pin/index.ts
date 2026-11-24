@@ -1,6 +1,8 @@
 // SUKA TEA — Edge Function `set-owner-pin`
-// Atur / ubah PIN Owner (6 digit). Hash bcrypt disimpan di app_settings
-// (key owner_pin_hash). PIN lama TIDAK PERNAH dikirim kembali ke client.
+// Atur / ubah PIN Owner GLOBAL (koreksi Sendy 24 Nov 2026): SATU PIN untuk
+// semua gerai. Hash bcrypt disimpan di app_settings (key owner_pin_hash)
+// SELALU di baris outlet global (...0001); outlet_id dari client
+// DIABAIKAN. PIN lama TIDAK PERNAH dikirim kembali ke client.
 //
 // - Belum ada hash  -> atur langsung (setup pertama kali).
 // - Sudah ada hash -> current_pin wajib dan harus cocok dulu.
@@ -9,7 +11,7 @@
 // Secret yang dibutuhkan (otomatis tersedia di Edge Functions):
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 //
-// POST { outlet_id, current_pin?, new_pin } -> { ok, error? }
+// POST { current_pin?, new_pin } (outlet_id diterima tapi diabaikan) -> { ok, error? }
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 // bcryptjs = modul CommonJS. `import * as bcrypt` di Deno memberi namespace
@@ -22,6 +24,10 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// Baris PIN Owner GLOBAL — satu PIN untuk semua gerai (koreksi Sendy
+// 24 Nov 2026). PIN yang dulu dibuat di Gerai 1 tersimpan di baris ini.
+const GLOBAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -41,11 +47,12 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "Edge Function belum dikonfigurasi" }, 501);
     }
     const body = await req.json().catch(() => ({}));
-    const outletId = String(body.outlet_id ?? "");
+    // PIN Owner GLOBAL — outlet_id dari client diabaikan.
+    const outletId = GLOBAL_OUTLET_ID;
     const currentPin = String(body.current_pin ?? "");
     const newPin = String(body.new_pin ?? "");
-    if (!outletId || !/^\d{6}$/.test(newPin)) {
-      return json({ ok: false, error: "outlet_id + PIN baru 6 digit wajib" }, 400);
+    if (!/^\d{6}$/.test(newPin)) {
+      return json({ ok: false, error: "PIN baru 6 digit wajib" }, 400);
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);

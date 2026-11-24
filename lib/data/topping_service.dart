@@ -2,6 +2,8 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import 'local/app_database.dart';
+import 'local/outbox_service.dart';
+import 'master_sync.dart';
 import 'models.dart';
 import 'seed_menu.dart';
 import 'stock_service.dart';
@@ -160,6 +162,8 @@ class ToppingService extends ChangeNotifier {
     // Bila bahan bernama sama sudah ada, addStockItem mengembalikan
     // false dan topping tetap dibuat (tidak digagalkan).
     await StockService.instance.addStockItem(clean, 'porsi', 0, 0);
+    // Batch C10 WS0: topping baru = master-data.
+    await _enqueueMaster(item);
     return true;
   }
 
@@ -207,6 +211,10 @@ class ToppingService extends ChangeNotifier {
     } catch (e) {
       debugPrint('ToppingService ubah gagal simpan: $e');
     }
+    // Batch C10 WS0: ubah topping = master-data (rename bahan stok
+    // sudah diantre sebagai master stock_item_config oleh
+    // StockService.renameStock — di sini antre topping-nya).
+    await _enqueueMaster(_toppings[i]);
     return true;
   }
 
@@ -223,11 +231,16 @@ class ToppingService extends ChangeNotifier {
     } catch (e) {
       debugPrint('ToppingService toggle gagal simpan: $e');
     }
+    // Batch C10 WS0: toggle aktif = master-data.
+    await _enqueueMaster(_toppings[i]);
   }
 
   /// Hapus topping (dengan konfirmasi di UI pemanggil).
   /// Bahan stoknya TETAP ADA — stoknya mungkin masih ada.
+  /// Batch C10 WS0: hapus = is_deleted (HP lain nonaktifkan juga).
   Future<void> removeTopping(String id) async {
+    final item = _toppings.where((t) => t.id == id).firstOrNull;
+    if (item == null) return;
     _toppings = _toppings.where((t) => t.id != id).toList();
     notifyListeners();
     try {
@@ -237,6 +250,7 @@ class ToppingService extends ChangeNotifier {
     } catch (e) {
       debugPrint('ToppingService hapus gagal simpan: $e');
     }
+    await _enqueueMaster(item, isDeleted: true);
   }
 
   Future<void> _saveAll() async {
@@ -254,5 +268,101 @@ class ToppingService extends ChangeNotifier {
         debugPrint('ToppingService seed gagal simpan: $e');
       }
     }
+  }
+
+  // ===================== Master sync (Batch C10 WS0) =====================
+
+  Future<void> _enqueueMaster(ToppingItem item, {bool isDeleted = false}) async {
+    try {
+      await OutboxService.instance.enqueueSale(
+        MasterChange(
+          entity: MasterEntity.topping,
+          id: item.id,
+          updatedAt: DateTime.now().toUtc(),
+          isDeleted: isDeleted,
+          data: {
+            'id': item.id,
+            'name': item.name,
+            'price_delta': item.priceDelta,
+            'active': isDeleted ? false : item.active,
+          },
+        ).toEventPayload(),
+        kind: 'master',
+      );
+    } catch (e) {
+      debugPrint('ToppingService antre master gagal: $e');
+    }
+  }
+
+  /// Terapkan topping hasil pull server (Batch C10 WS0): perubahan
+  /// yang menang LWW (bukan pending) diterapkan ke memori + Drift.
+  /// Topping is_deleted = hapus lokal (bahan stoknya TETAP ADA).
+  /// Topping BARU dari HP lain disisipkan (+ bahan stok porsi-nya).
+  Future<void> mergePulledToppings(List<MasterChange> serverChanges) async {
+    if (!_initialized) return;
+    final pending = await OutboxService.instance.pendingMasterKeys();
+    final localUpdatedAt = <String, DateTime>{};
+    // Toppings tidak menyimpan updated_at — pakai epoch (server
+    // menang bila ada perubahan; perubahan lokal yang belum terkirim
+    // dilindungi pendingKeys 'topping|<id>').
+    for (final t in _toppings) {
+      localUpdatedAt['${MasterEntity.topping}|${t.id}'] =
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    }
+    final plan = planMasterMerge(
+      serverChanges: serverChanges,
+      localUpdatedAt: localUpdatedAt,
+      pendingKeys: pending,
+    );
+    if (plan.isEmpty) return;
+    var changed = false;
+    for (final change in plan) {
+      final name = change.data['name'] as String? ?? '';
+      if (name.isEmpty && !change.isDeleted) continue;
+      final i = _toppings.indexWhere((t) => t.id == change.id);
+      if (change.isDeleted) {
+        if (i < 0) continue;
+        _toppings = _toppings.where((t) => t.id != change.id).toList();
+        changed = true;
+        try {
+          await (_database.delete(_database.toppings)
+                ..where((t) => t.id.equals(change.id)))
+              .go();
+        } catch (e) {
+          debugPrint('ToppingService merge hapus gagal: $e');
+        }
+        continue;
+      }
+      final item = ToppingItem(
+        id: change.id,
+        name: name,
+        priceDelta: (change.data['price_delta'] as num? ?? 0).toInt(),
+        active: change.data['active'] as bool? ?? true,
+      );
+      if (i < 0) {
+        _toppings = [..._toppings, item];
+      } else {
+        _toppings = List<ToppingItem>.of(_toppings)..[i] = item;
+      }
+      changed = true;
+      try {
+        await _database.into(_database.toppings).insert(
+              ToppingsCompanion.insert(
+                id: item.id,
+                name: item.name,
+                priceDelta: item.priceDelta,
+                active: Value(item.active),
+              ),
+              mode: InsertMode.insertOrReplace,
+            );
+      } catch (e) {
+        debugPrint('ToppingService merge simpan gagal: $e');
+      }
+      // Pastikan bahan stok porsi-nya ada (topping baru dari HP lain).
+      if (!StockService.instance.stockByName.containsKey(item.name)) {
+        await StockService.instance.addStockItem(item.name, 'porsi', 0, 0);
+      }
+    }
+    if (changed) notifyListeners();
   }
 }

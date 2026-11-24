@@ -41,6 +41,10 @@ class LocalProducts extends Table {
 /// baris ini. [costPerUnit] = harga bahan per satuan (rupiah) —
 /// DITENTUKAN Owner di tab Stok (Batch C1b). -1 = belum diatur
 /// (HPP bahan itu Rp0); 0 = gratis (sengaja).
+/// [shelfLifeDays] (Batch C10 WS4): masa simpan bahan dalam hari —
+/// 0 = tidak pernah kedaluwarsa; 'Teh Masak' = 1 (hangus tiap
+/// ganti hari). Gudang = baris dengan outletId = GUDANG_ID
+/// (pseudo-outlet, lihat c10_models.dart) — TIDAK pernah di-seed.
 class StockLevels extends Table {
   TextColumn get outletId => text().withDefault(
         const Constant('00000000-0000-0000-0000-000000000001'),
@@ -50,6 +54,7 @@ class StockLevels extends Table {
   RealColumn get qty => real()();
   RealColumn get lowThreshold => real()();
   RealColumn get costPerUnit => real().withDefault(const Constant(-1))();
+  IntColumn get shelfLifeDays => integer().withDefault(const Constant(0))();
 
   @override
   Set<Column> get primaryKey => {outletId, name};
@@ -229,6 +234,179 @@ class CashShifts extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Paket kiriman stok (Batch C10 WS2): paket bahan yang Owner
+/// kirim ke gerai (mis. "Paket Standar Harian"). [id] = client_uuid
+/// (UUID v4) — kunci idempotency sync master-data. [isActive] =
+/// false berarti paket dihapus Owner (nonaktif + is_deleted di
+/// server — baris TIDAK pernah dihapus fisik dari history).
+class Packages extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get note => text().withDefault(const Constant(''))();
+  BoolColumn get isActive => boolean().withDefault(const Constant(true))();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Satu baris isi paket kiriman (Batch C10 WS2): [qty] > 0 dalam
+/// [unit] = satuan baku bahan itu (terkunci di UI — tidak bisa
+/// beda dari satuan bahan). Satu bahan max 1x per paket.
+@DataClassName('DbPackageItem')
+class PackageItems extends Table {
+  TextColumn get id => text()();
+  TextColumn get packageId => text()();
+  TextColumn get stockName => text()();
+  RealColumn get qty => real()();
+  TextColumn get unit => text()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Paket default per gerai (Batch C10 WS2): satu paket per gerai
+/// (nullable = gerai belum punya paket default). [updatedAt] UTC
+/// untuk last-write-wins sync master-data.
+class OutletPackageDefaults extends Table {
+  TextColumn get outletId => text()();
+  TextColumn get packageId => text().nullable()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {outletId};
+}
+
+/// Kiriman stok ke gerai (Batch C10 WS3): satu baris per pengiriman.
+/// [packageId] null = kirim custom / top-up tanpa paket.
+/// [packageName] = snapshot nama paket saat kirim (paket bisa
+/// diganti nama sesudahnya). [status] 'ok' | 'gagal' — 'gagal'
+/// = server menolak (gudang kurang) lalu kiriman dibalik lokal.
+@DataClassName('DbStockSend')
+class StockSends extends Table {
+  TextColumn get id => text()();
+  TextColumn get outletId => text()();
+  TextColumn get packageId => text().nullable()();
+  TextColumn get packageName => text().withDefault(const Constant(''))();
+  DateTimeColumn get sentAt => dateTime()();
+  TextColumn get sentBy => text().withDefault(const Constant('Owner'))();
+  TextColumn get note => text().withDefault(const Constant(''))();
+  TextColumn get status => text().withDefault(const Constant('ok'))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Isi satu kiriman (Batch C10 WS3): [qty] dalam [unit] baku bahan.
+@DataClassName('DbSendItem')
+class SendItems extends Table {
+  TextColumn get id => text()();
+  TextColumn get sendId => text()();
+  TextColumn get stockName => text()();
+  RealColumn get qty => real()();
+  TextColumn get unit => text()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Opname stok (Batch C10 WS6): satu baris per bahan yang DIHITUNG
+/// (bukan per sesi — satu opname bisa punya banyak baris).
+/// [systemQty] = snapshot stok sistem saat hitung; [physicalQty] =
+/// hasil hitung fisik; selisih = fisik − sistem (dihitung, tidak
+/// disimpan). [adjusted] = true bila Owner sudah menekan
+/// "Sesuaikan stok" untuk baris ini (stok sistem diubah = selisih).
+@DataClassName('DbStockOpname')
+class StockOpnames extends Table {
+  TextColumn get id => text()();
+  TextColumn get outletId => text()();
+  TextColumn get stockName => text()();
+  RealColumn get systemQty => real()();
+  RealColumn get physicalQty => real()();
+  DateTimeColumn get countedAt => dateTime()();
+  TextColumn get countedBy => text().withDefault(const Constant('Owner'))();
+  TextColumn get note => text().withDefault(const Constant(''))();
+  BoolColumn get adjusted => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Target omzet harian per gerai (Batch C10 WS7 §4): [targetOmzet]
+/// rupiah per hari, 0 = belum ada target. [updatedAt] UTC untuk
+/// last-write-wins sync master-data.
+@DataClassName('DbGeraiTarget')
+class GeraiTargets extends Table {
+  TextColumn get outletId => text()();
+  IntColumn get targetOmzet => integer()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {outletId};
+}
+
+/// Riwayat stok masuk gudang (Batch C10 WS1): satu baris per
+/// pencatatan masuk. [totalPrice] = harga beli TOTAL (Rp, 0 =
+/// tidak diisi — costPerUnit bahan tidak berubah bila 0).
+/// [date] = tanggal masuk (default hari ini, maks 30 hari mundur,
+/// tidak pernah masa depan). TIDAK ada edit/hapus riwayat (audit
+/// trail — salah catat diperbaiki via Opname + penyesuaian).
+class StockIns extends Table {
+  TextColumn get id => text()();
+  TextColumn get stockName => text()();
+  TextColumn get unit => text()();
+  RealColumn get qty => real()();
+  IntColumn get totalPrice => integer().withDefault(const Constant(0))();
+  TextColumn get supplier => text().withDefault(const Constant(''))();
+  DateTimeColumn get date => dateTime()();
+  TextColumn get note => text().withDefault(const Constant(''))();
+  DateTimeColumn get createdAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Riwayat masak teh (Batch C10 WS4): satu baris per aksi Masak Teh.
+/// [kgUsed] = Teh Kering dipakai (kg); [litersMade] = Teh Masak
+/// dihasilkan (liter) — TIDAK ada rasio asumsi, keduanya angka
+/// nyata dari yang masak. Kedaluwarsa (sisa kemarin terbuang)
+/// dicatat sebagai mutasi stok reason 'kedaluwarsa', bukan baris
+/// di sini (lihat riwayat masak di BrewService — gabungan tabel
+/// ini + mutasi 'kedaluwarsa' dari pull).
+@DataClassName('DbBrewRecord')
+class BrewRecords extends Table {
+  TextColumn get id => text()();
+  TextColumn get outletId => text()();
+  RealColumn get kgUsed => real()();
+  RealColumn get litersMade => real()();
+  DateTimeColumn get brewedAt => dateTime()();
+  TextColumn get brewedBy => text().withDefault(const Constant('Owner'))();
+  RealColumn get expiredLiters => real().withDefault(const Constant(0))();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Status masak per gerai (Batch C10 WS4): tanggal TERAKHIR Teh
+/// Masak dimasak di gerai itu. Bila [brewedDate] < hari ini dan
+/// Teh Masak masih bersisa, sisa itu hangus (kedaluwarsa) saat
+/// app start / tiap tick 10 detik / sebelum penjualan.
+/// [litersMade] = total liter Teh Masak hari itu (dipakai hitung
+/// biaya tertimbang + label sisa di UI; saldo sendiri di StockLevels).
+@DataClassName('DbBrewState')
+class BrewStates extends Table {
+  TextColumn get outletId => text()();
+  DateTimeColumn get brewedDate => dateTime().nullable()();
+  RealColumn get litersMade => real().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {outletId};
+}
+
 @DriftDatabase(tables: [
   OutboxEntries,
   LocalProducts,
@@ -241,12 +419,22 @@ class CashShifts extends Table {
   CashierSessions,
   Expenses,
   CashShifts,
+  Packages,
+  PackageItems,
+  OutletPackageDefaults,
+  StockSends,
+  SendItems,
+  StockOpnames,
+  GeraiTargets,
+  StockIns,
+  BrewRecords,
+  BrewStates,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'suka-tea'));
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -346,6 +534,48 @@ class AppDatabase extends _$AppDatabase {
               'FROM stock_levels_old',
             );
             await m.database.customStatement('DROP TABLE stock_levels_old');
+          }
+          // v10 -> v11 (24 Nov 2026, Batch C10 stok + gudang):
+          // - StockLevels + shelfLifeDays (Teh Masak = 1 hari).
+          // - Tabel baru: Packages, PackageItems,
+          //   OutletPackageDefaults, StockSends, SendItems,
+          //   StockOpnames, GeraiTargets, StockIns, BrewRecords,
+          //   BrewStates.
+          // - 'Teh' (kg, daun kering) DIGANTI NAMA jadi 'Teh Kering'
+          //   di semua gerai — resep 22oz yang memakai 'Teh'
+          //   diganti 'Teh Masak' 0.4 liter/cup; baris resep _r/_j
+          //   LAMA SENGAJA TIDAK disentuh (void-restore penjualan
+          //   lama tetap menemukan resepnya).
+          // - Tiap gerai yang punya 'Teh Kering' mendapat baris
+          //   'Teh Masak' (liter, 0, shelfLifeDays 1) bila belum ada.
+          if (from < 11) {
+            await m.addColumn(stockLevels, stockLevels.shelfLifeDays);
+            await m.createTable(packages);
+            await m.createTable(packageItems);
+            await m.createTable(outletPackageDefaults);
+            await m.createTable(stockSends);
+            await m.createTable(sendItems);
+            await m.createTable(stockOpnames);
+            await m.createTable(geraiTargets);
+            await m.createTable(stockIns);
+            await m.createTable(brewRecords);
+            await m.createTable(brewStates);
+            await m.database.customStatement(
+              "UPDATE stock_levels SET name = 'Teh Kering' "
+              "WHERE name = 'Teh'",
+            );
+            await m.database.customStatement(
+              "UPDATE product_recipes SET stock_name = 'Teh Masak', "
+              "qty = 0.4 WHERE stock_name = 'Teh' "
+              "AND variant_id GLOB '*_22oz'",
+            );
+            await m.database.customStatement(
+              'INSERT OR IGNORE INTO stock_levels '
+              '(outlet_id, name, unit, qty, low_threshold, '
+              'cost_per_unit, shelf_life_days) '
+              "SELECT outlet_id, 'Teh Masak', 'liter', 0, 0, 0, 1 "
+              "FROM stock_levels WHERE name = 'Teh Kering'",
+            );
           }
         },
       );

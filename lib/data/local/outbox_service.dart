@@ -79,6 +79,40 @@ class OutboxService {
     }
   }
 
+  /// Kunci master-data yang masih punya event 'master' pending
+  /// (Batch C10 WS0 — bentuk '$entity|$id', lihat master_sync.dart).
+  /// Dipakai merge pull: pull TIDAK PERNAH menimpa kunci ini
+  /// (perubahan lokal yang belum terkirim selalu menang).
+  Future<Set<String>> pendingMasterKeys() async {
+    final keys = <String>{};
+    try {
+      final pending = await pendingEntries();
+      for (final entry in pending) {
+        if (entry.kind != 'master') continue;
+        final raw = jsonDecode(entry.payload);
+        if (raw is! Map) continue;
+        final entity = raw['entity'];
+        final id = raw['entity_id'];
+        if (entity is String && id is String) keys.add('$entity|$id');
+      }
+    } catch (e) {
+      debugPrint('Outbox pendingMasterKeys gagal: $e');
+    }
+    return keys;
+  }
+
+  /// Hapus entri outbox (Batch C10 WS3): dipakai saat kiriman ke
+  /// gerai DITOLAK server ('gudang_kurang') — event 'stock_send'
+  /// yang gagal TIDAK boleh di-retry selamanya (stok lokal sudah
+  /// dibalik; kirim ulang = kiriman BARU dari halaman Kirim).
+  Future<void> deleteEntries(Iterable<String> ids) async {
+    try {
+      await _database.deleteOutboxEntries(ids);
+    } catch (e) {
+      debugPrint('Outbox hapus gagal: $e');
+    }
+  }
+
   /// Tambah hitungan percobaan kirim satu entri (gagal sync).
   /// Entri TETAP pending — hanya dicatat supaya terlihat bila
   /// sebuah entri macet berulang. Tidak pernah menghapus antrean.

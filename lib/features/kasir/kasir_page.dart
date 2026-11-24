@@ -13,6 +13,8 @@ import '../../core/utils/split_payment.dart';
 import '../../core/widgets/product_photo.dart';
 import '../../core/widgets/screen_title.dart';
 import '../../core/widgets/tap_feedback.dart';
+import '../../data/brew_service.dart';
+import '../../data/c10_models.dart';
 import '../../data/cash_shift_service.dart';
 import '../../data/held_order_service.dart';
 import '../../data/local/outbox_service.dart';
@@ -25,6 +27,7 @@ import '../../data/seed_menu.dart';
 import '../../data/stock_service.dart';
 import '../../data/sync_payload.dart';
 import '../../data/sync_service.dart';
+import '../gudang/brew_page.dart';
 import '../login/cashier_session.dart';
 import '../laporan/shift_sheets.dart';
 import '../qris/qris_pay_page.dart';
@@ -218,6 +221,11 @@ class _KasirPageState extends State<KasirPage> {
     if (_cart.isEmpty || _isProcessing) return;
     setState(() => _isProcessing = true);
     try {
+      // Batch C10 WS4: hanguskan dulu sisa Teh Masak kemarin (bila
+      // ada) SEBELUM cek stok — teh kemarin tidak boleh dihitung
+      // sebagai stok jualan hari ini.
+      await BrewService.instance.expireCheck();
+      if (!mounted) return;
       // Cek stok bahan dulu — SEBELUM layar QRIS / uang diterima dibuka.
       // Kalau ada yang kurang, kasir memilih: batal (cart utuh,
       // _isProcessing direset oleh finally) atau tetap jual.
@@ -979,6 +987,51 @@ class _MenuSection extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
+        // Batch C10 WS4: Teh Masak = 0 -> banner + shortcut Masak
+        // Teh (menu teh "Habis" di tab Stok kasir saja tidak cukup —
+        // kasir harus tahu SEBELUM memilih menu).
+        ListenableBuilder(
+          listenable: Listenable.merge([
+            StockService.instance,
+            BrewService.instance,
+          ]),
+          builder: (context, _) {
+            final tehMasak = StockService.instance.stockByName[tehMasakName]?.qty ?? 0;
+            if (tehMasak > 0) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: SukaTeaColors.deleteBg,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Teh Masak habis — masak dulu sebelum jualan.',
+                        style: TextStyle(
+                          color: SukaTeaColors.danger,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const BrewPage(),
+                        ),
+                      ),
+                      child: const Text('Masak Teh'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
           child: TextField(

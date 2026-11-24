@@ -1,9 +1,0 @@
-{
-  "elements": {},
-  "imports": [
-    "package:flutter/foundation.dart",
-    "package:suka_tea/data/outlet_service.dart",
-    "package:suka_tea/data/supabase_client.dart",
-    "package:suka_tea/features/pin/pin_service.dart"
-  ]
-}

@@ -2,6 +2,8 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import 'local/app_database.dart';
+import 'local/outbox_service.dart';
+import 'master_sync.dart';
 import 'models.dart';
 import 'seed_menu.dart';
 
@@ -90,12 +92,15 @@ class MenuService extends ChangeNotifier {
   }
 
   /// Simpan / perbarui satu produk (edit nama/kategori/harga/foto).
+  /// Batch C10 WS0: perubahan produk = master-data — antre event
+  /// 'master' (entity product) supaya gerai/HP lain ikut berubah.
   Future<void> updateProduct(Product product) async {
     final i = _products.indexWhere((p) => p.id == product.id);
     if (i < 0) return;
     _products[i] = product;
     notifyListeners();
     await _saveOne(product);
+    await _enqueueMasterProduct(product);
   }
 
   /// Tambah produk baru (id sudah ditentukan pemanggil).
@@ -104,19 +109,53 @@ class MenuService extends ChangeNotifier {
     _products = [..._products, product];
     notifyListeners();
     await _saveOne(product);
+    await _enqueueMasterProduct(product);
   }
 
   /// Hapus produk (dengan konfirmasi di UI pemanggil).
+  /// Batch C10 WS0: hapus = NONAKTIF + event is_deleted — produk
+  /// tetap ada di Riwayat + void-restore bisa jalan; HP lain
+  /// menyembunyikan dari Kasir (bukan hapus fisik dari history).
   Future<void> removeProduct(String id) async {
-    _products = _products.where((p) => p.id != id).toList();
+    final product = byId(id);
+    if (product == null) return;
+    _products = _products
+        .map(
+          (p) => p.id == id
+              ? Product(
+                  id: p.id,
+                  name: p.name,
+                  category: p.category,
+                  photoUrl: p.photoUrl,
+                  variants: p.variants,
+                  isActive: false,
+                )
+              : p,
+        )
+        .toList();
     notifyListeners();
-    try {
-      await (_database.delete(_database.localProducts)
-            ..where((t) => t.id.equals(id)))
-          .go();
-    } catch (e) {
-      debugPrint('MenuService hapus gagal simpan: $e');
-    }
+    await _saveOne(
+      Product(
+        id: product.id,
+        name: product.name,
+        category: product.category,
+        photoUrl: product.photoUrl,
+        variants: product.variants,
+        isActive: false,
+      ),
+    );
+    await _enqueueMaster(
+      MasterChange(
+        entity: MasterEntity.product,
+        id: id,
+        updatedAt: DateTime.now().toUtc(),
+        isDeleted: true,
+        data: _productData(
+          product,
+          isActive: false,
+        ),
+      ),
+    );
   }
 
   /// Toggle Aktif/Habis satu produk.
@@ -162,5 +201,102 @@ class MenuService extends ChangeNotifier {
     for (final p in _products) {
       await _saveOne(p);
     }
+  }
+
+  // ===================== Master sync (Batch C10 WS0) =====================
+
+  static Map<String, Object?> _productData(
+    Product p, {
+    bool? isActive,
+  }) {
+    final price = p.variants.isEmpty ? 0 : p.variants.first.price;
+    return {
+      'id': p.id,
+      'name': p.name,
+      'category': p.category,
+      'price': price,
+      'photo_url': p.photoUrl,
+      'is_active': isActive ?? p.isActive,
+    };
+  }
+
+  Future<void> _enqueueMaster(MasterChange change) async {
+    try {
+      await OutboxService.instance.enqueueSale(
+        change.toEventPayload(),
+        kind: 'master',
+      );
+    } catch (e) {
+      debugPrint('MenuService antre master gagal: $e');
+    }
+  }
+
+  Future<void> _enqueueMasterProduct(Product product) async {
+    await _enqueueMaster(
+      MasterChange(
+        entity: MasterEntity.product,
+        id: product.id,
+        updatedAt: DateTime.now().toUtc(),
+        data: _productData(product),
+      ),
+    );
+  }
+
+  /// Terapkan produk hasil pull server (Batch C10 WS0): perubahan
+  /// yang menang LWW (bukan pending) diterapkan ke memori + Drift.
+  /// Produk is_deleted = nonaktif (tetap di Riwayat, hilang dari
+  /// Kasir). Produk BARU dari HP lain disisipkan.
+  Future<void> mergePulledProducts(List<MasterChange> serverChanges) async {
+    if (!_initialized) return;
+    final pending = await OutboxService.instance.pendingMasterKeys();
+    final localUpdatedAt = <String, DateTime>{};
+    // LocalProducts tidak menyimpan updated_at — pakai epoch: server
+    // menang bila ada perubahan; perubahan lokal yang belum terkirim
+    // dilindungi pendingKeys (kunci 'product|<id>').
+    for (final p in _products) {
+      localUpdatedAt['${MasterEntity.product}|${p.id}'] =
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    }
+    final plan = planMasterMerge(
+      serverChanges: serverChanges,
+      localUpdatedAt: localUpdatedAt,
+      pendingKeys: pending,
+    );
+    if (plan.isEmpty) return;
+    var changed = false;
+    for (final change in plan) {
+      final name = change.data['name'] as String? ?? '';
+      if (name.isEmpty) continue;
+      final price = (change.data['price'] as num? ?? 0).toInt();
+      final category = change.data['category'] as String? ?? 'Mixtea';
+      final photoUrl = change.data['photo_url'] as String?;
+      final isActive = change.isDeleted
+          ? false
+          : (change.data['is_active'] as bool? ?? true);
+      final product = Product(
+        id: change.id,
+        name: name,
+        category: category,
+        photoUrl: photoUrl,
+        isActive: isActive,
+        variants: [
+          ProductVariant(
+            id: '${change.id}_22oz',
+            name: '22oz',
+            sizeOz: 22,
+            price: price,
+          ),
+        ],
+      );
+      final i = _products.indexWhere((p) => p.id == change.id);
+      if (i < 0) {
+        _products = [..._products, product];
+      } else {
+        _products = List<Product>.of(_products)..[i] = product;
+      }
+      changed = true;
+      await _saveOne(product);
+    }
+    if (changed) notifyListeners();
   }
 }

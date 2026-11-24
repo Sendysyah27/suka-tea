@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 
 import 'app/app.dart';
 import 'app/splash_screen.dart';
+import 'data/brew_service.dart';
 import 'data/cash_shift_service.dart';
 import 'data/expense_service.dart';
 import 'data/held_order_service.dart';
 import 'data/menu_service.dart';
 import 'data/outlet_service.dart';
+import 'data/package_service.dart';
 import 'data/sale_history.dart';
 import 'data/stock_service.dart';
 import 'data/supabase_client.dart';
@@ -54,6 +56,15 @@ Future<void> main() async {
   // Shift kas dari Drift (Batch C7) — Laporan memakai shift open +
   // riwayat closed gerai aktif.
   await CashShiftService.instance.init();
+  // Paket kiriman + stok masuk + opname + target (Batch C10 WS1/
+  // WS2/WS3/WS6/WS7): butuh StockService siap dulu (gudang +
+  // resep). Template "Paket Standar Harian" dibuat di sini bila
+  // install C10 pertama (belum ada paket/kiriman/masuk).
+  await PackageService.instance.init();
+  // Masak Teh (Batch C10 WS4): riwayat masak + status harian.
+  // Cek hangus saat start (sisa Teh Masak kemarin hangus hari ini).
+  await BrewService.instance.init();
+  await BrewService.instance.expireCheck();
   // Sinkronisasi Supabase (Batch C6): flush antrean outbox yang
   // masih pending + retry berkala 60 dtk selama ada pending.
   // Fire-and-forget — TIDAK PERNAH memblokir jualan: gagal sync =

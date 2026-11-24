@@ -27,11 +27,27 @@ import '../kasir/receipt.dart';
 /// dari server (refreshSales) + tombol refresh di AppBar; penjualan
 /// HP lain muncul di sini dalam hitungan detik (timer 10 detik).
 class RiwayatPage extends StatefulWidget {
-  const RiwayatPage({super.key, required this.role, this.outletId});
+  const RiwayatPage({
+    super.key,
+    required this.role,
+    this.outletId,
+    this.cashierName,
+    this.day,
+  });
 
   final AppRole role;
 
   final String? outletId;
+
+  /// Filter kasir (Batch C10 WS7 §5 — dari Dashboard "Performa
+  /// per kasir"): hanya transaksi yang dicatat kasir ini.
+  /// null = semua kasir. Dibandingkan dengan displayCashierName
+  /// ('Kasir' bila kosong) supaya baris lama ikut ketarik.
+  final String? cashierName;
+
+  /// Filter hari (Batch C10 WS7 §5): hanya transaksi hari ini.
+  /// null = semua hari.
+  final DateTime? day;
 
   @override
   State<RiwayatPage> createState() => _RiwayatPageState();
@@ -143,9 +159,27 @@ class _RiwayatPageState extends State<RiwayatPage> {
         listenable: SaleHistoryService.instance,
         builder: (context, _) {
           final allSales = SaleHistoryService.instance.sales;
-          final sales = widget.outletId == null
+          var sales = widget.outletId == null
               ? allSales
               : allSales.where((s) => s.outletId == widget.outletId).toList();
+          if (widget.cashierName != null) {
+            sales = sales
+                .where(
+                  (s) => s.displayCashierName == widget.cashierName,
+                )
+                .toList();
+          }
+          if (widget.day != null) {
+            final d = widget.day!;
+            sales = sales
+                .where(
+                  (s) =>
+                      s.createdAt.year == d.year &&
+                      s.createdAt.month == d.month &&
+                      s.createdAt.day == d.day,
+                )
+                .toList();
+          }
           if (sales.isEmpty) {
             return Center(
               child: Text(

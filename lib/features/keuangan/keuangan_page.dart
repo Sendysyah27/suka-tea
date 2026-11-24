@@ -9,6 +9,7 @@ import '../../core/utils/roles.dart';
 import '../../core/widgets/tap_feedback.dart';
 import '../../data/expense_service.dart';
 import '../../data/models.dart';
+import '../../data/outlet_service.dart';
 import '../../data/sale_history.dart';
 import '../../data/stock_service.dart';
 import '../../data/sync_service.dart';
@@ -25,14 +26,23 @@ import 'expense_sheet.dart';
 /// HPP (estimasi) − pengeluaran hari ini; pengeluaran dicatat di
 /// seksi Pengeluaran di bawah (Kasir + Owner boleh tambah, Owner
 /// boleh hapus).
-class KeuanganPage extends StatelessWidget {
+class KeuanganPage extends StatefulWidget {
   const KeuanganPage({super.key, required this.role});
 
   final AppRole role;
 
   @override
+  State<KeuanganPage> createState() => _KeuanganPageState();
+}
+
+class _KeuanganPageState extends State<KeuanganPage> {
+  /// Gerai yang ditampilkan (Batch C10 WS8): null = "Semua gerai"
+  /// (total semua gerai yang sudah tersinkron di HP ini).
+  String? _selectedOutletId;
+
+  @override
   Widget build(BuildContext context) {
-    if (!role.canViewProfit) {
+    if (!widget.role.canViewProfit) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -53,43 +63,89 @@ class KeuanganPage extends StatelessWidget {
         SaleHistoryService.instance,
         StockService.instance,
         ExpenseService.instance,
+        SyncService.instance,
+        OutletService.instance,
       ]),
       builder: (context, _) {
         // Transaksi void DIKECUALIKAN (Batch C1): omzet, laba, dan
         // rincian tidak menghitung transaksi yang sudah di-void.
-        final today =
-            SaleHistoryService.instance.activeSalesOn(DateTime.now());
-        final expensesTodayList =
-            ExpenseService.instance.expensesOn(DateTime.now());
+        // Batch C10 WS8: gerai dipilih lewat dropdown (null = semua
+        // gerai — statistik dijumlah per gerai, HPP pakai biaya
+        // tiap gerai, bukan biaya gerai aktif).
+        final now = DateTime.now();
+        final outletIds = _selectedOutletId == null
+            ? OutletService.instance.outlets.map((o) => o.id).toList()
+            : [_selectedOutletId!];
+        final today = <SaleRecord>[];
+        final expensesTodayList = <Expense>[];
+        var syncedCount = 0;
+        for (final outletId in outletIds) {
+          if (_selectedOutletId == null &&
+              !SyncService.instance.hasSynced(outletId)) {
+            continue;
+          }
+          syncedCount++;
+          today.addAll(
+            SaleHistoryService.instance.activeSalesOn(now, outletId: outletId),
+          );
+          expensesTodayList.addAll(
+            ExpenseService.instance.expensesOn(now, outletId: outletId),
+          );
+        }
         final expensesToday = totalExpenses(expensesTodayList);
         if (today.isEmpty && expensesTodayList.isEmpty) {
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Text(
-                'Belum ada transaksi hari ini.\n'
-                'Omzet, laba, dan rincian muncul setelah ada penjualan.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: SukaTeaColors.muted),
+          return Column(
+            children: [
+              _geraiDropdown(),
+              const Expanded(
+                child: Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'Belum ada transaksi hari ini.\n'
+                      'Omzet, laba, dan rincian muncul setelah ada penjualan.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: SukaTeaColors.muted),
+                    ),
+                  ),
+                ),
               ),
-            ),
+            ],
           );
         }
         // HPP dari harga bahan yang diatur Owner di tab Stok
         // (Batch C1b) — bukan lagi const estimasi di seed_menu.
         // computeDailyStats dengan daftar kosong = semua 0 (aman
         // bila hari ini baru ada pengeluaran, belum ada penjualan).
-        final stats = computeDailyStats(
-          today,
-          StockService.instance.recipes,
-          StockService.instance.costsByName,
-        );
+        // "Semua gerai": hitung per gerai lalu jumlahkan (HPP tiap
+        // gerai pakai biaya bahannya sendiri).
+        final stats = _selectedOutletId == null
+            ? _sumStats(outletIds, now)
+            : computeDailyStats(
+                today,
+                StockService.instance.recipes,
+                StockService.instance.costsByNameFor(_selectedOutletId!),
+              );
         // Laba BERSIH (Batch C7) = omzet − HPP (estimasi) −
         // pengeluaran hari ini. Label "Laba (estimasi)" dipertahankan.
         final labaBersih = stats.labaEstimate - expensesToday;
         return ListView(
           padding: const EdgeInsets.all(12),
           children: [
+            _geraiDropdown(),
+            if (_selectedOutletId == null &&
+                syncedCount < outletIds.length)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Angka hanya dari gerai yang sudah tersinkron di HP '
+                  'ini — gerai yang belum sync tidak ikut dihitung.',
+                  style: TextStyle(
+                    color: SukaTeaColors.muted,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
@@ -231,6 +287,65 @@ class KeuanganPage extends StatelessWidget {
     );
   }
 
+  /// Dropdown gerai (Batch C10 WS8): "Semua gerai" + 4 gerai.
+  Widget _geraiDropdown() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: DropdownButtonFormField<String?>(
+        initialValue: _selectedOutletId,
+        decoration: const InputDecoration(labelText: 'Gerai'),
+        items: [
+          const DropdownMenuItem<String?>(
+            value: null,
+            child: Text('Semua gerai'),
+          ),
+          for (final o in OutletService.instance.outlets)
+            DropdownMenuItem<String?>(
+              value: o.id,
+              child: Text(o.name),
+            ),
+        ],
+        onChanged: (v) => setState(() => _selectedOutletId = v),
+      ),
+    );
+  }
+
+  /// Jumlahkan statistik harian semua gerai (Batch C10 WS8 —
+  /// "Semua gerai"): tiap gerai dihitung dengan biaya bahannya
+  /// sendiri, lalu dijumlah (omzet, transaksi, cup, HPP, laba,
+  /// per cara bayar). Gerai yang belum sync dilewati.
+  DailyStats _sumStats(List<String> outletIds, DateTime day) {
+    var omzet = 0;
+    var txnCount = 0;
+    var cups = 0;
+    var hpp = 0;
+    final byMethod = <PaymentMethod, int>{};
+    for (final outletId in outletIds) {
+      if (!SyncService.instance.hasSynced(outletId)) continue;
+      final s = computeDailyStats(
+        SaleHistoryService.instance.activeSalesOn(day, outletId: outletId),
+        StockService.instance.recipes,
+        StockService.instance.costsByNameFor(outletId),
+      );
+      omzet += s.omzet;
+      txnCount += s.txnCount;
+      cups += s.cups;
+      hpp += s.hppEstimate;
+      for (final e in s.byMethod.entries) {
+        byMethod[e.key] = (byMethod[e.key] ?? 0) + e.value;
+      }
+    }
+    return DailyStats(
+      omzet: omzet,
+      txnCount: txnCount,
+      cups: cups,
+      avgPerTxn: txnCount == 0 ? 0 : omzet ~/ txnCount,
+      hppEstimate: hpp,
+      labaEstimate: omzet - hpp,
+      byMethod: byMethod,
+    );
+  }
+
   /// Sheet tambah pengeluaran (Batch C7) — halaman ini Owner-only;
   /// Kasir tambah lewat Laporan → Tambah Pengeluaran (fix review
   /// Jhon — kasir butuh jalan masuk di tengah shift). Nama pencatat
@@ -246,6 +361,10 @@ class KeuanganPage extends StatelessWidget {
       description: input.description,
       amount: input.amount,
       isCash: input.isCash,
+      // Batch C10 WS8: bila satu gerai dipilih di dropdown,
+      // pengeluaran dicatat di gerai itu; bila "Semua gerai",
+      // dicatat di gerai aktif (perilaku lama).
+      outletId: _selectedOutletId,
       cashierName: cashierName,
     );
     unawaited(SyncService.instance.syncNow());

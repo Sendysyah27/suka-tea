@@ -539,18 +539,19 @@ void main() {
     test('pending movement melindungi cost + qty lokal; sesudah '
         'terkirim cost server menang', () async {
       final outlet = OutletService.instance.currentOutletId;
-      // Gerai aktif sudah di-seed; Teh ada (qty 2.5 kg, cost seed
-      // 120000). Ubah cost -> event 'koreksi' pending.
-      final before = StockService.instance.stockByName['Teh'];
+      // Gerai aktif sudah di-seed; Teh Kering ada (qty 2.5 kg, cost
+      // seed 120000). Ubah cost -> event 'koreksi' pending.
+      // Batch C10 WS4: 'Teh' berganti nama jadi 'Teh Kering'.
+      final before = StockService.instance.stockByName['Teh Kering'];
       expect(before, isNotNull);
-      await StockService.instance.updateCost('Teh', 999);
+      await StockService.instance.updateCost('Teh Kering', 999);
       await StockService.instance.mergePulledStock(outlet, [
-        stock(name: 'Teh', qty: 1, cost: 555, outletId: outlet),
+        stock(name: 'Teh Kering', qty: 1, cost: 555, outletId: outlet),
       ]);
-      var teh = StockService.instance.stockByName['Teh']!;
+      var teh = StockService.instance.stockByName['Teh Kering']!;
       expect(teh.costPerUnit, 999);
       expect(teh.qty, before!.qty);
-      // Tandai SEMUA event koreksi Teh terkirim, merge lagi.
+      // Tandai SEMUA event koreksi Teh Kering terkirim, merge lagi.
       final pending = await OutboxService.instance.pendingEntries();
       for (final entry in pending) {
         if (entry.kind != 'stock_movement') continue;
@@ -558,14 +559,14 @@ void main() {
         if (raw is! Map || raw['reason'] != 'koreksi') continue;
         final items = raw['items'];
         if (items is List &&
-            items.any((it) => it is Map && it['name'] == 'Teh')) {
+            items.any((it) => it is Map && it['name'] == 'Teh Kering')) {
           await OutboxService.instance.markSent(entry.id);
         }
       }
       await StockService.instance.mergePulledStock(outlet, [
-        stock(name: 'Teh', qty: 1, cost: 555, outletId: outlet),
+        stock(name: 'Teh Kering', qty: 1, cost: 555, outletId: outlet),
       ]);
-      teh = StockService.instance.stockByName['Teh']!;
+      teh = StockService.instance.stockByName['Teh Kering']!;
       expect(teh.costPerUnit, 555);
       expect(teh.qty, before.qty);
     });

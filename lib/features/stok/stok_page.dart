@@ -6,10 +6,16 @@ import 'package:flutter/services.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money.dart';
 import '../../core/utils/roles.dart';
+import '../../core/widgets/product_photo.dart';
 import '../../core/widgets/tap_feedback.dart';
+import '../../data/brew_service.dart';
+import '../../data/c10_models.dart';
+import '../../data/menu_service.dart';
 import '../../data/models.dart';
+import '../../data/recipe_logic.dart';
 import '../../data/stock_service.dart';
 import '../../data/sync_service.dart';
+import '../gudang/brew_page.dart';
 
 /// Stok bahan baku — dibaca dari StockService (Drift + seed), bukan lagi
 /// seed statis. Desain v2: progress bar vs ambang + pill status.
@@ -268,6 +274,13 @@ class _StokPageState extends State<StokPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Batch C10 WS5: Kasir TIDAK melihat angka bahan baku sama
+    // sekali — tab Stok kasir hanya menampilkan "Bisa jual N cup"
+    // per menu + total kapasitas. Owner tetap melihat tampilan
+    // stok bahan baku lama (di bawah).
+    if (!_canEdit) {
+      return _KasirStockView(role: widget.role);
+    }
     return Scaffold(
       // FAB hanya Owner; Kasir read-only.
       floatingActionButton: _canEdit
@@ -574,4 +587,239 @@ class _StokPageState extends State<StokPage> {
       '${d.minute.toString().padLeft(2, '0')}';
 
   String _dayTime(DateTime d) => '${d.day}/${d.month} ${_clock(d)}';
+}
+
+/// Tab Stok untuk KASIR (Batch C10 WS5, FigCraft v32 frame 25).
+/// TIDAK ADA angka bahan baku di mana pun (kg/pcs/liter tidak
+/// tampil — bukan di kartu, bukan di long-press, bukan di menu
+/// tersembunyi). Tiap kartu menu: foto/nama, harga, "Bisa jual N
+/// cup" (N = min floor(stok gerai / takaran resep) — bahan yang
+/// tidak ada = 0; Teh Masak ikut dihitung). Header: "Total
+/// kapasitas N cup" = jumlah maksimum per menu dijumlahkan.
+/// N = 0 -> kartu abu-abu + badge "Habis" (atau "Teh Masak habis"
+/// + tombol Masak Teh bila teh yang habis). Ketuk kartu = TIDAK
+/// membuka apa-apa. Data gerai AKTIF saja; refresh via timer 10
+/// dtk + pull-to-refresh; offline = data lokal + chip "data offline".
+class _KasirStockView extends StatelessWidget {
+  const _KasirStockView({required this.role});
+
+  final AppRole role;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        StockService.instance,
+        MenuService.instance,
+        BrewService.instance,
+        SyncService.instance,
+      ]),
+      builder: (context, _) {
+        final products = MenuService.instance.products
+            .where((p) => p.isActive)
+            .toList();
+        final recipes = StockService.instance.recipes;
+        final stock = StockService.instance.stockByName;
+        final total = totalCapacityCups(products, recipes, stock);
+        final tehMasak = stock[tehMasakName]?.qty ?? 0;
+        final isOffline = !SyncService.instance.isConfigured ||
+            SyncService.instance.lastPullAt == null;
+        if (products.isEmpty) {
+          return const Center(
+            child: Text(
+              'Belum ada menu di gerai ini.',
+              style: TextStyle(color: SukaTeaColors.muted),
+            ),
+          );
+        }
+        final allZero = total == 0;
+        return RefreshIndicator(
+          onRefresh: () async {
+            await SyncService.instance.refreshSales();
+          },
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Total kapasitas $total cup',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        if (isOffline)
+                          const Chip(
+                            label: Text('data offline'),
+                            side: BorderSide.none,
+                          ),
+                      ],
+                    ),
+                    const Text(
+                      'Jumlah maksimum per menu dijumlahkan.',
+                      style: TextStyle(
+                        color: SukaTeaColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                    if (tehMasak <= 0) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: SukaTeaColors.deleteBg,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            const Expanded(
+                              child: Text(
+                                'Teh Masak habis — masak dulu sebelum jualan.',
+                                style: TextStyle(
+                                  color: SukaTeaColors.danger,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const BrewPage(),
+                                ),
+                              ),
+                              child: const Text('Masak Teh'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    if (allZero && tehMasak > 0)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text(
+                          'Semua menu habis — minta Owner kirim paket.',
+                          style: TextStyle(
+                            color: SukaTeaColors.danger,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: GridView.builder(
+                  padding: const EdgeInsets.all(12),
+                  gridDelegate:
+                      const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 12,
+                    mainAxisSpacing: 12,
+                    childAspectRatio: 0.85,
+                  ),
+                  itemCount: products.length,
+                  itemBuilder: (context, i) {
+                    final product = products[i];
+                    final recipe =
+                        recipes['${product.id}_22oz'] ?? const <RecipeLine>[];
+                    final result = sellableCupsForProduct(recipe, stock);
+                    final n = result.cups;
+                    // Bahan pembatas (bila habis) — Teh Masak habis
+                    // -> tombol Masak Teh; bahan lain habis -> "Habis".
+                    final teaLimiting =
+                        result.limitingStock == tehMasakName;
+                    final habis = n == 0;
+                    return Opacity(
+                      opacity: habis ? 0.55 : 1,
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Center(
+                                  child: ProductPhoto(
+                                    photoUrl: product.photoUrl,
+                                    width: 72,
+                                    height: 72,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                product.name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              Text(
+                                formatRupiah(
+                                  product.variants.first.price,
+                                ),
+                                style: const TextStyle(
+                                  color: SukaTeaColors.muted,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              if (habis)
+                                Chip(
+                                  label: Text(
+                                    teaLimiting
+                                        ? 'Teh Masak habis'
+                                        : 'Habis',
+                                  ),
+                                  backgroundColor:
+                                      SukaTeaColors.deleteBg,
+                                  labelStyle: const TextStyle(
+                                    color: SukaTeaColors.danger,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                  side: BorderSide.none,
+                                )
+                              else
+                                Text(
+                                  'Bisa jual $n cup',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 16,
+                                    color: SukaTeaColors.emeraldDark,
+                                  ),
+                                ),
+                              if (habis && teaLimiting) ...[
+                                const SizedBox(height: 4),
+                                OutlinedButton(
+                                  onPressed: () =>
+                                      Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => const BrewPage(),
+                                    ),
+                                  ),
+                                  child: const Text('Masak Teh'),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }

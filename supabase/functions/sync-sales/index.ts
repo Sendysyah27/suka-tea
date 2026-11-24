@@ -1,4 +1,4 @@
-// SUKA TEA — Edge Function `sync-sales` (Batch C6 + C7 + C8.2)
+// SUKA TEA — Edge Function `sync-sales` (Batch C6 + C7 + C8.2 + C9 + C10)
 // Sinkronisasi penjualan + mutasi stok per-gerai, dan baca live
 // untuk Pantau Gerai Owner.
 //
@@ -14,16 +14,34 @@
 //     inklusif, zona lokal) -> { ok, outlet_id, from, to,
 //     transactions: [...], items: [{ transaction_client_uuid,
 //     name_snapshot, qty, unit_price, modifiers_json }],
-//     stock: [{ name, unit, qty, low_threshold, cost_per_unit }],
+//     stock: [{ name, unit, qty, low_threshold, cost_per_unit,
+//     shelf_life_days, updated_at }] (Batch C10),
 //     shifts: [shift terbuka gerai itu],
 //     expenses: [pengeluaran gerai itu di jendela] (Batch C9),
 //     closed_shifts: [shift yang ditutup di jendela] (Batch C9),
-//     movements: [mutasi stok gerai itu di jendela] (Batch C9) }.
+//     movements: [mutasi stok gerai itu di jendela] (Batch C9),
+//     master_changes: [perubahan master-data] (Batch C10 WS0),
+//     sends: [kiriman ke gerai itu di jendela] (Batch C10 WS3),
+//     opnames: [baris opname gerai itu di jendela] (Batch C10 WS6),
+//     stock_ins: [stok masuk gudang di jendela — hanya bila
+//     outlet_id = GUDANG_ID] (Batch C10 WS1),
+//     brews: [riwayat masak gerai itu di jendela] (Batch C10 WS4) }.
 //   action 'shift_expected': { outlet_id, from, to } (ISO
 //     timestamp) -> { ok, cash_in, cash_out } — expected kas
 //     server (semua kasir + semua device gerai itu, void
 //     dikecualikan). Pemanggil menambahkan opening_float sendiri.
 //   400 input tidak valid / 500 error Supabase.
+//
+// Batch C10 (FILE SAJA, belum deploy — deploy sesudah migrasi 011):
+// - Kind baru: 'master' (WS0 — perubahan master-data, LWW server
+//   by updated_at), 'stock_in' (WS1 — gudang += qty), 'brew'
+//   (WS4 — Teh Kering −, Teh Masak +), 'stock_send' (WS3 —
+//   gudang −, gerai +, race guard 'gudang_kurang'), 'opname'
+//   (WS6 — catat baris opname; delta lewat stock_movement).
+// - Reason mutasi baru: 'brew' / 'kedaluwarsa' / 'opname' /
+//   'kirim' (lihat pushStockMovement).
+// - Pull gudang (outlet_id = GUDANG_ID) melewati cek tabel
+//   outlets (gudang bukan gerai) + mengembalikan stock_ins.
 //
 // Batch C7: kind 'expense' (upsert pengeluaran by client_uuid;
 // is_deleted true = hapus baris) + kind 'shift' (upsert shift kas
@@ -103,6 +121,15 @@ const PAYMENT_METHODS = new Set([
   "ewallet",
   "split",
 ]);
+
+/// Batch C10 — gudang = pseudo-outlet (bukan gerai nyata; TIDAK ADA
+/// baris di tabel outlets). HARUS sama dengan gudangOutletId di
+/// lib/data/c10_models.dart.
+const GUDANG_ID = "00000000-0000-0000-0000-000000000000";
+/// Gerai kanonik resep (resep disimpan global di gerai ini — lihat
+/// migrasi 011 + StockService.setRecipe). HARUS sama dengan
+/// defaultOutletId di app.
+const CANONICAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -278,12 +305,21 @@ async function pushStockMovement(
   const reasonRaw = String(p.reason ?? "penjualan");
   // Batch C9: 'koreksi' (ubah harga / koreksi jumlah manual) +
   // 'tambah' (bahan baru) diteruskan — kolom reason tanpa CHECK.
-  const reason =
-    reasonRaw === "void" ||
-    reasonRaw === "koreksi" ||
-    reasonRaw === "tambah"
-      ? reasonRaw
-      : "penjualan";
+  // Batch C10: 'opname' (penyesuaian stok sesudah "Sesuaikan
+  // stok" — dari adjustLevels), 'kedaluwarsa' (sisa Teh Masak
+  // kemarin hangus — dari expireTehMasak), 'brew' + 'kirim'
+  // (tidak pernah datang sebagai stock_movement dari app, tapi
+  // diizinkan supaya alasan tidak diam-diam jadi 'penjualan').
+  const KNOWN_REASONS = new Set([
+    "void",
+    "koreksi",
+    "tambah",
+    "opname",
+    "kedaluwarsa",
+    "brew",
+    "kirim",
+  ]);
+  const reason = KNOWN_REASONS.has(reasonRaw) ? reasonRaw : "penjualan";
 
   // Tautkan ke transaksi asal bila sudah tersinkron (boleh null).
   let transactionId: string | null = null;
@@ -613,6 +649,693 @@ async function pushShift(
 
 /// Baca transaksi + stok + shift terbuka gerai untuk Pantau Gerai live.
 /// Hari dalam WIB (toko di UTC+7): from 00:00 WIB s.d. to+1 00:00 WIB.
+// ===================== Batch C10 =====================
+// Master-data + gudang + kirim + masak + opname (lihat
+// ~/workspace/suka-tea-c10/C10-BRIEF.md §3). FILE SAJA — belum
+// di-deploy (builder C10 tidak deploy; deploy sesudah migrasi
+// 011 di-apply via SQL Editor).
+//
+// ATURAN DELTA (hindari dobel hitung — baca dulu sebelum ubah):
+// - pushStockIn: SATU-SATUNYA penulis delta gudang untuk stok
+//   masuk (app TIDAK mengirim stock_movement untuk stok masuk —
+//   adjustLevels enqueueMovement=false).
+// - pushBrew: SATU-SATUNYA penulis delta masak (Teh Kering −,
+//   Teh Masak +). App TIDAK mengirim stock_movement untuk masak.
+//   'kedaluwarsa' TIDAK ditulis di sini — delta hangus datang
+//   lewat event stock_movement 'kedaluwarsa' (expireTehMasak)
+//   yang sudah diantre SEBELUM event brew; menulisnya lagi di
+//   sini = dobel potong.
+// - pushStockSend: SATU-SATUNYA penulis delta kirim (gudang −,
+//   gerai +). App TIDAK mengirim stock_movement untuk kirim
+//   (transferStock tidak mengantre apa-apa).
+// - pushOpname: TIDAK menulis mutasi sama sekali — delta
+//   penyesuaian datang lewat event stock_movement 'opname'
+//   (adjustOpname). Handler ini hanya mencatat baris opname.
+// - pushMaster: last-write-wins by updated_at (server) — event
+//   yang lebih tua dari baris tersimpan dilewati (tetap ok).
+
+/// Ambil baris stock_items (outlet_id, name); bila belum ada, buat
+/// qty 0. Dipakai pushMaster (resep), pushStockIn, pushBrew,
+/// pushStockSend. 23505 (balapan device lain) = baca ulang.
+async function getOrCreateStockRow(
+  supabase: Supabase,
+  outletId: string,
+  name: string,
+  unit: string,
+): Promise<{ id: string; qty: number }> {
+  const { data: existing } = await supabase
+    .from("stock_items")
+    .select("id, qty")
+    .eq("outlet_id", outletId)
+    .eq("name", name)
+    .maybeSingle();
+  if (existing != null) {
+    const row = existing as { id: string; qty: number };
+    return { id: row.id, qty: Number(row.qty ?? 0) };
+  }
+  const { data: created, error: insErr } = await supabase
+    .from("stock_items")
+    .insert({
+      outlet_id: outletId,
+      name,
+      unit,
+      qty: 0,
+      low_threshold: 0,
+      cost: 0,
+    })
+    .select("id, qty")
+    .single();
+  if (insErr) {
+    if ((insErr as { code?: string }).code === "23505") {
+      const { data: raced } = await supabase
+        .from("stock_items")
+        .select("id, qty")
+        .eq("outlet_id", outletId)
+        .eq("name", name)
+        .maybeSingle();
+      if (raced == null) {
+        throw new Error(`buat stok gagal: ${insErr.message}`);
+      }
+      const row = raced as { id: string; qty: number };
+      return { id: row.id, qty: Number(row.qty ?? 0) };
+    }
+    throw new Error(`buat stok gagal: ${insErr.message}`);
+  }
+  const row = created as { id: string; qty: number };
+  return { id: row.id, qty: Number(row.qty ?? 0) };
+}
+
+/// Terapkan SATU delta ke level stok + catat mutasi (idempotent):
+/// sisip mutasi dulu (23505 = sudah diterapkan — lewati, jangan
+/// terapkan delta lagi), baru update level (clamp >= 0).
+/// Mengembalikan true bila delta diterapkan, false bila sudah ada
+/// (kirim ulang / retry).
+async function applyStockDelta(
+  supabase: Supabase,
+  outletId: string,
+  stockRow: { id: string; qty: number },
+  delta: number,
+  reason: string,
+  clientUuid: string,
+): Promise<boolean> {
+  const { data: moved, error: movErr } = await supabase
+    .from("stock_movements")
+    .insert({
+      outlet_id: outletId,
+      stock_item_id: stockRow.id,
+      qty_delta: delta,
+      reason,
+      transaction_id: null,
+      client_uuid: clientUuid,
+    })
+    .select("id")
+    .single();
+  if (movErr) {
+    if ((movErr as { code?: string }).code === "23505") return false;
+    throw new Error(`sisip mutasi gagal: ${movErr.message}`);
+  }
+  if (moved == null) return false;
+  const nextQty = Math.max(0, stockRow.qty + delta);
+  const { error: lvlErr } = await supabase
+    .from("stock_items")
+    .update({ qty: nextQty })
+    .eq("id", stockRow.id);
+  if (lvlErr) throw new Error(`update level stok gagal: ${lvlErr.message}`);
+  return true;
+}
+
+/// Upsert satu perubahan master-data (Batch C10 WS0).
+/// LWW server: incoming updated_at < stored updated_at = lewati
+/// (tetap ok — bukan error; HP pengirim sudah ketinggalan).
+/// entity: package / package_item / package_default / recipe /
+/// topping / product / target / stock_item_config.
+async function pushMaster(
+  supabase: Supabase,
+  ev: Record<string, unknown>,
+): Promise<{ applied: boolean }> {
+  const p = ev.payload as Record<string, unknown> | undefined;
+  if (p == null || typeof p !== "object") throw new Error("payload hilang");
+  const entity = String(p.entity ?? "");
+  const entityId = String(p.entity_id ?? "");
+  const data = p.data as Record<string, unknown> | undefined;
+  if (entity === "") throw new Error("master: entity kosong");
+  if (entityId === "") throw new Error("master: entity_id kosong");
+  if (data == null || typeof data !== "object") {
+    throw new Error("master: data hilang");
+  }
+  const updatedAt = String(p.updated_at ?? new Date().toISOString());
+  const isDeleted = p.is_deleted === true;
+  const incoming = new Date(updatedAt);
+  if (Number.isNaN(incoming.getTime())) {
+    throw new Error("master: updated_at tidak valid");
+  }
+
+  // LWW: bandingkan dengan updated_at baris tersimpan (bila ada).
+  async function storedUpdatedAt(
+    table: string,
+    keyCol: string,
+    keyVal: string,
+  ): Promise<Date | null> {
+    const { data: row } = await supabase
+      .from(table)
+      .select("updated_at")
+      .eq(keyCol, keyVal)
+      .maybeSingle();
+    const raw = (row as { updated_at?: string } | null)?.updated_at;
+    if (raw == null) return null;
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  if (entity === "package") {
+    const stored = await storedUpdatedAt("packages", "id", entityId);
+    if (stored != null && incoming.getTime() < stored.getTime()) {
+      return { applied: false };
+    }
+    const { error } = await supabase.from("packages").upsert(
+      {
+        id: entityId,
+        name: String(data.name ?? ""),
+        note: String(data.note ?? ""),
+        is_active: isDeleted ? false : data.is_active !== false,
+        updated_at: updatedAt,
+        is_deleted: isDeleted,
+      },
+      { onConflict: "id" },
+    );
+    if (error) throw new Error(`upsert paket gagal: ${error.message}`);
+    return { applied: true };
+  }
+
+  if (entity === "package_item") {
+    const stored = await storedUpdatedAt("package_items", "id", entityId);
+    if (stored != null && incoming.getTime() < stored.getTime()) {
+      return { applied: false };
+    }
+    const packageId = String(data.package_id ?? "");
+    if (packageId === "") throw new Error("package_item: package_id kosong");
+    const { error } = await supabase.from("package_items").upsert(
+      {
+        id: entityId,
+        package_id: packageId,
+        stock_name: String(data.stock_name ?? ""),
+        qty: toNumber(data.qty ?? 0, "package_item.qty"),
+        unit: String(data.unit ?? "pcs"),
+        updated_at: updatedAt,
+        is_deleted: isDeleted,
+      },
+      { onConflict: "id" },
+    );
+    if (error) throw new Error(`upsert item paket gagal: ${error.message}`);
+    return { applied: true };
+  }
+
+  if (entity === "package_default") {
+    const stored = await storedUpdatedAt(
+      "outlet_package_defaults",
+      "outlet_id",
+      entityId,
+    );
+    if (stored != null && incoming.getTime() < stored.getTime()) {
+      return { applied: false };
+    }
+    const packageId =
+      typeof data.package_id === "string" && data.package_id !== ""
+        ? data.package_id
+        : null;
+    const { error } = await supabase
+      .from("outlet_package_defaults")
+      .upsert(
+        {
+          outlet_id: entityId,
+          package_id: packageId,
+          updated_at: updatedAt,
+        },
+        { onConflict: "outlet_id" },
+      );
+    if (error) throw new Error(`upsert default paket gagal: ${error.message}`);
+    return { applied: true };
+  }
+
+  if (entity === "target") {
+    const stored = await storedUpdatedAt(
+      "gerai_targets",
+      "outlet_id",
+      entityId,
+    );
+    if (stored != null && incoming.getTime() < stored.getTime()) {
+      return { applied: false };
+    }
+    const { error } = await supabase.from("gerai_targets").upsert(
+      {
+        outlet_id: entityId,
+        target_omzet: toNonNegInt(data.target_omzet ?? 0, "target_omzet"),
+        updated_at: updatedAt,
+      },
+      { onConflict: "outlet_id" },
+    );
+    if (error) throw new Error(`upsert target gagal: ${error.message}`);
+    return { applied: true };
+  }
+
+  if (entity === "topping") {
+    const stored = await storedUpdatedAt("app_toppings", "id", entityId);
+    if (stored != null && incoming.getTime() < stored.getTime()) {
+      return { applied: false };
+    }
+    const { error } = await supabase.from("app_toppings").upsert(
+      {
+        id: entityId,
+        name: String(data.name ?? ""),
+        price_delta: toNonNegInt(data.price_delta ?? 0, "price_delta"),
+        active: isDeleted ? false : data.active !== false,
+        updated_at: updatedAt,
+        is_deleted: isDeleted,
+      },
+      { onConflict: "id" },
+    );
+    if (error) throw new Error(`upsert topping gagal: ${error.message}`);
+    return { applied: true };
+  }
+
+  if (entity === "product") {
+    const stored = await storedUpdatedAt("app_products", "id", entityId);
+    if (stored != null && incoming.getTime() < stored.getTime()) {
+      return { applied: false };
+    }
+    const { error } = await supabase.from("app_products").upsert(
+      {
+        id: entityId,
+        name: String(data.name ?? ""),
+        category: String(data.category ?? "Mixtea"),
+        price: toNonNegInt(data.price ?? 0, "price"),
+        photo_url:
+          typeof data.photo_url === "string" ? data.photo_url : null,
+        is_active: isDeleted ? false : data.is_active !== false,
+        updated_at: updatedAt,
+        is_deleted: isDeleted,
+      },
+      { onConflict: "id" },
+    );
+    if (error) throw new Error(`upsert produk gagal: ${error.message}`);
+    return { applied: true };
+  }
+
+  if (entity === "recipe") {
+    // Resep disimpan global di gerai kanonik (...0001) — kunci
+    // (variant_id, stock_item_id). stock_item_id dicari dari nama
+    // bahan di gerai kanonik (dibuat qty 0 bila belum ada).
+    const variantId = String(data.variant_id ?? "");
+    const stockName = String(data.stock_name ?? "");
+    if (variantId === "" || stockName === "") {
+      throw new Error("recipe: variant_id / stock_name kosong");
+    }
+    const stockRow = await getOrCreateStockRow(
+      supabase,
+      CANONICAL_OUTLET_ID,
+      stockName,
+      String(data.unit ?? "pcs"),
+    );
+    const { data: storedRow } = await supabase
+      .from("product_recipes")
+      .select("updated_at")
+      .eq("variant_id", variantId)
+      .eq("stock_item_id", stockRow.id)
+      .maybeSingle();
+    const storedRaw = (storedRow as { updated_at?: string } | null)
+      ?.updated_at;
+    if (storedRaw != null) {
+      const stored = new Date(storedRaw);
+      if (!Number.isNaN(stored.getTime()) &&
+        incoming.getTime() < stored.getTime()) {
+        return { applied: false };
+      }
+    }
+    const { error } = await supabase.from("product_recipes").upsert(
+      {
+        outlet_id: CANONICAL_OUTLET_ID,
+        product_id: String(data.product_id ?? ""),
+        variant_id: variantId,
+        stock_item_id: stockRow.id,
+        qty: isDeleted ? 0.001 : toNumber(data.qty ?? 0, "recipe.qty"),
+        updated_at: updatedAt,
+        is_deleted: isDeleted,
+      },
+      { onConflict: "variant_id,stock_item_id" },
+    );
+    // qty punya CHECK > 0 — hapus disimpan qty 0.001 + is_deleted
+    // (baris tidak dipakai karena is_deleted; angka 0.001 hanya
+    // supaya CHECK lolos).
+    if (error) throw new Error(`upsert resep gagal: ${error.message}`);
+    return { applied: true };
+  }
+
+  if (entity === "stock_item_config") {
+    // Konfigurasi bahan (unit/ambang/harga/masa simpan) — qty
+    // TIDAK PERNAH disentuh di sini (qty digerakkan delta).
+    // Ganti nama: data.old_name -> data.name (baris diganti nama +
+    // resep ikut lewat stock_item_id — tidak perlu update resep).
+    const outletId = String(data.outlet_id ?? "");
+    const name = String(data.name ?? "");
+    if (outletId === "" || name === "") {
+      throw new Error("stock_item_config: outlet_id / name kosong");
+    }
+    const oldName =
+      typeof data.old_name === "string" && data.old_name !== ""
+        ? data.old_name
+        : null;
+    if (oldName != null && oldName !== name) {
+      const { error: renErr } = await supabase
+        .from("stock_items")
+        .update({ name, updated_at: updatedAt })
+        .eq("outlet_id", outletId)
+        .eq("name", oldName);
+      if (renErr) {
+        throw new Error(`ganti nama bahan gagal: ${renErr.message}`);
+      }
+    }
+    const row = await getOrCreateStockRow(
+      supabase,
+      outletId,
+      name,
+      String(data.unit ?? "pcs"),
+    );
+    const { data: storedRow } = await supabase
+      .from("stock_items")
+      .select("updated_at")
+      .eq("id", row.id)
+      .maybeSingle();
+    const storedRaw = (storedRow as { updated_at?: string } | null)
+      ?.updated_at;
+    if (storedRaw != null) {
+      const stored = new Date(storedRaw);
+      if (!Number.isNaN(stored.getTime()) &&
+        incoming.getTime() < stored.getTime()) {
+        return { applied: false };
+      }
+    }
+    const patch: Record<string, unknown> = { updated_at: updatedAt };
+    if (typeof data.unit === "string" && data.unit !== "") {
+      patch["unit"] = data.unit;
+    }
+    if (typeof data.low_threshold === "number") {
+      patch["low_threshold"] = data.low_threshold;
+    }
+    if (typeof data.cost_per_unit === "number") {
+      patch["cost"] = Math.max(0, Math.trunc(data.cost_per_unit));
+    }
+    if (typeof data.shelf_life_days === "number") {
+      patch["shelf_life_days"] = Math.max(
+        0,
+        Math.trunc(data.shelf_life_days),
+      );
+    }
+    const { error } = await supabase
+      .from("stock_items")
+      .update(patch)
+      .eq("id", row.id);
+    if (error) throw new Error(`upsert konfigurasi gagal: ${error.message}`);
+    return { applied: true };
+  }
+
+  throw new Error(`master: entity tidak dikenal: ${entity}`);
+}
+
+/// Stok masuk gudang (Batch C10 WS1): gudang += qty (delta) +
+/// catat baris stock_ins. Idempotent by client_uuid — urutan:
+/// sisip baris dulu, baru terapkan delta (keduanya idempotent:
+/// baris by client_uuid, delta by mutasi 23505) — retry sesudah
+/// gagal di tengah tidak pernah dobel.
+async function pushStockIn(
+  supabase: Supabase,
+  ev: Record<string, unknown>,
+): Promise<{ applied: boolean }> {
+  const p = ev.payload as Record<string, unknown> | undefined;
+  if (p == null || typeof p !== "object") throw new Error("payload hilang");
+  const clientUuid = await normalizeClientUuid(String(ev.client_uuid ?? ""));
+  const name = String(p.stock_name ?? "");
+  const qty = toNumber(p.qty ?? 0, "stock_in.qty");
+  if (name === "") throw new Error("stock_in: stock_name kosong");
+  if (qty <= 0) throw new Error("stock_in: qty harus > 0");
+  const unit = typeof p.unit === "string" && p.unit !== "" ? p.unit : "pcs";
+  const totalPrice = toNonNegInt(p.total_price ?? 0, "total_price");
+  const { error: insErr } = await supabase.from("stock_ins").upsert(
+    {
+      id: clientUuid,
+      client_uuid: clientUuid,
+      stock_name: name,
+      unit,
+      qty,
+      total_price: totalPrice,
+      supplier: typeof p.supplier === "string" ? p.supplier : "",
+      date: String(p.date ?? new Date().toISOString()).slice(0, 10),
+      note: typeof p.note === "string" ? p.note : "",
+      created_at: String(ev.created_at ?? new Date().toISOString()),
+    },
+    { onConflict: "client_uuid" },
+  );
+  if (insErr) throw new Error(`sisip stok masuk gagal: ${insErr.message}`);
+  const row = await getOrCreateStockRow(supabase, GUDANG_ID, name, unit);
+  const itemUuid = await normalizeClientUuid(`${clientUuid}:${name}`);
+  await applyStockDelta(
+    supabase,
+    GUDANG_ID,
+    row,
+    qty,
+    "tambah",
+    itemUuid,
+  );
+  // Harga beli total -> costPerUnit baru (total / qty) menggantikan
+  // harga lama — sama seperti app (recordStockIn -> setCostFor).
+  if (totalPrice > 0) {
+    const newCost = Math.max(0, Math.round(totalPrice / qty));
+    const { error: costErr } = await supabase
+      .from("stock_items")
+      .update({ cost: newCost })
+      .eq("id", row.id);
+    if (costErr) throw new Error(`update harga gagal: ${costErr.message}`);
+  }
+  return { applied: true };
+}
+
+/// Masak teh (Batch C10 WS4): Teh Kering −kg, Teh Masak +liter di
+/// gerai (delta + mutasi 'brew'). Idempotent by client_uuid —
+/// sisip baris dulu, baru terapkan delta (retry aman, lihat
+/// pushStockIn). 'kedaluwarsa' TIDAK ditulis di sini (lihat
+/// catatan di atas).
+async function pushBrew(
+  supabase: Supabase,
+  ev: Record<string, unknown>,
+): Promise<{ applied: boolean }> {
+  const p = ev.payload as Record<string, unknown> | undefined;
+  if (p == null || typeof p !== "object") throw new Error("payload hilang");
+  const outletId = String(ev.outlet_id ?? "");
+  if (!UUID_RE.test(outletId)) throw new Error("outlet_id bukan UUID");
+  const clientUuid = await normalizeClientUuid(String(ev.client_uuid ?? ""));
+  const kg = toNumber(p.kg_used ?? 0, "brew.kg_used");
+  const liters = toNumber(p.liters_made ?? 0, "brew.liters_made");
+  if (kg <= 0) throw new Error("brew: kg_used harus > 0");
+  if (liters <= 0) throw new Error("brew: liters_made harus > 0");
+  const { error: insErr } = await supabase.from("brews").upsert(
+    {
+      id: clientUuid,
+      client_uuid: clientUuid,
+      outlet_id: outletId,
+      kg_used: kg,
+      liters_made: liters,
+      brewed_at: String(ev.created_at ?? new Date().toISOString()),
+      brewed_by: typeof p.brewed_by === "string" ? p.brewed_by : "Kasir",
+      expired_liters: toNumber(p.expired_liters ?? 0, "expired_liters"),
+      created_at: String(ev.created_at ?? new Date().toISOString()),
+    },
+    { onConflict: "client_uuid" },
+  );
+  if (insErr) throw new Error(`sisip masak gagal: ${insErr.message}`);
+  const keringRow = await getOrCreateStockRow(
+    supabase,
+    outletId,
+    "Teh Kering",
+    "kg",
+  );
+  const masakRow = await getOrCreateStockRow(
+    supabase,
+    outletId,
+    "Teh Masak",
+    "liter",
+  );
+  const keringUuid = await normalizeClientUuid(`${clientUuid}:Teh Kering`);
+  const masakUuid = await normalizeClientUuid(`${clientUuid}:Teh Masak`);
+  await applyStockDelta(
+    supabase,
+    outletId,
+    keringRow,
+    -kg,
+    "brew",
+    keringUuid,
+  );
+  await applyStockDelta(
+    supabase,
+    outletId,
+    masakRow,
+    liters,
+    "brew",
+    masakUuid,
+  );
+  return { applied: true };
+}
+
+/// Kirim ke gerai (Batch C10 WS3): cek gudang DULU (race guard —
+/// dua HP kirim bersamaan), lalu gudang − + gerai + (delta +
+/// mutasi 'kirim' di kedua sisi). Idempotent by client_uuid —
+/// sisip baris kiriman dulu (upsert), baru terapkan delta (retry
+/// aman, lihat pushStockIn). Gudang kurang -> throw
+/// Error("gudang_kurang") — app membalik stok lokal + memberi tahu
+/// Owner (bukan retry diam-diam).
+async function pushStockSend(
+  supabase: Supabase,
+  ev: Record<string, unknown>,
+): Promise<{ applied: boolean }> {
+  const p = ev.payload as Record<string, unknown> | undefined;
+  if (p == null || typeof p !== "object") throw new Error("payload hilang");
+  const outletId = String(ev.outlet_id ?? "");
+  if (!UUID_RE.test(outletId)) throw new Error("outlet_id bukan UUID");
+  const clientUuid = await normalizeClientUuid(String(ev.client_uuid ?? ""));
+  const items = Array.isArray(p.items) ? p.items : [];
+  if (items.length === 0) throw new Error("stock_send: items kosong");
+  const parsed: { name: string; qty: number; unit: string }[] = [];
+  for (const raw of items) {
+    const it = raw as Record<string, unknown>;
+    const name = String(it.stock_name ?? "");
+    const qty = toNumber(it.qty ?? 0, "send.qty");
+    if (name === "") throw new Error("stock_send: item tanpa nama");
+    if (qty <= 0) throw new Error("stock_send: item qty harus > 0");
+    parsed.push({
+      name,
+      qty,
+      unit: typeof it.unit === "string" && it.unit !== "" ? it.unit : "pcs",
+    });
+  }
+  // Race guard: baca gudang SEKARANG — bila kurang untuk SATU saja
+  // item, tolak SELURUH kiriman (tidak ada yang dipindah). Cek ini
+  // HARUS sebelum sisip baris kiriman (kiriman yang ditolak tidak
+  // boleh tercatat 'ok').
+  for (const it of parsed) {
+    const { data: row } = await supabase
+      .from("stock_items")
+      .select("qty")
+      .eq("outlet_id", GUDANG_ID)
+      .eq("name", it.name)
+      .maybeSingle();
+    const have = row == null ? 0 : Number((row as { qty: number }).qty ?? 0);
+    if (have < it.qty) throw new Error("gudang_kurang");
+  }
+  const { error: insErr } = await supabase.from("stock_sends").upsert(
+    {
+      id: clientUuid,
+      client_uuid: clientUuid,
+      outlet_id: outletId,
+      package_id:
+        typeof p.package_id === "string" && p.package_id !== ""
+          ? p.package_id
+          : null,
+      package_name: typeof p.package_name === "string" ? p.package_name : "",
+      sent_at: String(ev.created_at ?? new Date().toISOString()),
+      sent_by: typeof p.sent_by === "string" ? p.sent_by : "Owner",
+      note: typeof p.note === "string" ? p.note : "",
+      status: "ok",
+      created_at: String(ev.created_at ?? new Date().toISOString()),
+    },
+    { onConflict: "client_uuid" },
+  );
+  if (insErr) throw new Error(`sisip kiriman gagal: ${insErr.message}`);
+  for (const it of parsed) {
+    const gudangRow = await getOrCreateStockRow(
+      supabase,
+      GUDANG_ID,
+      it.name,
+      it.unit,
+    );
+    const geraiRow = await getOrCreateStockRow(
+      supabase,
+      outletId,
+      it.name,
+      it.unit,
+    );
+    const outUuid = await normalizeClientUuid(
+      `${clientUuid}:gudang:${it.name}`,
+    );
+    const inUuid = await normalizeClientUuid(
+      `${clientUuid}:gerai:${it.name}`,
+    );
+    await applyStockDelta(
+      supabase,
+      GUDANG_ID,
+      gudangRow,
+      -it.qty,
+      "kirim",
+      outUuid,
+    );
+    await applyStockDelta(
+      supabase,
+      outletId,
+      geraiRow,
+      it.qty,
+      "kirim",
+      inUuid,
+    );
+  }
+  const sendItems = parsed.map((it) => ({
+    id: `${clientUuid}:${it.name}`,
+    send_id: clientUuid,
+    stock_name: it.name,
+    qty: it.qty,
+    unit: it.unit,
+  }));
+  const { error: itemsErr } = await supabase
+    .from("send_items")
+    .upsert(sendItems, { onConflict: "id" });
+  if (itemsErr) {
+    throw new Error(`sisip item kiriman gagal: ${itemsErr.message}`);
+  }
+  return { applied: true };
+}
+
+async function pushOpname(
+  supabase: Supabase,
+  ev: Record<string, unknown>,
+): Promise<{ applied: boolean }> {
+  const p = ev.payload as Record<string, unknown> | undefined;
+  if (p == null || typeof p !== "object") throw new Error("payload hilang");
+  const outletId = String(ev.outlet_id ?? "");
+  if (!UUID_RE.test(outletId)) throw new Error("outlet_id bukan UUID");
+  const clientUuid = await normalizeClientUuid(String(ev.client_uuid ?? ""));
+  const name = String(p.stock_name ?? "");
+  const systemQty = toNumber(p.system_qty ?? 0, "opname.system_qty");
+  const physicalQty = toNumber(p.physical_qty ?? 0, "opname.physical_qty");
+  if (name === "") throw new Error("opname: stock_name kosong");
+  if (systemQty < 0) throw new Error("opname: system_qty negatif");
+  if (physicalQty < 0) throw new Error("opname: physical_qty negatif");
+  const { error } = await supabase.from("stock_opnames").upsert(
+    {
+      id: clientUuid,
+      client_uuid: clientUuid,
+      outlet_id: outletId,
+      stock_name: name,
+      system_qty: systemQty,
+      physical_qty: physicalQty,
+      difference: physicalQty - systemQty,
+      counted_at: String(ev.created_at ?? new Date().toISOString()),
+      counted_by: typeof p.counted_by === "string" ? p.counted_by : "Owner",
+      note: typeof p.note === "string" ? p.note : "",
+      adjusted: p.adjusted === true,
+      updated_at: String(ev.created_at ?? new Date().toISOString()),
+    },
+    { onConflict: "client_uuid" },
+  );
+  if (error) throw new Error(`upsert opname gagal: ${error.message}`);
+  return { applied: true };
+}
+
 async function pull(
   supabase: Supabase,
   body: Record<string, unknown>,
@@ -624,13 +1347,20 @@ async function pull(
   if (!isDateString(from) || !isDateString(to)) {
     throw new Error("from/to harus tanggal YYYY-MM-DD");
   }
-  const { data: outlet, error: outletErr } = await supabase
-    .from("outlets")
-    .select("id")
-    .eq("id", outletId)
-    .maybeSingle();
-  if (outletErr) throw new Error(`cek gerai gagal: ${outletErr.message}`);
-  if (outlet == null) throw new Error("outlet_id tidak dikenal");
+  // Batch C10: gudang = pseudo-outlet — TIDAK ADA baris di tabel
+  // outlets (bukan gerai nyata) — lewati cek gerai untuk gudang.
+  // Query transaksi/shift/pengeluaran untuk gudang tetap jalan
+  // (hasilnya kosong — gudang tidak jualan).
+  const isGudang = outletId === GUDANG_ID;
+  if (!isGudang) {
+    const { data: outlet, error: outletErr } = await supabase
+      .from("outlets")
+      .select("id")
+      .eq("id", outletId)
+      .maybeSingle();
+    if (outletErr) throw new Error(`cek gerai gagal: ${outletErr.message}`);
+    if (outlet == null) throw new Error("outlet_id tidak dikenal");
+  }
 
   const start = new Date(`${from}T00:00:00+07:00`);
   const end = new Date(`${to}T00:00:00+07:00`);
@@ -672,9 +1402,11 @@ async function pull(
   }
 
   // Stok gerai yang diminta (Batch C8.2 WS5).
+  // Batch C10: + shelf_life_days (WS4 — Teh Masak 1 hari) +
+  // updated_at (WS0 — LWW konfigurasi bahan).
   const { data: stockRows, error: stockErr } = await supabase
     .from("stock_items")
-    .select("name, unit, qty, low_threshold, cost")
+    .select("name, unit, qty, low_threshold, cost, shelf_life_days, updated_at")
     .eq("outlet_id", outletId)
     .order("name", { ascending: true });
   if (stockErr) throw new Error(`baca stok gagal: ${stockErr.message}`);
@@ -685,6 +1417,8 @@ async function pull(
       qty: s["qty"],
       low_threshold: s["low_threshold"],
       cost_per_unit: s["cost"],
+      shelf_life_days: s["shelf_life_days"] ?? 0,
+      updated_at: s["updated_at"],
     }),
   );
 
@@ -774,7 +1508,211 @@ async function pull(
     expenses,
     closed_shifts: closedShifts,
     movements,
+    master_changes: await pullMasterChanges(supabase, outletId),
+    sends: await pullSends(supabase, outletId, start, end),
+    opnames: await pullOpnames(supabase, outletId, start, end),
+    stock_ins: isGudang
+      ? await pullStockIns(supabase, start, end)
+      : [],
+    brews: await pullBrews(supabase, outletId, start, end),
   };
+}
+
+/// Master-data untuk pull (Batch C10 WS0): SEMUA baris (bukan
+/// jendela 30 hari — HP baru harus mendapat paket/resep/target
+/// yang dibuat > 30 hari lalu; tabelnya kecil — produk ~20,
+/// resep ~120, konfigurasi ~60 baris).
+/// Bentuk tiap baris = MasterChange (lihat master_sync.dart):
+/// { entity, entity_id, updated_at, is_deleted, data }.
+/// Konfigurasi bahan (stock_item_config) HANYA untuk gerai yang
+/// diminta (per-gerai); sisanya global (produk/topping/paket/
+//// resep/target berlaku di semua gerai).
+async function pullMasterChanges(
+  supabase: Supabase,
+  outletId: string,
+): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = [];
+  const push = (
+    rows: Record<string, unknown>[],
+    entity: string,
+    idOf: (r: Record<string, unknown>) => string,
+    dataOf: (r: Record<string, unknown>) => Record<string, unknown>,
+  ) => {
+    for (const r of rows) {
+      out.push({
+        entity,
+        entity_id: idOf(r),
+        updated_at: r["updated_at"] ?? new Date(0).toISOString(),
+        is_deleted: r["is_deleted"] === true,
+        data: dataOf(r),
+      });
+    }
+  };
+  const { data: products } = await supabase
+    .from("app_products")
+    .select("id, name, category, price, photo_url, is_active, updated_at, is_deleted");
+  push((products ?? []) as Record<string, unknown>[], "product",
+    (r) => String(r["id"]),
+    (r) => ({
+      id: r["id"], name: r["name"], category: r["category"],
+      price: r["price"], photo_url: r["photo_url"],
+      is_active: r["is_active"],
+    }));
+  const { data: toppings } = await supabase
+    .from("app_toppings")
+    .select("id, name, price_delta, active, updated_at, is_deleted");
+  push((toppings ?? []) as Record<string, unknown>[], "topping",
+    (r) => String(r["id"]),
+    (r) => ({
+      id: r["id"], name: r["name"], price_delta: r["price_delta"],
+      active: r["active"],
+    }));
+  const { data: packages } = await supabase
+    .from("packages")
+    .select("id, name, note, is_active, updated_at, is_deleted");
+  push((packages ?? []) as Record<string, unknown>[], "package",
+    (r) => String(r["id"]),
+    (r) => ({
+      id: r["id"], name: r["name"], note: r["note"],
+      is_active: r["is_active"],
+    }));
+  const { data: pkgItems } = await supabase
+    .from("package_items")
+    .select("id, package_id, stock_name, qty, unit, updated_at, is_deleted");
+  push((pkgItems ?? []) as Record<string, unknown>[], "package_item",
+    (r) => String(r["id"]),
+    (r) => ({
+      id: r["id"], package_id: r["package_id"],
+      stock_name: r["stock_name"], qty: r["qty"], unit: r["unit"],
+    }));
+  const { data: defaults } = await supabase
+    .from("outlet_package_defaults")
+    .select("outlet_id, package_id, updated_at");
+  push((defaults ?? []) as Record<string, unknown>[], "package_default",
+    (r) => String(r["outlet_id"]),
+    (r) => ({ outlet_id: r["outlet_id"], package_id: r["package_id"] }));
+  const { data: targets } = await supabase
+    .from("gerai_targets")
+    .select("outlet_id, target_omzet, updated_at");
+  push((targets ?? []) as Record<string, unknown>[], "target",
+    (r) => String(r["outlet_id"]),
+    (r) => ({ outlet_id: r["outlet_id"], target_omzet: r["target_omzet"] }));
+  const { data: recipes } = await supabase
+    .from("product_recipes")
+    .select("variant_id, product_id, qty, updated_at, is_deleted, stock_items(name, unit)")
+    .eq("outlet_id", CANONICAL_OUTLET_ID);
+  push((recipes ?? []) as Record<string, unknown>[], "recipe",
+    (r) => {
+      const joined = r["stock_items"] as Record<string, unknown> | null;
+      return `${String(r["variant_id"])}|${joined != null ? String(joined["name"] ?? "") : ""}`;
+    },
+    (r) => {
+      const joined = r["stock_items"] as Record<string, unknown> | null;
+      return {
+        variant_id: r["variant_id"], product_id: r["product_id"],
+        stock_name: joined != null ? joined["name"] : "",
+        qty: r["qty"], unit: joined != null ? joined["unit"] : "pcs",
+      };
+    });
+  const { data: configs } = await supabase
+    .from("stock_items")
+    .select("outlet_id, name, unit, low_threshold, cost, shelf_life_days, updated_at")
+    .eq("outlet_id", outletId);
+  push((configs ?? []) as Record<string, unknown>[], "stock_item_config",
+    (r) => `${String(r["outlet_id"])}|${String(r["name"])}`,
+    (r) => ({
+      outlet_id: r["outlet_id"], name: r["name"], unit: r["unit"],
+      low_threshold: r["low_threshold"], cost_per_unit: r["cost"],
+      shelf_life_days: r["shelf_life_days"] ?? 0,
+    }));
+  return out;
+}
+
+/// Kiriman ke gerai yang diminta di jendela (Batch C10 WS3) —
+/// item disisipkan sebagai `items` per kiriman.
+async function pullSends(
+  supabase: Supabase,
+  outletId: string,
+  start: Date,
+  end: Date,
+): Promise<Record<string, unknown>[]> {
+  const { data: sends } = await supabase
+    .from("stock_sends")
+    .select("id, client_uuid, outlet_id, package_id, package_name, sent_at, sent_by, note, status")
+    .eq("outlet_id", outletId)
+    .gte("sent_at", start.toISOString())
+    .lt("sent_at", end.toISOString())
+    .order("sent_at", { ascending: false });
+  const list = (sends ?? []) as Record<string, unknown>[];
+  if (list.length === 0) return [];
+  const ids = list.map((s) => String(s["id"]));
+  const { data: items } = await supabase
+    .from("send_items")
+    .select("send_id, stock_name, qty, unit")
+    .in("send_id", ids);
+  const bySend = new Map<string, Record<string, unknown>[]>();
+  for (const it of (items ?? []) as Record<string, unknown>[]) {
+    const key = String(it["send_id"]);
+    const arr = bySend.get(key) ?? [];
+    arr.push({
+      stock_name: it["stock_name"], qty: it["qty"], unit: it["unit"],
+    });
+    bySend.set(key, arr);
+  }
+  return list.map((s) => ({
+    ...s,
+    items: bySend.get(String(s["id"])) ?? [],
+  }));
+}
+
+/// Baris opname gerai yang diminta di jendela (Batch C10 WS6).
+async function pullOpnames(
+  supabase: Supabase,
+  outletId: string,
+  start: Date,
+  end: Date,
+): Promise<Record<string, unknown>[]> {
+  const { data } = await supabase
+    .from("stock_opnames")
+    .select("id, client_uuid, outlet_id, stock_name, system_qty, physical_qty, difference, counted_at, counted_by, note, adjusted")
+    .eq("outlet_id", outletId)
+    .gte("counted_at", start.toISOString())
+    .lt("counted_at", end.toISOString())
+    .order("counted_at", { ascending: false });
+  return (data ?? []) as Record<string, unknown>[];
+}
+
+/// Stok masuk gudang di jendela (Batch C10 WS1 — hanya untuk pull
+/// gudang; gerai biasa tidak menerima daftar ini).
+async function pullStockIns(
+  supabase: Supabase,
+  start: Date,
+  end: Date,
+): Promise<Record<string, unknown>[]> {
+  const { data } = await supabase
+    .from("stock_ins")
+    .select("id, client_uuid, stock_name, unit, qty, total_price, supplier, date, note, created_at")
+    .gte("created_at", start.toISOString())
+    .lt("created_at", end.toISOString())
+    .order("created_at", { ascending: false });
+  return (data ?? []) as Record<string, unknown>[];
+}
+
+/// Riwayat masak gerai yang diminta di jendela (Batch C10 WS4).
+async function pullBrews(
+  supabase: Supabase,
+  outletId: string,
+  start: Date,
+  end: Date,
+): Promise<Record<string, unknown>[]> {
+  const { data } = await supabase
+    .from("brews")
+    .select("id, client_uuid, outlet_id, kg_used, liters_made, brewed_at, brewed_by, expired_liters")
+    .eq("outlet_id", outletId)
+    .gte("brewed_at", start.toISOString())
+    .lt("brewed_at", end.toISOString())
+    .order("brewed_at", { ascending: false });
+  return (data ?? []) as Record<string, unknown>[];
 }
 
 /// Expected kas server (Batch C8.2 WS6): cash_in = tunai masuk dari
@@ -887,6 +1825,22 @@ Deno.serve(async (req: Request) => {
                   shiftResult["existing_opening_float"],
               });
             }
+          } else if (ev.kind === "master") {
+            // Batch C10 WS0 — master-data (last-write-wins server).
+            await pushMaster(supabase, ev);
+          } else if (ev.kind === "stock_in") {
+            // Batch C10 WS1 — stok masuk gudang.
+            await pushStockIn(supabase, ev);
+          } else if (ev.kind === "brew") {
+            // Batch C10 WS4 — masak teh.
+            await pushBrew(supabase, ev);
+          } else if (ev.kind === "stock_send") {
+            // Batch C10 WS3 — kirim ke gerai ('gudang_kurang'
+            // dilempar sebagai error event — lihat failedErrors).
+            await pushStockSend(supabase, ev);
+          } else if (ev.kind === "opname") {
+            // Batch C10 WS6 — baris opname.
+            await pushOpname(supabase, ev);
           } else {
             throw new Error(`kind tidak dikenal: ${String(ev.kind ?? "")}`);
           }

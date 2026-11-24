@@ -1,8 +1,0 @@
-{
-  "elements": {},
-  "imports": [
-    "package:flutter_test/flutter_test.dart",
-    "package:suka_tea/core/utils/cart_utils.dart",
-    "package:suka_tea/data/models.dart"
-  ]
-}

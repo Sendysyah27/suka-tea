@@ -1,11 +1,19 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/roles.dart';
 import '../../core/widgets/screen_title.dart';
 import '../../data/outlet_service.dart';
 import '../../data/supabase_client.dart';
 import '../gerai/gerai_list_page.dart';
+import '../gudang/dashboard_page.dart';
+import '../gudang/ledger_page.dart';
+import '../gudang/opname_page.dart';
+import '../gudang/package_list_page.dart';
+import '../gudang/send_stock_page.dart';
+import '../gudang/stock_in_page.dart';
 import '../kasir/kasir_management_page.dart';
+import '../gudang/brew_page.dart';
 import 'pin_dialog.dart';
 import 'pin_service.dart';
 
@@ -16,10 +24,22 @@ import 'pin_service.dart';
 /// `outlets` hanya bisa dibaca member (app belum sign-in / Auth M0);
 /// Supabase adalah sumber kebenaran di masa depan (migrasi 006).
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, this.outletId});
+  const SettingsPage({
+    super.key,
+    this.outletId,
+    this.role = AppRole.owner,
+    this.onExitGerai,
+  });
 
   /// Gerai yang PIN Owner-nya dipakai di halaman ini (null = default).
   final String? outletId;
+
+  /// Peran pemanggil (Owner — Pengaturan hanya dibuka sesudah PIN).
+  /// Diteruskan ke Dashboard Owner (LaporanPage butuh role).
+  final AppRole role;
+
+  /// Keluar gerai (diteruskan ke Dashboard -> LaporanPage).
+  final VoidCallback? onExitGerai;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -224,6 +244,107 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const SizedBox(height: 12),
+          // Kartu Stok & Gudang (Batch C10): Dashboard Owner,
+          // Stok Masuk, Paket Kiriman, Kirim ke Gerai, Masak Teh,
+          // Opname, Riwayat Keluar-Masuk.
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Stok & Gudang',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Dashboard Owner, stok masuk, paket kiriman, '
+                    'masak teh, opname, keluar-masuk barang.',
+                    style: TextStyle(color: SukaTeaColors.muted),
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsRow(
+                    icon: Icons.dashboard,
+                    title: 'Dashboard Owner',
+                    subtitle: 'Omzet, gerai, target, kasir, stok',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => DashboardPage(
+                          role: widget.role,
+                          onExitGerai: widget.onExitGerai ?? () {},
+                        ),
+                      ),
+                    ),
+                  ),
+                  _SettingsRow(
+                    icon: Icons.inventory_2,
+                    title: 'Stok Masuk',
+                    subtitle: 'Catat bahan masuk gudang',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const StockInPage(),
+                      ),
+                    ),
+                  ),
+                  _SettingsRow(
+                    icon: Icons.inventory,
+                    title: 'Paket Kiriman',
+                    subtitle: 'Buat & atur paket jatah gerai',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const PackageListPage(),
+                      ),
+                    ),
+                  ),
+                  _SettingsRow(
+                    icon: Icons.local_shipping,
+                    title: 'Kirim ke Gerai',
+                    subtitle: 'Kirim paket / tambah stok gerai',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const SendStockPage(),
+                      ),
+                    ),
+                  ),
+                  _SettingsRow(
+                    icon: Icons.local_cafe,
+                    title: 'Masak Teh',
+                    subtitle: 'Teh Kering → Teh Masak',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const BrewPage(),
+                      ),
+                    ),
+                  ),
+                  _SettingsRow(
+                    icon: Icons.fact_check,
+                    title: 'Opname',
+                    subtitle: 'Hitung fisik + selisih stok',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const OpnamePage(),
+                      ),
+                    ),
+                  ),
+                  _SettingsRow(
+                    icon: Icons.swap_horiz,
+                    title: 'Riwayat Keluar-Masuk',
+                    subtitle: 'Ledger barang per gerai',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const LedgerPage(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           const Card(
             child: Padding(
               padding: EdgeInsets.all(16),
@@ -245,6 +366,58 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Satu baris menu di kartu Pengaturan (Batch C10 — kartu
+/// "Stok & Gudang"): ikon + judul + subjudul + chevron.
+class _SettingsRow extends StatelessWidget {
+  const _SettingsRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            Icon(icon, color: SukaTeaColors.emerald),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(color: SukaTeaColors.muted),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: SukaTeaColors.muted),
+          ],
+        ),
       ),
     );
   }

@@ -476,6 +476,260 @@ Map<String, dynamic> normalizeShiftEvent({
   };
 }
 
+// ===================== Batch C10 — normalizer event baru =====================
+// Bentuk event yang dikirim ke Edge Function `sync-sales`:
+// - kind 'master': payload perubahan master-data (lihat
+//   master_sync.dart — entity/id/updated_at/data/is_deleted).
+// - kind 'stock_in': payload stok masuk gudang (WS1).
+// - kind 'brew': payload masak teh (WS4).
+// - kind 'stock_send': payload kirim ke gerai (WS3).
+// - kind 'opname': payload baris opname (WS6).
+// SEMUA timestamp ke server lewat [normalizeCreatedAtToUtc] (...Z)
+// — aturan C9. Bentuk di bawah HARUS cocok dengan handler EF
+// (supabase/functions/sync-sales/index.ts) — bila salah satu
+// berubah, ubah keduanya.
+
+Map<String, dynamic> _c10BaseEvent({
+  required String outboxId,
+  required String kind,
+  required Map<String, dynamic> rawPayload,
+  required DateTime entryCreatedAt,
+}) {
+  final clientUuid = rawPayload['client_uuid'];
+  if (clientUuid is! String || clientUuid.isEmpty) {
+    throw const FormatException('client_uuid kosong');
+  }
+  return {
+    'outbox_id': outboxId,
+    'kind': kind,
+    'client_uuid': clientUuid,
+    'outlet_id': rawPayload['outlet_id'] is String
+        ? rawPayload['outlet_id'] as String
+        : '',
+    'created_at': normalizeCreatedAtToUtc(
+      rawPayload['created_at'] as String?,
+      entryCreatedAt,
+    ),
+    'payload': <String, dynamic>{},
+  };
+}
+
+/// Normalizer event 'master' (Batch C10 WS0): perubahan master-data
+/// (bahan/resep/topping/produk/paket/item paket/default/target).
+/// Payload mentah = MasterChange.toEventPayload().
+Map<String, dynamic> normalizeMasterEvent({
+  required String outboxId,
+  required Map<String, dynamic> rawPayload,
+  required DateTime entryCreatedAt,
+}) {
+  final event = _c10BaseEvent(
+    outboxId: outboxId,
+    kind: 'master',
+    rawPayload: rawPayload,
+    entryCreatedAt: entryCreatedAt,
+  );
+  final entity = rawPayload['entity'];
+  final entityId = rawPayload['entity_id'];
+  final updatedRaw = rawPayload['updated_at'];
+  if (entity is! String || entity.isEmpty) {
+    throw const FormatException('master: entity kosong');
+  }
+  if (entityId is! String || entityId.isEmpty) {
+    throw const FormatException('master: entity_id kosong');
+  }
+  if (updatedRaw is! String || updatedRaw.isEmpty) {
+    throw const FormatException('master: updated_at kosong');
+  }
+  final data = rawPayload['data'];
+  if (data is! Map) throw const FormatException('master: data bukan Map');
+  (event['payload'] as Map<String, dynamic>)
+    ..['entity'] = entity
+    ..['entity_id'] = entityId
+    ..['updated_at'] = normalizeCreatedAtToUtc(updatedRaw, entryCreatedAt)
+    ..['is_deleted'] = rawPayload['is_deleted'] == true
+    ..['data'] = Map<String, dynamic>.from(data);
+  return event;
+}
+
+/// Normalizer event 'stock_in' (Batch C10 WS1): stok masuk gudang.
+Map<String, dynamic> normalizeStockInEvent({
+  required String outboxId,
+  required Map<String, dynamic> rawPayload,
+  required DateTime entryCreatedAt,
+}) {
+  final event = _c10BaseEvent(
+    outboxId: outboxId,
+    kind: 'stock_in',
+    rawPayload: rawPayload,
+    entryCreatedAt: entryCreatedAt,
+  );
+  final name = rawPayload['stock_name'];
+  final qty = rawPayload['qty'];
+  if (name is! String || name.isEmpty) {
+    throw const FormatException('stock_in: stock_name kosong');
+  }
+  if (qty is! num || qty <= 0) {
+    throw const FormatException('stock_in: qty tidak valid');
+  }
+  final unit = rawPayload['unit'];
+  final totalPrice = rawPayload['total_price'];
+  final supplier = rawPayload['supplier'];
+  final note = rawPayload['note'];
+  final dateRaw = rawPayload['date'];
+  (event['payload'] as Map<String, dynamic>)
+    ..['stock_name'] = name
+    ..['unit'] = unit is String && unit.isNotEmpty ? unit : 'pcs'
+    ..['qty'] = qty.toDouble()
+    ..['total_price'] = totalPrice is num ? totalPrice.toInt() : 0
+    ..['supplier'] = supplier is String ? supplier : ''
+    ..['date'] = dateRaw is String && dateRaw.isNotEmpty
+        ? normalizeCreatedAtToUtc(dateRaw, entryCreatedAt)
+        : event['created_at']
+    ..['note'] = note is String ? note : '';
+  return event;
+}
+
+/// Normalizer event 'brew' (Batch C10 WS4): masak teh.
+Map<String, dynamic> normalizeBrewEvent({
+  required String outboxId,
+  required Map<String, dynamic> rawPayload,
+  required DateTime entryCreatedAt,
+}) {
+  final event = _c10BaseEvent(
+    outboxId: outboxId,
+    kind: 'brew',
+    rawPayload: rawPayload,
+    entryCreatedAt: entryCreatedAt,
+  );
+  final kg = rawPayload['kg_used'];
+  final liters = rawPayload['liters_made'];
+  if (kg is! num || kg <= 0) {
+    throw const FormatException('brew: kg_used tidak valid');
+  }
+  if (liters is! num || liters <= 0) {
+    throw const FormatException('brew: liters_made tidak valid');
+  }
+  final outletRaw = rawPayload['outlet_id'];
+  if (outletRaw is! String || outletRaw.isEmpty) {
+    throw const FormatException('brew: outlet_id kosong');
+  }
+  event['outlet_id'] = outletRaw;
+  final brewedBy = rawPayload['brewed_by'];
+  final expired = rawPayload['expired_liters'];
+  (event['payload'] as Map<String, dynamic>)
+    ..['kg_used'] = kg.toDouble()
+    ..['liters_made'] = liters.toDouble()
+    ..['brewed_at'] = normalizeCreatedAtToUtc(
+      rawPayload['brewed_at'] as String?,
+      entryCreatedAt,
+    )
+    ..['brewed_by'] = brewedBy is String ? brewedBy : 'Kasir'
+    ..['expired_liters'] = expired is num ? expired.toDouble() : 0.0;
+  return event;
+}
+
+/// Normalizer event 'stock_send' (Batch C10 WS3): kirim ke gerai.
+Map<String, dynamic> normalizeStockSendEvent({
+  required String outboxId,
+  required Map<String, dynamic> rawPayload,
+  required DateTime entryCreatedAt,
+}) {
+  final event = _c10BaseEvent(
+    outboxId: outboxId,
+    kind: 'stock_send',
+    rawPayload: rawPayload,
+    entryCreatedAt: entryCreatedAt,
+  );
+  final outletRaw = rawPayload['outlet_id'];
+  if (outletRaw is! String || outletRaw.isEmpty) {
+    throw const FormatException('stock_send: outlet_id kosong');
+  }
+  event['outlet_id'] = outletRaw;
+  final itemsRaw = rawPayload['items'];
+  if (itemsRaw is! List || itemsRaw.isEmpty) {
+    throw const FormatException('stock_send: items kosong');
+  }
+  final items = <Map<String, dynamic>>[];
+  for (final it in itemsRaw) {
+    if (it is! Map) throw const FormatException('stock_send: item bukan Map');
+    final name = it['stock_name'];
+    final qty = it['qty'];
+    if (name is! String || name.isEmpty) {
+      throw const FormatException('stock_send: item tanpa nama');
+    }
+    if (qty is! num || qty <= 0) {
+      throw const FormatException('stock_send: item qty tidak valid');
+    }
+    final unit = it['unit'];
+    items.add({
+      'stock_name': name,
+      'qty': qty.toDouble(),
+      'unit': unit is String && unit.isNotEmpty ? unit : 'pcs',
+    });
+  }
+  final packageId = rawPayload['package_id'];
+  final packageName = rawPayload['package_name'];
+  final sentBy = rawPayload['sent_by'];
+  final note = rawPayload['note'];
+  (event['payload'] as Map<String, dynamic>)
+    ..['package_id'] = packageId is String ? packageId : null
+    ..['package_name'] = packageName is String ? packageName : ''
+    ..['sent_at'] = normalizeCreatedAtToUtc(
+      rawPayload['sent_at'] as String?,
+      entryCreatedAt,
+    )
+    ..['sent_by'] = sentBy is String ? sentBy : 'Owner'
+    ..['note'] = note is String ? note : ''
+    ..['items'] = items;
+  return event;
+}
+
+/// Normalizer event 'opname' (Batch C10 WS6): satu baris opname.
+Map<String, dynamic> normalizeOpnameEvent({
+  required String outboxId,
+  required Map<String, dynamic> rawPayload,
+  required DateTime entryCreatedAt,
+}) {
+  final event = _c10BaseEvent(
+    outboxId: outboxId,
+    kind: 'opname',
+    rawPayload: rawPayload,
+    entryCreatedAt: entryCreatedAt,
+  );
+  final outletRaw = rawPayload['outlet_id'];
+  if (outletRaw is! String || outletRaw.isEmpty) {
+    throw const FormatException('opname: outlet_id kosong');
+  }
+  event['outlet_id'] = outletRaw;
+  final name = rawPayload['stock_name'];
+  final systemQty = rawPayload['system_qty'];
+  final physicalQty = rawPayload['physical_qty'];
+  if (name is! String || name.isEmpty) {
+    throw const FormatException('opname: stock_name kosong');
+  }
+  if (systemQty is! num || systemQty < 0) {
+    throw const FormatException('opname: system_qty tidak valid');
+  }
+  if (physicalQty is! num || physicalQty < 0) {
+    throw const FormatException('opname: physical_qty tidak valid');
+  }
+  final countedBy = rawPayload['counted_by'];
+  final note = rawPayload['note'];
+  (event['payload'] as Map<String, dynamic>)
+    ..['stock_name'] = name
+    ..['system_qty'] = systemQty.toDouble()
+    ..['physical_qty'] = physicalQty.toDouble()
+    ..['difference'] = physicalQty.toDouble() - systemQty.toDouble()
+    ..['counted_at'] = normalizeCreatedAtToUtc(
+      rawPayload['counted_at'] as String?,
+      entryCreatedAt,
+    )
+    ..['counted_by'] = countedBy is String ? countedBy : 'Owner'
+    ..['note'] = note is String ? note : ''
+    ..['adjusted'] = rawPayload['adjusted'] == true;
+  return event;
+}
+
 /// Satu shift dari server (pull) — ringkasan untuk gate POS +
 /// kartu "Kas & Shift" (Batch C8.2 WS6). [cashierName] = PEMBUKA
 /// shift; [closedByCashierName] = PENUTUP (terisi bila closed).
@@ -668,12 +922,13 @@ List<StockMovement> parseStockMovements(dynamic raw, String outletId) {
 /// + item dikelompokkan per client_uuid transaksi + level stok
 /// gerai yang diminta (Batch C8.2 WS5 — mentah, dipetakan pemanggil)
 /// + shift terbuka gerai itu (Batch C8.2 WS6).
-/// Batch C9: + [expenses] (pengeluaran mentah gerai itu, WS5),
-/// + [closedShifts] (shift yang sudah ditutup di jendela, WS6),
-/// + [movements] (mutasi stok gerai itu di jendela, WS6).
-/// 'stock' / 'shifts' / 'expenses' / 'closed_shifts' / 'movements'
-/// yang hilang (EF lama / jawaban lama) = list kosong, BUKAN error
-/// — pull lama tetap jalan.
+/// Batch C10: + [masterChanges] (perubahan master-data mentah,
+/// WS0 — dipetakan pemanggil ke MasterChange), + [sends] (kiriman
+/// ke gerai itu, WS3), + [opnames] (baris opname gerai itu, WS6),
+/// + [stockIns] (stok masuk gudang — hanya bila pull gudang, WS1),
+/// + [brews] (riwayat masak gerai itu, WS4). Yang hilang (EF lama
+/// / jawaban lama) = list kosong, BUKAN error — pull lama tetap
+/// jalan.
 typedef PullData = ({
   List<Map<String, dynamic>> transactions,
   Map<String, List<Map<String, dynamic>>> itemsByClientUuid,
@@ -682,7 +937,25 @@ typedef PullData = ({
   List<Map<String, dynamic>> expenses,
   List<ShiftSummary> closedShifts,
   List<StockMovement> movements,
+  List<Map<String, dynamic>> masterChanges,
+  List<Map<String, dynamic>> sends,
+  List<Map<String, dynamic>> opnames,
+  List<Map<String, dynamic>> stockIns,
+  List<Map<String, dynamic>> brews,
 });
+
+List<Map<String, dynamic>> _asMapList(dynamic raw) {
+  final list = <Map<String, dynamic>>[];
+  if (raw is! List) return list;
+  for (final e in raw) {
+    if (e is Map<String, dynamic>) {
+      list.add(e);
+    } else if (e is Map) {
+      list.add(Map<String, dynamic>.from(e));
+    }
+  }
+  return list;
+}
 
 /// Validasi jawaban pull EF. Throw [FormatException] bila jawaban
 /// tidak sesuai bentuk (bukan Map / ok != true / list hilang).
@@ -760,6 +1033,11 @@ PullData parsePullResponse(dynamic data) {
     expenses: expenses,
     closedShifts: closedShifts,
     movements: movements,
+    masterChanges: _asMapList(data['master_changes']),
+    sends: _asMapList(data['sends']),
+    opnames: _asMapList(data['opnames']),
+    stockIns: _asMapList(data['stock_ins']),
+    brews: _asMapList(data['brews']),
   );
 }
 
@@ -772,10 +1050,14 @@ PullData parsePullResponse(dynamic data) {
 /// C8.2 WS6) — event-nya tetap terhitung terkirim (sudah diproses),
 /// tapi app harus mengadopsi shift server itu (lihat
 /// CashShiftService.adoptServerShift).
+/// [failedErrors] (Batch C10 WS3) = outbox_id -> error server
+/// (mis. 'gudang_kurang') — dipakai SyncService untuk membalik
+/// kiriman yang ditolak server + memberi tahu Owner.
 typedef PushOutcome = ({
   List<String> sentIds,
   List<String> failedIds,
   List<ShiftAdoption> shiftAdoptions,
+  Map<String, String> failedErrors,
 });
 
 PushOutcome applyPushResults(
@@ -786,12 +1068,14 @@ PushOutcome applyPushResults(
   final allIds = events.map((e) => e['outbox_id'] as String).toList();
   final failed = <String>[...alreadyFailed];
   const noAdoptions = <ShiftAdoption>[];
+  const noErrors = <String, String>{};
   if (data is! Map || data['ok'] != true) {
     failed.addAll(allIds);
     return (
       sentIds: const <String>[],
       failedIds: failed,
       shiftAdoptions: noAdoptions,
+      failedErrors: noErrors,
     );
   }
   final results = data['results'];
@@ -801,13 +1085,20 @@ PushOutcome applyPushResults(
       sentIds: const <String>[],
       failedIds: failed,
       shiftAdoptions: noAdoptions,
+      failedErrors: noErrors,
     );
   }
   final okIds = <String>{};
+  final failedErrors = <String, String>{};
   for (final r in results) {
-    if (r is Map && r['ok'] == true) {
-      final id = r['outbox_id'];
-      if (id is String) okIds.add(id);
+    if (r is! Map) continue;
+    final id = r['outbox_id'];
+    if (id is! String) continue;
+    if (r['ok'] == true) {
+      okIds.add(id);
+    } else {
+      final err = r['error'];
+      if (err is String && err.isNotEmpty) failedErrors[id] = err;
     }
   }
   final sent = allIds.where(okIds.contains).toList();
@@ -848,5 +1139,6 @@ PushOutcome applyPushResults(
     sentIds: sent,
     failedIds: failed,
     shiftAdoptions: adoptions,
+    failedErrors: failedErrors,
   );
 }

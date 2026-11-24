@@ -314,6 +314,8 @@ class _SukaTeaShellState extends State<SukaTeaShell> {
       MaterialPageRoute(
         builder: (_) => SettingsPage(
           outletId: OutletService.instance.currentOutletId,
+          role: _role,
+          onExitGerai: widget.onExitGerai,
         ),
       ),
     );

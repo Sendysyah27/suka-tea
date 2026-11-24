@@ -193,6 +193,7 @@ class StockItem {
     required this.lowThreshold,
     this.costPerUnit = -1,
     this.outletId = '',
+    this.shelfLifeDays = 0,
   });
 
   final String name;
@@ -210,6 +211,11 @@ class StockItem {
   /// '' = tidak diketahui (data lama sebelum v10 / sumber lokal).
   final String outletId;
 
+  /// Masa simpan bahan dalam hari (Batch C10 WS4): 0 = tidak pernah
+  /// kedaluwarsa; 'Teh Masak' = 1 (sisa kemarin hangus tiap ganti
+  /// hari — resep memakai Teh Masak, bukan Teh Kering).
+  final int shelfLifeDays;
+
   bool get isLow => qty <= lowThreshold;
 
   StockItem copyWith({
@@ -219,6 +225,7 @@ class StockItem {
     double? lowThreshold,
     double? costPerUnit,
     String? outletId,
+    int? shelfLifeDays,
   }) =>
       StockItem(
         name: name ?? this.name,
@@ -227,6 +234,7 @@ class StockItem {
         lowThreshold: lowThreshold ?? this.lowThreshold,
         costPerUnit: costPerUnit ?? this.costPerUnit,
         outletId: outletId ?? this.outletId,
+        shelfLifeDays: shelfLifeDays ?? this.shelfLifeDays,
       );
 }
 

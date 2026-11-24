@@ -15,6 +15,8 @@ import '../../data/sheets_export.dart';
 import '../../data/sync_service.dart';
 import '../../features/login/cashier_session.dart';
 import '../keuangan/expense_sheet.dart';
+import '../gudang/dashboard_page.dart';
+import '../gudang/ledger_page.dart';
 import '../riwayat/riwayat_page.dart';
 import 'shift_sheets.dart';
 
@@ -362,6 +364,53 @@ class _LaporanPageState extends State<LaporanPage> {
                 ),
               ),
             ),
+            // Dashboard Owner + Riwayat Keluar-Masuk (Batch C10
+            // WS7/WS8): HANYA Owner — Kasir tidak melihat tombolnya.
+            if (widget.role == AppRole.owner) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: TapFeedback(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => DashboardPage(
+                            role: widget.role,
+                            onExitGerai: widget.onExitGerai,
+                          ),
+                        ),
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 56),
+                    ),
+                    icon: const Icon(Icons.dashboard),
+                    label: const Text('Dashboard Owner'),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: TapFeedback(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const LedgerPage(),
+                        ),
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 56),
+                    ),
+                    icon: const Icon(Icons.swap_horiz),
+                    label: const Text('Riwayat Keluar-Masuk'),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             // Segarkan manual (Batch C9): tarik ulang semua data
             // gerai ini dari server sekarang juga (timer 10 detik

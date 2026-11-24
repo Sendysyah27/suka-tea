@@ -1,7 +1,0 @@
-{
-  "elements": {},
-  "imports": [
-    "package:suka_tea/data/expense_service.dart",
-    "package:suka_tea/data/sale_history.dart"
-  ]
-}

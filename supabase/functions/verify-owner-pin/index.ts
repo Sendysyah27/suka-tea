@@ -1,11 +1,13 @@
 // SUKA TEA — Edge Function `verify-owner-pin`
-// Verifikasi PIN Owner: bandingkan PIN (6 digit) dengan hash bcrypt di
-// app_settings (key owner_pin_hash). Hash TIDAK PERNAH keluar dari server.
+// Verifikasi PIN Owner GLOBAL (koreksi Sendy 24 Nov 2026): SATU PIN untuk
+// semua gerai. Hash bcrypt di app_settings (key owner_pin_hash) SELALU
+// dibaca dari baris outlet global (...0001); outlet_id dari client
+// DIABAIKAN. Hash TIDAK PERNAH keluar dari server.
 //
 // Secret yang dibutuhkan (otomatis tersedia di Edge Functions):
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 //
-// POST { outlet_id, pin } -> { ok, reason? }
+// POST { pin } (outlet_id diterima tapi diabaikan — PIN global) -> { ok, reason? }
 //   ok:true                  PIN cocok
 //   ok:false reason:'wrong'  PIN salah
 //   ok:false reason:'not_set'  PIN belum pernah diatur (setup pertama)
@@ -29,6 +31,10 @@ const corsHeaders = {
 const MAX_FAILURES = 10;
 const WINDOW_MINUTES = 10;
 
+// Baris PIN Owner GLOBAL — satu PIN untuk semua gerai (koreksi Sendy
+// 24 Nov 2026). PIN yang dulu dibuat di Gerai 1 tersimpan di baris ini.
+const GLOBAL_OUTLET_ID = "00000000-0000-0000-0000-000000000001";
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -47,10 +53,11 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "Edge Function belum dikonfigurasi" }, 501);
     }
     const body = await req.json().catch(() => ({}));
-    const outletId = String(body.outlet_id ?? "");
+    // PIN Owner GLOBAL — outlet_id dari client diabaikan.
+    const outletId = GLOBAL_OUTLET_ID;
     const pin = String(body.pin ?? "");
-    if (!outletId || !/^\d{6}$/.test(pin)) {
-      return json({ ok: false, error: "outlet_id + PIN 6 digit wajib" }, 400);
+    if (!/^\d{6}$/.test(pin)) {
+      return json({ ok: false, error: "PIN 6 digit wajib" }, 400);
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);

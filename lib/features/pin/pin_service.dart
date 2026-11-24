@@ -8,6 +8,13 @@ import '../../data/supabase_client.dart';
 /// Verifikasi + atur PIN lewat Edge Function (service_role); hash tidak
 /// pernah keluar dari server. Gagal verifikasi = tetap Kasir (fail closed).
 /// PIN TIDAK PERNAH disimpan lokal — bahkan hash-nya tidak di-cache.
+///
+/// PIN Owner GLOBAL (koreksi Sendy 24 Nov 2026): SATU PIN untuk semua gerai.
+/// Semua operasi di bawah ini selalu memakai outlet global (...0001);
+/// parameter [outletId] di tiap method DIABAIKAN (diterima hanya supaya
+/// pemanggil lama — dialog PIN, Pengaturan, login — tidak berubah).
+/// Server (Edge Function) juga menormalisasi ke baris global, jadi app
+/// versi lama ikut jadi global begitu EF baru di-deploy.
 enum PinVerifyResult { ok, wrong, locked, notSet, unavailable }
 
 class PinService {
@@ -35,8 +42,8 @@ class PinService {
 
   static bool isValidPin(String pin) => RegExp(r'^\d{6}$').hasMatch(pin);
 
-  /// Verifikasi PIN Owner satu gerai. [outletId] null = outlet
-  /// default (...0001, dipakai sebelum pemilihan gerai ada).
+  /// Verifikasi PIN Owner GLOBAL — satu PIN untuk semua gerai.
+  /// [outletId] diabaikan (lihat doc class) — selalu outlet global.
   Future<PinVerifyResult> verify(String pin, {String? outletId}) async {
     if (isLocked) return PinVerifyResult.locked;
     if (!isValidPin(pin)) return PinVerifyResult.wrong;
@@ -46,7 +53,7 @@ class PinService {
     try {
       final res = await SupabaseService.instance.client.functions.invoke(
         'verify-owner-pin',
-        body: {'outlet_id': outletId ?? defaultOutletId, 'pin': pin},
+        body: {'outlet_id': defaultOutletId, 'pin': pin},
       );
       final data = res.data;
       if (data is! Map) return PinVerifyResult.unavailable;
@@ -74,7 +81,7 @@ class PinService {
   }
 
   /// Atur PIN pertama (currentPin null) atau ubah PIN (currentPin wajib).
-  /// [outletId] null = outlet default.
+  /// GLOBAL — PIN baru berlaku di semua gerai. [outletId] diabaikan.
   Future<bool> setPin({
     String? currentPin,
     required String newPin,
@@ -86,7 +93,7 @@ class PinService {
       final res = await SupabaseService.instance.client.functions.invoke(
         'set-owner-pin',
         body: {
-          'outlet_id': outletId ?? defaultOutletId,
+          'outlet_id': defaultOutletId,
           if (currentPin != null) 'current_pin': currentPin,
           'new_pin': newPin,
         },
@@ -101,13 +108,13 @@ class PinService {
 
   /// Apakah PIN sudah diatur (untuk label status di Pengaturan).
   /// null = tidak bisa dicek (offline / fungsi belum di-deploy).
-  /// [outletId] null = outlet default.
+  /// GLOBAL — cek baris global. [outletId] diabaikan.
   Future<bool?> isPinSet({String? outletId}) async {
     if (!SupabaseService.instance.isConfigured) return null;
     try {
       final res = await SupabaseService.instance.client.functions.invoke(
         'pin-status',
-        body: {'outlet_id': outletId ?? defaultOutletId},
+        body: {'outlet_id': defaultOutletId},
       );
       final data = res.data;
       if (data is! Map || data['ok'] != true) return null;
