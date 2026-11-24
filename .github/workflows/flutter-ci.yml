@@ -35,7 +35,13 @@ jobs:
       # datastore) tetap ikut ter-packaging untuk armeabi-v7a/x86_64.
       # --split-per-abi membuat APK per ABI yang benar-benar hanya berisi
       # lib ABI itu; dengan --target-platform android-arm64 hasilnya
-      # hanya app-arm64-v8a-debug.apk.
+      # hanya app-arm64-v8a-release.apk.
+      # RELEASE (Gas Sendy 24 Nov 12:54, owner mau tes): --release ganti
+      # --debug — tanpa banner debug, assert dimatikan, APK lebih kecil
+      # + cepat. Signing TETAP keystore SUKA TEA (build.gradle: release
+      # pakai signingConfigs.sukaTea bila keystore.properties ada) —
+      # sertifikat SAMA (1f25bc82…), jadi install -r menimpa build debug
+      # lama tanpa uninstall, dan install fresh di HP owner juga jalan.
       # Keystore tetap: signature konsisten antar build — tanpa ini tiap
       # runner CI bikin debug keystore baru sehingga APK baru tidak bisa
       # update APK lama (INSTALL_FAILED_UPDATE_INCOMPATIBLE).
@@ -48,11 +54,11 @@ jobs:
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > android/suka-tea.p12
           printf 'storeFile=../suka-tea.p12\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > android/keystore.properties
-      - run: flutter build apk --debug --target-platform android-arm64 --split-per-abi --dart-define SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+      - run: flutter build apk --release --target-platform android-arm64 --split-per-abi --dart-define SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
       # Biar APK-nya bisa diunduh dari halaman run (tanpa ini APK hilang
       # begitu job selesai).
       - uses: actions/upload-artifact@v4
         with:
-          name: suka-tea-debug-apk
-          path: build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
+          name: suka-tea-release-apk
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 
