@@ -35,7 +35,9 @@ Future<void> _pumpCloseSheet(
   WidgetTester tester,
   void Function(CloseShiftInput?) onResult,
 ) async {
-  const shift = CashShift(
+  // `final` (bukan `const`): DateTime(...) bukan konstruktor const,
+  // jadi `const CashShift(...)` tidak bisa dikompilasi (CI v31).
+  final shift = CashShift(
     id: 'shift-1',
     outletId: 'outlet-1',
     cashierName: 'Budi',
