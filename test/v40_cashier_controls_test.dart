@@ -337,9 +337,13 @@ void main() {
       );
     });
 
-    // clear() menyentuh Drift (path_provider) — harus testWidgets
-    // (pola v39_auto_close_test.dart), bukan test() biasa.
-    testWidgets('clear() → kembali belum diketahui', (tester) async {
+    // clear() menyentuh Drift (path_provider) — HARUS test() BIASA
+    // (pola v39_auto_close_test.dart), BUKAN testWidgets: Drift
+    // membuka DB di background isolate dan await-nya tidak pernah
+    // kembali di dalam zona fake-async testWidgets (hang 10 mnt di
+    // CI run 45553939722). Mock path_provider di setUpAll di atas
+    // yang bikin open DB-nya jalan.
+    test('clear() → kembali belum diketahui', () async {
       final session = CashierSessionService.instance;
       await session.clear();
       expect(session.permissionsKnown, isFalse);
