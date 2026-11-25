@@ -16,6 +16,29 @@ bool shouldAutoLock({
 }) =>
     now.difference(lastActive) >= idle;
 
+/// Izin kasir sesi ini dari server (verify saat login / blok
+/// `cashier` di jawaban pull). Didefinisikan di sini (bukan di
+/// cashier_service.dart) supaya tidak ada import melingkar:
+/// cashier_service.dart sudah mengimpor file ini.
+/// Field hilang = default perilaku lama (semua boleh, tidak
+/// dibatasi — server lama belum mengirimnya, brief v40 §2.1 poin 4).
+typedef CashierPermissions = ({
+  bool canVoid,
+  bool canDiscount,
+  bool canCloseShift,
+  bool forcePinChange,
+  List<String> allowedOutletIds,
+});
+
+/// Default izin = perilaku lama (semua boleh, tidak dibatasi).
+const CashierPermissions kDefaultCashierPermissions = (
+  canVoid: true,
+  canDiscount: true,
+  canCloseShift: true,
+  forcePinChange: false,
+  allowedOutletIds: <String>[],
+);
+
 /// Sesi kasir persisten (Batch C5).
 ///
 /// Sesudah kasir login berhasil, outlet + nama kasir disimpan lokal
@@ -58,6 +81,80 @@ class CashierSessionService extends ChangeNotifier {
   // Dihapus saat logout, lock, ganti peran, atau app ditutup.
   String? _ownerPin;
   String? _cashierPin;
+
+  // ---- Izin kasir sesi ini (v40) ----
+  // Dari server: verify saat login + blok `cashier` di jawaban pull
+  // tiap 10 detik. HANYA memori (sama seperti PIN bukti) — TIDAK
+  // PERNAH ditulis ke Drift: sumber kebenaran izin adalah server,
+  // dan sesi restore tanpa PIN memang tidak boleh jualan sampai
+  // PIN dimasukkan ulang (saat itu izin dimuat segar dari verify).
+  // null = BELUM DIKETAHUI (sesi restore) → semua gate fail closed
+  // (tidak diizinkan) sampai login ulang.
+  bool? _canVoid;
+  bool? _canDiscount;
+  bool? _canCloseShift;
+  List<String>? _allowedOutletIds;
+  bool _forcePinChange = false;
+
+  /// Pesan paksa keluar (v40): diisi `markKicked()`, dibaca SEKALI
+  /// oleh LoginPage sesudah sesi hilang (lalu null). null = tidak
+  /// ada kick.
+  String? _kickNotice;
+
+  /// Izin kasir dari server (verify login / pull segar).
+  void applyPermissions(CashierPermissions permissions) {
+    _canVoid = permissions.canVoid;
+    _canDiscount = permissions.canDiscount;
+    _canCloseShift = permissions.canCloseShift;
+    _allowedOutletIds = List.unmodifiable(permissions.allowedOutletIds);
+    _forcePinChange = permissions.forcePinChange;
+    notifyListeners();
+  }
+
+  /// true = izin sudah dimuat dari server (login segar / pull segar).
+  bool get permissionsKnown => _canVoid != null;
+
+  /// Fail closed: belum diketahui = tidak diizinkan.
+  bool get canVoid => _canVoid ?? false;
+  bool get canDiscount => _canDiscount ?? false;
+  bool get canCloseShift => _canCloseShift ?? false;
+  bool get forcePinChange => _forcePinChange;
+
+  /// true bila kasir boleh login di gerai ini. Izin belum diketahui
+  /// (null) = true — gate sebenarnya ada di SERVER (sync proof
+  /// menolak gerai yang tidak diizinkan), jadi fail-open di sini
+  /// tidak membuka jalan masuk; sesi restore tanpa PIN tidak bisa
+  /// jualan anyway (sync ditahan sampai PIN masuk lagi).
+  bool isOutletAllowed(String outletId) {
+    final allowed = _allowedOutletIds;
+    if (allowed == null || allowed.isEmpty) return true;
+    return allowed.contains(outletId);
+  }
+
+  /// Paksa keluar sesi ini (v40 — Owner kick / gerai dicabut):
+  /// baris sesi Drift ikut dihapus (supaya sesi tidak bangkit lagi
+  /// saat app dibuka ulang) + bukti PIN + izin dihapus + pesan
+  /// sekali untuk LoginPage.
+  Future<void> markKicked() async {
+    _kickNotice =
+        'Anda dipaksa keluar oleh Owner. Login ulang dengan PIN.';
+    await clear();
+  }
+
+  /// Baca pesan kick sekali (sesudah dibaca, null).
+  String? consumeKickNotice() {
+    final notice = _kickNotice;
+    _kickNotice = null;
+    return notice;
+  }
+
+  void _resetPermissions() {
+    _canVoid = null;
+    _canDiscount = null;
+    _canCloseShift = null;
+    _allowedOutletIds = null;
+    _forcePinChange = false;
+  }
 
   /// Ingat PIN Owner sesudah unlock berhasil (memori saja).
   void rememberOwnerPin(String pin) {
@@ -138,6 +235,8 @@ class CashierSessionService extends ChangeNotifier {
     // Bukti PIN ikut dihapus (SEC-1 R-02 — PIN hanya di memori).
     _ownerPin = null;
     _cashierPin = null;
+    // v40: izin ikut dihapus (sesi baru = izin belum diketahui).
+    _resetPermissions();
     _lastActive = DateTime.now();
     notifyListeners();
   }

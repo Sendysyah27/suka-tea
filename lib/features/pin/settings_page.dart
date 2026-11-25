@@ -13,6 +13,7 @@ import '../gudang/package_list_page.dart';
 import '../gudang/send_stock_page.dart';
 import '../gudang/stock_in_page.dart';
 import '../kasir/kasir_management_page.dart';
+import '../kasir/login_history_page.dart';
 import '../gudang/brew_page.dart';
 import 'pin_dialog.dart';
 import 'pin_service.dart';
@@ -232,6 +233,47 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                           Text(
                             'Daftar kasir + PIN akses (semua gerai)',
+                            style: TextStyle(color: SukaTeaColors.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: SukaTeaColors.muted),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Baris Riwayat Login (v40, frame 30): audit login kasir
+          // (kasir + gerai + jam + terakhir aktif).
+          Card(
+            child: InkWell(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const LoginHistoryPage(),
+                ),
+              ),
+              borderRadius: BorderRadius.circular(20),
+              child: const Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.history, color: SukaTeaColors.emerald),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Riwayat Login',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 18,
+                            ),
+                          ),
+                          Text(
+                            'Siapa login di gerai mana + kapan',
                             style: TextStyle(color: SukaTeaColors.muted),
                           ),
                         ],

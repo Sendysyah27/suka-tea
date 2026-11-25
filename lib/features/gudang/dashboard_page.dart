@@ -16,6 +16,7 @@ import '../../data/sale_history.dart';
 import '../../data/stock_service.dart';
 import '../../data/sync_service.dart';
 import '../keuangan/keuangan_page.dart';
+import '../kasir/cashier_performance_page.dart';
 import '../laporan/laporan_page.dart';
 import '../gerai/gerai_list_page.dart';
 import '../riwayat/riwayat_page.dart';
@@ -240,16 +241,23 @@ class _DashboardPageState extends State<DashboardPage> {
           final byCashier = <String, _CashierDay>{};
           for (final o in outlets) {
             if (!SyncService.instance.hasSynced(o.id)) continue;
+            // v40: salesOn (SEMUA, termasuk void) — void + diskon
+            // dihitung di sini, bukan hanya penjualan aktif.
             for (final s in SaleHistoryService.instance
-                .activeSalesOn(today, outletId: o.id)) {
+                .salesOn(today, outletId: o.id)) {
               final name = s.displayCashierName;
               final entry = byCashier.putIfAbsent(
                 name,
                 () => _CashierDay(name: name, outletId: o.id),
               );
+              if (s.isVoid) {
+                entry.voidCount++;
+                continue;
+              }
               entry.txnCount++;
               entry.omzet += s.total;
               entry.cups += s.cups;
+              if (s.discount > 0) entry.discountCount++;
             }
           }
           final cashiers = byCashier.values.toList()
@@ -493,8 +501,15 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
               ),
               // ---- §5 Per kasir ----
+              // v40: ketuk judul → Performa Kasir (frame 32, 7 hari +
+              // void/diskon). Ketuk baris → Riwayat kasir hari ini.
               _SectionCard(
                 title: 'Performa kasir hari ini',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const CashierPerformancePage(),
+                  ),
+                ),
                 child: cashiers.isEmpty
                     ? const Text(
                         'Belum ada penjualan hari ini.',
@@ -517,19 +532,33 @@ class _DashboardPageState extends State<DashboardPage> {
                               child: Padding(
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 4),
-                                child: Row(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
                                   children: [
-                                    Expanded(
-                                      child: Text(
-                                        '${c.name} • ${outletName(c.outletId)}',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w600,
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            '${c.name} • ${outletName(c.outletId)}',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
                                         ),
-                                      ),
+                                        Text(
+                                          formatRupiah(c.omzet),
+                                          style: const TextStyle(
+                                            color: SukaTeaColors.emerald,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                     Text(
                                       '${c.txnCount} trx • ${c.cups} cup • '
-                                      '${formatRupiah(c.omzet)}',
+                                      'void ${c.voidCount} • '
+                                      'diskon ${c.discountCount}',
                                       style: const TextStyle(
                                         color: SukaTeaColors.muted,
                                       ),
@@ -717,6 +746,10 @@ class _CashierDay {
   var txnCount = 0;
   var omzet = 0;
   var cups = 0;
+  // v40: void + diskon hari ini (dihitung dari salesOn, bukan
+  // activeSalesOn — lihat blok "Per kasir hari ini" di atas).
+  var voidCount = 0;
+  var discountCount = 0;
 }
 
 class _SectionCard extends StatelessWidget {

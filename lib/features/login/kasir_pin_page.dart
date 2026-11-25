@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/roles.dart';
@@ -97,6 +98,25 @@ class _KasirPinPageState extends State<KasirPinPage> {
     if (!mounted) return;
     switch (result.result) {
       case CashierVerifyResult.ok:
+        // v40: Owner memaksa ganti PIN → kasir WAJIB ganti PIN
+        // sendiri SEBELUM masuk POS (PIN lama sudah terbukti, jadi
+        // sheet hanya minta PIN BARU 2x).
+        if (result.permissions.forcePinChange) {
+          setState(() => _busy = false);
+          final changed = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => _ChangeOwnPinDialog(oldPin: pin),
+          );
+          if (changed != true || !mounted) {
+            setState(() {
+              _entered = '';
+              _error = 'PIN harus diganti dulu — minta PIN baru ke Owner '
+                  'bila lupa.';
+            });
+            return;
+          }
+        }
         _finish(
           cashierId: result.cashierId,
           cashierName: result.name,
@@ -119,6 +139,13 @@ class _KasirPinPageState extends State<KasirPinPage> {
           _entered = '';
           _busy = false;
           _error = 'Belum ada kasir terdaftar — minta Owner daftarkan dulu.';
+        });
+      case CashierVerifyResult.outletNotAllowed:
+        setState(() {
+          _entered = '';
+          _busy = false;
+          _error = 'Kasir ini tidak boleh login di gerai ini — minta '
+              'Owner centang gerai ini di Detail Kasir.';
         });
       case CashierVerifyResult.unavailable:
         setState(() {
@@ -260,6 +287,134 @@ class _KasirPinPageState extends State<KasirPinPage> {
           const SizedBox(height: 16),
         ],
       ),
+    );
+  }
+}
+
+/// Dialog ganti PIN sendiri (v40 — alur "Paksa ganti PIN").
+/// PIN lama SUDAH terbukti saat login, jadi dialog hanya minta PIN
+/// BARU 2x. Sukses = true (kasir lanjut masuk POS); batal = false
+/// (kembali ke layar PIN — kasir tidak bisa masuk sebelum ganti).
+class _ChangeOwnPinDialog extends StatefulWidget {
+  const _ChangeOwnPinDialog({required this.oldPin});
+
+  final String oldPin;
+
+  @override
+  State<_ChangeOwnPinDialog> createState() => _ChangeOwnPinDialogState();
+}
+
+class _ChangeOwnPinDialogState extends State<_ChangeOwnPinDialog> {
+  late final TextEditingController _pinController;
+  late final TextEditingController _confirmController;
+  String? _error;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pinController = TextEditingController();
+    _confirmController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _pinController.dispose();
+    _confirmController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final pin = _pinController.text.trim();
+    final confirm = _confirmController.text.trim();
+    if (!PinService.isValidPin(pin)) {
+      setState(() => _error = 'PIN baru harus 6 digit angka.');
+      return;
+    }
+    if (pin != confirm) {
+      setState(() => _error = 'PIN tidak sama — ulangi dari awal.');
+      return;
+    }
+    if (pin == widget.oldPin) {
+      setState(() => _error = 'PIN baru harus beda dari PIN lama.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final result = await CashierService.instance.changeOwnPin(
+      oldPin: widget.oldPin,
+      newPin: pin,
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (result.ok) {
+      Navigator.of(context).pop(true);
+    } else {
+      setState(() {
+        _error = result.error == 'pin_taken'
+            ? 'PIN sudah dipakai kasir lain — pilih PIN lain.'
+            : result.error == 'wrong'
+                ? 'PIN lama tidak cocok — ulangi login.'
+                : 'Gagal ganti PIN — coba lagi.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Ganti PIN Kasir'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Owner meminta PIN diganti. Masukkan PIN baru (6 digit) — '
+              'PIN lama tidak bisa dipakai lagi.',
+              style: TextStyle(color: SukaTeaColors.muted),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _pinController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              maxLength: 6,
+              decoration: const InputDecoration(
+                labelText: 'PIN baru (6 digit)',
+              ),
+            ),
+            TextField(
+              controller: _confirmController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              maxLength: 6,
+              decoration: const InputDecoration(
+                labelText: 'Ulangi PIN baru',
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: const TextStyle(color: SukaTeaColors.danger),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Batal'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _submit,
+          child: const Text('Simpan PIN Baru'),
+        ),
+      ],
     );
   }
 }

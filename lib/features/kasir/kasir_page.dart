@@ -33,6 +33,7 @@ import '../laporan/shift_sheets.dart';
 import '../qris/qris_pay_page.dart';
 import 'cash_sheet.dart';
 import 'discount_sheet.dart';
+import 'permission_gate.dart';
 import 'product_options_sheet.dart';
 import 'receipt.dart';
 
@@ -374,8 +375,21 @@ class _KasirPageState extends State<KasirPage> {
   /// Buka sheet diskon manual. Nilai kembali = diskon baru (0 =
   /// hapus diskon) + persennya (0 = mode rupiah). Dipanggil dari
   /// panel keranjang.
+  ///
+  /// v40: kasir tanpa izin diskon (toggle Owner OFF) diminta PIN
+  /// Owner di tempat — bukan diblokir mentah. Owner selalu boleh.
   Future<void> _editDiscount() async {
     if (_cart.isEmpty) return;
+    final allowed = widget.role == AppRole.owner ||
+        CashierSessionService.instance.canDiscount;
+    if (!await ensureCashierPermission(
+      context,
+      allowed: allowed,
+      actionLabel: 'memberi diskon',
+    )) {
+      return;
+    }
+    if (!mounted) return;
     final result = await showDiscountSheet(
       context,
       subtotal: _subtotal,

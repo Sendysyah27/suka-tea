@@ -1,12 +1,19 @@
-// SUKA TEA — Edge Function `set-cashier-pin` (Batch C8.2)
+// SUKA TEA — Edge Function `set-cashier-pin` (Batch C8.2,
+// v40: + ubah nama dalam satu panggilan)
 // Ubah PIN akses satu kasir (6 digit baru). Hanya Owner yang boleh
 // (bukti = PIN Owner gerai itu, diverifikasi server-side).
 // PIN baru tidak boleh sama dengan PIN kasir aktif LAIN (kasir ini
 // sendiri dikecualikan — PIN lama boleh dipakai lagi).
+// v40 — parameter opsional `name`: dialog Ubah (frame 33) mengubah
+// nama + PIN dalam SATU panggilan. Nama dicek unik antar kasir AKTIF
+// kecuali kasir ini sendiri (case-insensitive) -> 'name_taken'.
+// Bila `name` tidak ada/kosong = perilaku lama (hanya PIN).
+// Bila `pin` tidak ada = hanya nama. Keduanya kosong -> 400.
 //
-// POST { outlet_id, owner_pin, cashier_id, pin } -> { ok:true }
+// POST { outlet_id, owner_pin, cashier_id, pin?, name? } -> { ok:true }
 //   { ok:false, reason:'wrong'|'not_set'|'locked' }  (403)
-//   { ok:false, error:'pin_taken'|'cashier_not_found'|... }  (400/500/501)
+//   { ok:false, error:'pin_taken'|'name_taken'|'cashier_not_found'|... }
+//     (400/500/501)
 // JWT OFF — PIN adalah auth-nya (sama seperti EF PIN lain).
 //
 // Secret yang dibutuhkan (otomatis tersedia di Edge Functions):
@@ -55,18 +62,35 @@ Deno.serve(async (req: Request) => {
     const outletIdRaw = String(body.outlet_id ?? "");
     const ownerPin = String(body.owner_pin ?? "");
     const cashierId = String(body.cashier_id ?? "");
-    const pin = String(body.pin ?? "");
+    const pinRaw = body.pin;
+    const pin = typeof pinRaw === "string" ? pinRaw : "";
+    const nameRaw = body.name;
+    const name = typeof nameRaw === "string" ? nameRaw.trim() : "";
     if (
       !UUID_RE.test(outletIdRaw) ||
       !/^\d{6}$/.test(ownerPin) ||
-      !UUID_RE.test(cashierId) ||
-      !/^\d{6}$/.test(pin)
+      !UUID_RE.test(cashierId)
     ) {
       return json(
         {
           ok: false,
-          error: "outlet_id + cashier_id (UUID) + owner_pin + pin 6 digit wajib",
+          error: "outlet_id + cashier_id (UUID) + owner_pin 6 digit wajib",
         },
+        400,
+      );
+    }
+    if (pin !== "" && !/^\d{6}$/.test(pin)) {
+      return json({ ok: false, error: "pin kasir harus 6 digit" }, 400);
+    }
+    if (name !== "" && name.length > 50) {
+      return json(
+        { ok: false, error: "name wajib diisi (maks 50 karakter)" },
+        400,
+      );
+    }
+    if (pin === "" && name === "") {
+      return json(
+        { ok: false, error: "pin atau name wajib diisi" },
         400,
       );
     }
@@ -126,26 +150,50 @@ Deno.serve(async (req: Request) => {
     if (target == null) {
       return json({ ok: false, error: "cashier_not_found" }, 400);
     }
-    // PIN baru tidak boleh dipakai kasir aktif LAIN.
-    const { data: actives, error: activesErr } = await supabase
-      .from("cashiers")
-      .select("id, pin_hash")
-      .eq("active", true)
-      .neq("id", cashierId);
-    if (activesErr) {
-      return json({ ok: false, error: activesErr.message }, 500);
+    // v40 — nama baru tidak boleh dipakai kasir aktif LAIN
+    // (kasir ini dikecualikan — nama lama boleh dipakai lagi).
+    if (name !== "") {
+      const { data: actives, error: nameErr } = await supabase
+        .from("cashiers")
+        .select("id, name")
+        .eq("active", true)
+        .neq("id", cashierId);
+      if (nameErr) {
+        return json({ ok: false, error: nameErr.message }, 500);
+      }
+      for (const c of (actives ?? []) as Record<string, unknown>[]) {
+        if (
+          String(c["name"] ?? "").trim().toLowerCase() ===
+          name.toLowerCase()
+        ) {
+          return json({ ok: false, error: "name_taken" }, 400);
+        }
+      }
     }
-    for (const c of (actives ?? []) as Record<string, unknown>[]) {
-      const otherHash = String(c["pin_hash"] ?? "");
-      if (otherHash !== "" && (await bcrypt.compare(pin, otherHash))) {
-        return json({ ok: false, error: "pin_taken" }, 400);
+    // PIN baru tidak boleh dipakai kasir aktif LAIN.
+    if (pin !== "") {
+      const { data: actives, error: activesErr } = await supabase
+        .from("cashiers")
+        .select("id, pin_hash")
+        .eq("active", true)
+        .neq("id", cashierId);
+      if (activesErr) {
+        return json({ ok: false, error: activesErr.message }, 500);
+      }
+      for (const c of (actives ?? []) as Record<string, unknown>[]) {
+        const otherHash = String(c["pin_hash"] ?? "");
+        if (otherHash !== "" && (await bcrypt.compare(pin, otherHash))) {
+          return json({ ok: false, error: "pin_taken" }, 400);
+        }
       }
     }
 
-    const pinHash = await bcrypt.hash(pin, 10);
+    const patch: Record<string, unknown> = {};
+    if (name !== "") patch["name"] = name;
+    if (pin !== "") patch["pin_hash"] = await bcrypt.hash(pin, 10);
     const { error: updErr } = await supabase
       .from("cashiers")
-      .update({ pin_hash: pinHash })
+      .update(patch)
       .eq("id", cashierId);
     if (updErr) {
       return json({ ok: false, error: updErr.message }, 500);

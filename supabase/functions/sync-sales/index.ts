@@ -237,6 +237,12 @@ async function ensureOutletExists(
 /// global + rate limit purpose 'owner') ATAU `cashier_pin` (dicocokkan
 /// ke SEMUA kasir aktif; TIDAK mencatat pin_attempts — bukti sync
 /// tidak boleh mengunci login kasir).
+/// v40 — cabang kasir: kasir yang `kicked_at`-nya terisi -> 403
+/// 'kicked' (Owner memaksa keluar); gerai body.outlet_id tidak ada
+/// di `cashier_outlets` kasir itu -> 403 'outlet_not_allowed';
+/// selebihnya HEARTBEAT: last_seen_at + last_outlet_id di-update
+/// (best-effort — gagal heartbeat TIDAK menggagalkan bukti).
+/// Cabang Owner TIDAK berubah.
 /// null = bukti sah; Response = tolak (403/400).
 async function verifySyncProof(
   supabase: Supabase,
@@ -292,7 +298,7 @@ async function verifySyncProof(
     }
     const { data: actives, error: readError } = await supabase
       .from("cashiers")
-      .select("id, pin_hash")
+      .select("id, pin_hash, kicked_at")
       .eq("active", true);
     if (readError) {
       return json({ ok: false, error: readError.message }, 500);
@@ -300,13 +306,107 @@ async function verifySyncProof(
     for (const c of (actives ?? []) as Record<string, unknown>[]) {
       const hash = String(c["pin_hash"] ?? "");
       if (hash === "") continue;
-      if (await bcrypt.compare(pin, hash)) return null;
+      if (await bcrypt.compare(pin, hash)) {
+        // v40 — kick: Owner memaksa keluar kasir yang sedang login.
+        if (c["kicked_at"] != null) {
+          return json({ ok: false, reason: "kicked" }, 403);
+        }
+        // v40 — gerai: body.outlet_id HARUS dicentang untuk kasir
+        // ini. Bila body tidak membawa outlet_id yang valid (bentuk
+        // push lama), lewati cek gerai + heartbeat — kick di atas
+        // tetap berlaku.
+        const outletId = String(body.outlet_id ?? "");
+        if (UUID_RE.test(outletId)) {
+          const { data: outlets, error: outletsErr } = await supabase
+            .from("cashier_outlets")
+            .select("outlet_id")
+            .eq("cashier_id", String(c["id"] ?? ""));
+          if (outletsErr) {
+            return json({ ok: false, error: outletsErr.message }, 500);
+          }
+          const allowed = ((outlets ?? []) as Record<string, unknown>[])
+            .map((o) => String(o["outlet_id"] ?? ""))
+            .includes(outletId);
+          if (!allowed) {
+            return json({ ok: false, reason: "outlet_not_allowed" }, 403);
+          }
+          // v40 — heartbeat presence (best-effort: gagal tulis
+          // TIDAK menggagalkan bukti — sync harus tetap jalan).
+          try {
+            await supabase
+              .from("cashiers")
+              .update({
+                last_seen_at: new Date().toISOString(),
+                last_outlet_id: outletId,
+              })
+              .eq("id", String(c["id"] ?? ""));
+          } catch (_) {
+            // Heartbeat gagal = abaikan (lihat komentar di atas).
+          }
+        }
+        return null;
+      }
     }
     // TANPA insert pin_attempts (lihat doc di atas).
     return json({ ok: false, reason: "wrong" }, 403);
   }
 
   return json({ ok: false, error: "pin_required" }, 403);
+}
+
+/// v40 — blok `cashier` untuk jawaban pull(): izin + gerai kasir
+/// yang sedang sync (dipakai app untuk gate void/diskon/tutup-shift
+/// tanpa menunggu login ulang — Owner bisa mengubah izin di tengah
+/// shift). Dipanggil SESUDAH verifySyncProof lolos (jangan ubah
+/// signature verifySyncProof — dipakai push + pull). Bukti Owner
+/// -> null (tidak ada blok). Tidak pernah throw: gagal resolve =
+/// null (app memakai izin terakhir yang diketahuinya).
+async function resolveCashierFromProof(
+  supabase: Supabase,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const cashierPinRaw = body.cashier_pin;
+    if (typeof cashierPinRaw !== "string" || cashierPinRaw === "") {
+      return null;
+    }
+    const pin = String(cashierPinRaw);
+    if (!/^\d{6}$/.test(pin)) return null;
+    const { data: actives, error: readError } = await supabase
+      .from("cashiers")
+      .select(
+        "id, name, can_void, can_discount, can_close_shift, " +
+          "force_pin_change",
+      )
+      .eq("active", true);
+    if (readError) return null;
+    for (const c of (actives ?? []) as Record<string, unknown>[]) {
+      const hash = String(c["pin_hash"] ?? "");
+      if (hash === "") continue;
+      if (await bcrypt.compare(pin, hash)) {
+        const cashierId = String(c["id"] ?? "");
+        const { data: outlets } = await supabase
+          .from("cashier_outlets")
+          .select("outlet_id")
+          .eq("cashier_id", cashierId);
+        const allowedOutlets = ((outlets ?? []) as Record<string, unknown>[])
+          .map((o) => String(o["outlet_id"] ?? ""))
+          .filter((id) => id !== "");
+        return {
+          cashier_id: cashierId,
+          name: String(c["name"] ?? ""),
+          can_void: c["can_void"] !== false,
+          can_discount: c["can_discount"] !== false,
+          can_close_shift: c["can_close_shift"] !== false,
+          force_pin_change: c["force_pin_change"] === true,
+          allowed_outlets: allowedOutlets,
+        };
+      }
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
 }
 
 /// Upsert satu transaksi + ganti item-nya utuh (idempotent).
@@ -1694,6 +1794,9 @@ async function pull(
     outlet_id: outletId,
     from,
     to,
+    // v40 — blok kasir (null untuk bukti Owner): izin + gerai yang
+    // di-refresh tiap pull (lihat resolveCashierFromProof).
+    cashier: await resolveCashierFromProof(supabase, body),
     transactions: txnList,
     items,
     stock,

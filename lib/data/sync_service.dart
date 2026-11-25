@@ -19,6 +19,7 @@ import 'sale_history.dart';
 import 'stock_service.dart';
 import 'supabase_client.dart';
 import '../features/login/cashier_session.dart';
+import '../features/kasir/cashier_service.dart';
 import 'sync_payload.dart';
 import 'topping_service.dart';
 
@@ -36,12 +37,16 @@ typedef SyncTransport = Future<Map<String, dynamic>> Function(
 /// [failedErrors] (Batch C10 WS3) = outbox_id -> error server
 /// (mis. 'gudang_kurang') — dipakai SyncService untuk membalik
 /// kiriman yang ditolak server.
+/// [topReason] (v40) = `reason` jawaban top-level bila ok != true
+/// (mis. 'kicked' / 'outlet_not_allowed') — dipakai SyncService
+/// untuk mengunci sesi kasir yang dicabut Owner.
 typedef FlushResult = ({
   List<String> sentIds,
   List<String> failedIds,
   List<String> skippedIds,
   List<ShiftAdoption> shiftAdoptions,
   Map<String, String> failedErrors,
+  String? topReason,
 });
 
 /// Flush murni (tanpa Drift): ubah antrean pending jadi event, kirim
@@ -98,6 +103,7 @@ Future<FlushResult> flushOutboxEntries(
       skippedIds: skipped,
       shiftAdoptions: const <ShiftAdoption>[],
       failedErrors: const <String, String>{},
+      topReason: null,
     );
   }
   try {
@@ -106,6 +112,11 @@ Future<FlushResult> flushOutboxEntries(
       'events': events,
       ...proof,
     });
+    // v40: alasan top-level (kicked / outlet_not_allowed) diteruskan
+    // ke pemanggil — bukti PIN ditolak server = sesi dicabut.
+    final topReason = res['ok'] != true && res['reason'] is String
+        ? res['reason'] as String
+        : null;
     final outcome = applyPushResults(events, res, failed);
     // Adopsi dedupe butuh client_uuid lokal event shift yang ditolak
     // (id shift lokal) — ambil dari event yang dikirim (server tidak
@@ -132,6 +143,7 @@ Future<FlushResult> flushOutboxEntries(
       skippedIds: skipped,
       shiftAdoptions: adoptions,
       failedErrors: outcome.failedErrors,
+      topReason: topReason,
     );
   } catch (e) {
     debugPrint('Sync push gagal (transport): $e');
@@ -144,6 +156,7 @@ Future<FlushResult> flushOutboxEntries(
       skippedIds: skipped,
       shiftAdoptions: const <ShiftAdoption>[],
       failedErrors: const <String, String>{},
+      topReason: null,
     );
   }
 }
@@ -339,6 +352,16 @@ class SyncService extends ChangeNotifier {
     }
   }
 
+  /// v40: alasan 'kicked' / 'outlet_not_allowed' dari server = sesi
+  /// kasir ini sudah dicabut Owner → kunci HP (hapus sesi + notice
+  /// untuk LoginPage). Satu-satunya tempat yang membaca reason
+  /// top-level — jangan sebar cek ini ke tempat lain.
+  void _checkKickReason(String? reason) {
+    if (reason == 'kicked' || reason == 'outlet_not_allowed') {
+      unawaited(CashierSessionService.instance.markKicked());
+    }
+  }
+
   /// Perbarui hitungan pending dari Drift (untuk indikator UI).
   Future<void> refreshPending() async {
     _pendingCount = await _outbox.pendingCount();
@@ -403,6 +426,8 @@ class SyncService extends ChangeNotifier {
         _transport,
         proof: CashierSessionService.instance.sessionProof,
       );
+      // v40: bukti PIN ditolak (kick / gerai dicabut) → kunci sesi.
+      _checkKickReason(result.topReason);
       for (final id in result.sentIds) {
         await _outbox.markSent(id);
       }
@@ -496,6 +521,7 @@ class SyncService extends ChangeNotifier {
     List<Map<String, dynamic>> opnames,
     List<Map<String, dynamic>> stockIns,
     List<Map<String, dynamic>> brews,
+    Map<String, dynamic>? cashier,
   })> pullOutlet({
     required String outletId,
     required DateTime from,
@@ -512,6 +538,9 @@ class SyncService extends ChangeNotifier {
       // SEC-1 R-02: pull juga wajib bukti PIN.
       ...CashierSessionService.instance.sessionProof,
     });
+    // v40: cek kick SEBELUM parse — parse melempar FormatException
+    // untuk ok != true, tapi sesi harus sudah terkunci dulu.
+    _checkKickReason(res['reason'] is String ? res['reason'] as String : null);
     final parsed = parsePullResponse(res);
     final sales = parsed.transactions
         .map(
@@ -549,6 +578,7 @@ class SyncService extends ChangeNotifier {
       opnames: parsed.opnames,
       stockIns: parsed.stockIns,
       brews: parsed.brews,
+      cashier: parsed.cashier,
     );
   }
 
@@ -589,6 +619,14 @@ class SyncService extends ChangeNotifier {
         from: from,
         to: now,
       );
+      // v40: izin kasir segar dari server tiap pull (10 dtk) —
+      // Owner bisa mengubah izin ketika kasir sedang login.
+      final cashierBlock = pulled.cashier;
+      if (cashierBlock != null) {
+        CashierSessionService.instance.applyPermissions(
+          parseCashierPermissions(cashierBlock),
+        );
+      }
       await SaleHistoryService.instance.mergePulledSales(
         pulled.sales,
         outletId: outlet,

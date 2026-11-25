@@ -937,6 +937,8 @@ List<StockMovement> parseStockMovements(dynamic raw, String outletId) {
 /// + [brews] (riwayat masak gerai itu, WS4). Yang hilang (EF lama
 /// / jawaban lama) = list kosong, BUKAN error — pull lama tetap
 /// jalan.
+/// Batch v40: + [cashier] (izin kasir sesi ini dari server — null
+/// bila proof Owner / gudang / server lama).
 typedef PullData = ({
   List<Map<String, dynamic>> transactions,
   Map<String, List<Map<String, dynamic>>> itemsByClientUuid,
@@ -950,6 +952,7 @@ typedef PullData = ({
   List<Map<String, dynamic>> opnames,
   List<Map<String, dynamic>> stockIns,
   List<Map<String, dynamic>> brews,
+  Map<String, dynamic>? cashier,
 });
 
 List<Map<String, dynamic>> _asMapList(dynamic raw) {
@@ -1033,6 +1036,7 @@ PullData parsePullResponse(dynamic data) {
     data['movements'],
     outletId is String ? outletId : '',
   );
+  final cashierRaw = data['cashier'];
   return (
     transactions: transactions,
     itemsByClientUuid: byUuid,
@@ -1046,6 +1050,11 @@ PullData parsePullResponse(dynamic data) {
     opnames: _asMapList(data['opnames']),
     stockIns: _asMapList(data['stock_ins']),
     brews: _asMapList(data['brews']),
+    cashier: cashierRaw is Map<String, dynamic>
+        ? cashierRaw
+        : cashierRaw is Map
+            ? Map<String, dynamic>.from(cashierRaw)
+            : null,
   );
 }
 

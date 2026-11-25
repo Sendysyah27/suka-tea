@@ -1,9 +1,15 @@
-// SUKA TEA — Edge Function `list-cashiers` (Batch C8.2)
-// Daftar semua kasir terdaftar (id + nama + status aktif) — untuk
-// halaman Kelola Kasir Owner. Hanya Owner yang boleh membaca
-// (bukti = PIN Owner gerai itu, diverifikasi server-side).
+// SUKA TEA — Edge Function `list-cashiers` (Batch C8.2,
+// v40: + izin + presence + resign + gerai)
+// Daftar semua kasir terdaftar (id + nama + status aktif + izin +
+// terakhir sync + gerai terakhir + arsip resign + gerai yang
+// diizinkan) — untuk halaman Kelola Kasir Owner. Hanya Owner yang
+// boleh membaca (bukti = PIN Owner gerai itu, diverifikasi
+// server-side).
 //
-// POST { outlet_id, owner_pin } -> { ok:true, cashiers:[{id,name,active}] }
+// POST { outlet_id, owner_pin } -> { ok:true, cashiers:[{id,name,
+//   active, can_void, can_discount, can_close_shift,
+//   force_pin_change, resigned_at, last_seen_at, last_outlet_id,
+//   allowed_outlets:[...]}] }
 //   { ok:false, reason:'wrong'|'not_set'|'locked' }  (403)
 //   { ok:false, error:... }  (400/500/501)
 // JWT OFF — PIN adalah auth-nya (sama seperti EF PIN lain).
@@ -105,12 +111,48 @@ Deno.serve(async (req: Request) => {
 
     const { data: cashiers, error: listError } = await supabase
       .from("cashiers")
-      .select("id, name, active")
+      .select(
+        "id, name, active, can_void, can_discount, can_close_shift, " +
+          "force_pin_change, resigned_at, last_seen_at, last_outlet_id, " +
+          "created_at",
+      )
       .order("created_at", { ascending: true });
     if (listError) {
       return json({ ok: false, error: listError.message }, 500);
     }
-    return json({ ok: true, cashiers: cashiers ?? [] });
+    // v40 — gerai yang diizinkan per kasir (satu query tambahan;
+    // N kasir kecil — jangan N+1 query per kasir).
+    const { data: outletRows, error: outletsErr } = await supabase
+      .from("cashier_outlets")
+      .select("cashier_id, outlet_id");
+    if (outletsErr) {
+      return json({ ok: false, error: outletsErr.message }, 500);
+    }
+    const byCashier = new Map<string, string[]>();
+    for (const r of (outletRows ?? []) as Record<string, unknown>[]) {
+      const cid = String(r["cashier_id"] ?? "");
+      const oid = String(r["outlet_id"] ?? "");
+      if (cid === "" || oid === "") continue;
+      const list = byCashier.get(cid) ?? [];
+      list.push(oid);
+      byCashier.set(cid, list);
+    }
+    const out = ((cashiers ?? []) as Record<string, unknown>[]).map(
+      (c) => ({
+        id: c["id"],
+        name: c["name"],
+        active: c["active"],
+        can_void: c["can_void"] !== false,
+        can_discount: c["can_discount"] !== false,
+        can_close_shift: c["can_close_shift"] !== false,
+        force_pin_change: c["force_pin_change"] === true,
+        resigned_at: c["resigned_at"] ?? null,
+        last_seen_at: c["last_seen_at"] ?? null,
+        last_outlet_id: c["last_outlet_id"] ?? null,
+        allowed_outlets: byCashier.get(String(c["id"] ?? "")) ?? [],
+      }),
+    );
+    return json({ ok: true, cashiers: out });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }

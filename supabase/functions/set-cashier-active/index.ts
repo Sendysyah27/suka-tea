@@ -125,9 +125,21 @@ Deno.serve(async (req: Request) => {
     if (target == null) {
       return json({ ok: false, error: "cashier_not_found" }, 400);
     }
+    // v40 — `resigned` opsional (default = perilaku lama: hanya
+    // flip active). Resign = active=false + resigned_at=now (masuk
+    // arsip). Aktifkan lagi = active=true + resigned_at=NULL
+    // (selalu — dari arsip maupun dari nonaktif biasa). Nonaktifkan
+    // biasa TIDAK menyentuh resigned_at.
+    const resigned = body.resigned;
+    const patch: Record<string, unknown> = { active };
+    if (active === false && resigned === true) {
+      patch["resigned_at"] = new Date().toISOString();
+    } else if (active === true) {
+      patch["resigned_at"] = null;
+    }
     const { error: updErr } = await supabase
       .from("cashiers")
-      .update({ active })
+      .update(patch)
       .eq("id", cashierId);
     if (updErr) {
       return json({ ok: false, error: updErr.message }, 500);

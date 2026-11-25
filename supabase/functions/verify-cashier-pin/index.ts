@@ -1,8 +1,25 @@
-// SUKA TEA — Edge Function `verify-cashier-pin` (Batch C8.2)
+// SUKA TEA — Edge Function `verify-cashier-pin` (Batch C8.2,
+// v40: + izin + gerai + force PIN + audit login + reset kick)
 // Verifikasi PIN akses kasir: cocokkan PIN ke SEMUA kasir AKTIF satu
 // per satu via bcrypt.compare (PIN berlaku di semua gerai — tidak ada
 // outlet_id di tabel cashiers). Sukses = identitas kasir (id + nama)
 // dari server, BUKAN ketikan kasir (perintah Sendy 24 Nov 13:58).
+//
+// v40 — sesudah cocok:
+//   1. Gerai: outlet_id request HARUS ada di `cashier_outlets`
+//      kasir itu, bila tidak -> reason 'outlet_not_allowed' (200).
+//      PIN-nya benar jadi TIDAK dicatat ke pin_attempts (bukan
+//      percobaan gagal); audit gerai hanya untuk login sukses.
+//   2. Audit: insert SATU baris `cashier_login_events` per login
+//      sukses (dipakai halaman Riwayat Login Owner).
+//   3. Kick: `kicked_at` di-reset NULL (sesi baru bersih — Owner
+//      yang kick kasir yang sedang login, bukan yang mau login).
+//      Reset best-effort: gagal reset TIDAK menggagalkan login.
+//   4. Jawaban ok membawa izin + gerai + flag:
+//      { ok:true, cashier_id, name, can_void, can_discount,
+//        can_close_shift, force_pin_change, allowed_outlets:[...] }
+//      (app memakai ini untuk gate void/diskon/tutup-shift +
+//      alur paksa ganti PIN).
 //
 // Rate limit GLOBAL: >=10 gagal dalam 10 menit TANPA filter outlet
 // -> locked (PIN yang sama bisa dicoba di gerai mana pun, jadi batas
@@ -12,8 +29,10 @@
 // valid, audit memakai gerai global ...0001.
 //
 // POST { pin, outlet_id } ->
-//   { ok:true, cashier_id, name }                       (200, cocok)
-//   { ok:false, reason:'wrong'|'locked'|'not_found' }  (200, tidak cocok)
+//   { ok:true, cashier_id, name, can_void, can_discount,
+//     can_close_shift, force_pin_change, allowed_outlets } (200, cocok)
+//   { ok:false, reason:'wrong'|'locked'|'not_found'|
+//     'outlet_not_allowed' }  (200, tidak cocok)
 //   { ok:false, error:... }                            (400/500/501)
 // JWT OFF — PIN adalah auth-nya (sama seperti EF PIN lain).
 //
@@ -82,7 +101,10 @@ Deno.serve(async (req: Request) => {
 
     const { data: actives, error: readError } = await supabase
       .from("cashiers")
-      .select("id, name, pin_hash")
+      .select(
+        "id, name, pin_hash, can_void, can_discount, can_close_shift, " +
+          "force_pin_change, kicked_at",
+      )
       .eq("active", true);
     // Jangan telan error baca: SELECT yang gagal harus terlihat
     // sebagai 500, bukan disangka "belum ada kasir".
@@ -110,10 +132,51 @@ Deno.serve(async (req: Request) => {
           success: true,
           purpose: "cashier",
         });
+        const cashierId = String(c["id"] ?? "");
+        const cashierName = String(c["name"] ?? "");
+        // v40 — gerai: PIN benar tapi gerai tidak dicentang untuk
+        // kasir ini = tolak login (bukan percobaan gagal).
+        const { data: outlets, error: outletsErr } = await supabase
+          .from("cashier_outlets")
+          .select("outlet_id")
+          .eq("cashier_id", cashierId);
+        if (outletsErr) {
+          return json({ ok: false, error: outletsErr.message }, 500);
+        }
+        const allowedOutlets = ((outlets ?? []) as Record<string, unknown>[])
+          .map((o) => String(o["outlet_id"] ?? ""))
+          .filter((id) => id !== "");
+        if (!allowedOutlets.includes(auditOutletId)) {
+          return json({ ok: false, reason: "outlet_not_allowed" });
+        }
+        // v40 — audit login + reset kick (best-effort: gagal
+        // tulis TIDAK menggagalkan login yang sudah terbukti).
+        try {
+          await supabase.from("cashier_login_events").insert({
+            cashier_id: cashierId,
+            cashier_name: cashierName,
+            outlet_id: auditOutletId,
+          });
+        } catch (_) {
+          // Audit gagal = login tetap jalan (lihat komentar di atas).
+        }
+        try {
+          await supabase
+            .from("cashiers")
+            .update({ kicked_at: null })
+            .eq("id", cashierId);
+        } catch (_) {
+          // Reset kick gagal = login tetap jalan.
+        }
         return json({
           ok: true,
-          cashier_id: String(c["id"] ?? ""),
-          name: String(c["name"] ?? ""),
+          cashier_id: cashierId,
+          name: cashierName,
+          can_void: c["can_void"] !== false,
+          can_discount: c["can_discount"] !== false,
+          can_close_shift: c["can_close_shift"] !== false,
+          force_pin_change: c["force_pin_change"] === true,
+          allowed_outlets: allowedOutlets,
         });
       }
     }

@@ -60,6 +60,22 @@ class _LoginPageState extends State<LoginPage> {
   _LoginStep _step = _LoginStep.select;
   bool _busy = false;
 
+  @override
+  void initState() {
+    super.initState();
+    // v40: pesan paksa keluar (kick) — tampil sekali sebagai
+    // SnackBar saat halaman login muncul sesudah sesi dikunci.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final notice =
+          CashierSessionService.instance.consumeKickNotice();
+      if (notice != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(notice)),
+        );
+      }
+    });
+  }
+
   void _finish(AppRole role) {
     // Sama seperti KasirPinPage._finish: reset _busy dulu supaya
     // spinner tidak muter selamanya bila onSuccess tidak langsung

@@ -11,7 +11,9 @@ import '../../data/sale_history.dart';
 import '../../data/stock_service.dart';
 import '../../data/sync_service.dart';
 import '../../data/topping_service.dart';
+import '../kasir/permission_gate.dart';
 import '../kasir/receipt.dart';
+import '../login/cashier_session.dart';
 
 /// Riwayat transaksi — daftar penjualan selesai, terbaru dulu.
 /// Tap satu transaksi = buka lagi struknya (halaman penuh).
@@ -96,7 +98,20 @@ class _RiwayatPageState extends State<RiwayatPage> {
   /// Konfirmasi + jalankan void: kembalikan stok dulu (restoreForSale),
   /// baru tandai record void. Stok dikembalikan dari item riwayat
   /// (SaleItem -> CartItem; topping dikenali dari nama).
+  ///
+  /// v40: kasir tanpa izin void (toggle Owner OFF) diminta PIN Owner
+  /// di tempat — bukan diblokir mentah. Owner selalu boleh.
   Future<void> _voidSale(BuildContext context, SaleRecord sale) async {
+    final allowed = widget.role == AppRole.owner ||
+        CashierSessionService.instance.canVoid;
+    if (!await ensureCashierPermission(
+      context,
+      allowed: allowed,
+      actionLabel: 'void transaksi',
+    )) {
+      return;
+    }
+    if (!context.mounted) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -287,9 +302,12 @@ class _RiwayatPageState extends State<RiwayatPage> {
                                 style: const TextStyle(fontSize: 12),
                               ),
                             ),
-                            // Aksi Void (HANYA Owner, belum void):
-                            // menu ⋮ di kanan kartu.
-                            if (widget.role.canVoidSale && !sale.isVoid)
+                            // Aksi Void (v40 — tombol ⋮ tampil untuk
+                            // Owner maupun kasir selama belum void;
+                            // IZIN dicek di _voidSale: kasir tanpa
+                            // izin void diminta PIN Owner di tempat.
+                            // Dulu: hanya Owner (role.canVoidSale).
+                            if (!sale.isVoid)
                               PopupMenuButton<String>(
                                 tooltip: 'Aksi transaksi',
                                 icon: const Icon(Icons.more_vert),

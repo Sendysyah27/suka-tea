@@ -161,7 +161,25 @@ Deno.serve(async (req: Request) => {
     if (insErr) {
       return json({ ok: false, error: insErr.message }, 500);
     }
-    return json({ ok: true, cashier_id: (created as { id: string }).id });
+    const cashierId = (created as { id: string }).id;
+    // v40 — kasir baru OTOMATIS boleh masuk ke-4 gerai (perilaku
+    // lama: PIN berlaku di semua gerai; Owner membatasi dari
+    // Detail). Gagal insert outlet = kasir SUDAH TERBUAT — jangan
+    // gagalkan jawaban (Owner bisa centang gerai dari Detail).
+    try {
+      const outletIds = [
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000002",
+        "00000000-0000-0000-0000-000000000003",
+        "00000000-0000-0000-0000-000000000004",
+      ];
+      await supabase.from("cashier_outlets").insert(
+        outletIds.map((outlet_id) => ({ cashier_id: cashierId, outlet_id })),
+      );
+    } catch (_) {
+      // Lihat komentar di atas — kasir tetap terdaftar.
+    }
+    return json({ ok: true, cashier_id: cashierId });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }

@@ -17,6 +17,7 @@ import '../../features/login/cashier_session.dart';
 import '../keuangan/expense_sheet.dart';
 import '../gudang/dashboard_page.dart';
 import '../gudang/ledger_page.dart';
+import '../kasir/permission_gate.dart';
 import '../riwayat/riwayat_page.dart';
 import 'shift_sheets.dart';
 
@@ -131,7 +132,19 @@ class _LaporanPageState extends State<LaporanPage> {
   /// kasir + semua device gerai itu); gagal/offline = hitungan lokal
   /// berlabel "perkiraan (offline)" di sheet. Lalu sheet input uang
   /// dihitung + preview selisih, lalu tutup + ringkasan.
+  ///
+  /// v40: kasir tanpa izin tutup shift (toggle Owner OFF) diminta
+  /// PIN Owner di tempat — bukan diblokir mentah. Owner selalu boleh.
   Future<void> _closeShift(CashShift shift) async {
+    final allowed = widget.role == AppRole.owner ||
+        CashierSessionService.instance.canCloseShift;
+    if (!await ensureCashierPermission(
+      context,
+      allowed: allowed,
+      actionLabel: 'menutup shift',
+    )) {
+      return;
+    }
     final now = DateTime.now();
     final server = await SyncService.instance.fetchShiftExpected(
       outletId: shift.outletId,
