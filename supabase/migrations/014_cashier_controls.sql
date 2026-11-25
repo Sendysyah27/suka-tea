@@ -53,15 +53,17 @@ grant select, insert, update, delete
   on table public.cashier_outlets to service_role;
 
 -- Backfill: SEMUA kasir yang ada boleh masuk ke-4 gerai (perilaku
--- lama: PIN berlaku di semua gerai).
+-- lama: PIN berlaku di semua gerai). Literal di VALUES HARUS
+-- di-cast ::uuid — tanpa cast Postgres menebak text dan INSERT
+-- gagal 42804 (ketemu di deploy 25 Nov 13:09).
 insert into public.cashier_outlets (cashier_id, outlet_id)
 select c.id, o.id
 from public.cashiers c
 cross join (values
-  ('00000000-0000-0000-0000-000000000001'),
-  ('00000000-0000-0000-0000-000000000002'),
-  ('00000000-0000-0000-0000-000000000003'),
-  ('00000000-0000-0000-0000-000000000004')
+  ('00000000-0000-0000-0000-000000000001'::uuid),
+  ('00000000-0000-0000-0000-000000000002'::uuid),
+  ('00000000-0000-0000-0000-000000000003'::uuid),
+  ('00000000-0000-0000-0000-000000000004'::uuid)
 ) as o(id)
 on conflict (cashier_id, outlet_id) do nothing;
 
