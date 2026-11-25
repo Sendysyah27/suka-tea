@@ -66,6 +66,16 @@ int expectedCash({
 int cashDifference({required int counted, required int expected}) =>
     counted - expected;
 
+/// true = [openedAt] jatuh pada hari kalender SEBELUM [now]
+/// (perbandingan tanggal LOKAL — dipakai auto-close shift v39:
+/// shift kemarin yang masih terbuka harus tutup otomatis).
+bool isPreviousCalendarDay(DateTime openedAt, DateTime now) {
+  final o = openedAt.toLocal();
+  final n = now.toLocal();
+  return DateTime(o.year, o.month, o.day)
+      .isBefore(DateTime(n.year, n.month, n.day));
+}
+
 /// Total pengeluaran [expenses] (semua jenis — tunai + non-tunai).
 int totalExpenses(Iterable<Expense> expenses) =>
     expenses.fold(0, (sum, e) => sum + e.amount);

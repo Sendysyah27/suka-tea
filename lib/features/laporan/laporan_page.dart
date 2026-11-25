@@ -77,10 +77,16 @@ class _LaporanPageState extends State<LaporanPage> {
   @override
   void initState() {
     super.initState();
+    // v39: shift kemarin yang masih terbuka ditutup otomatis dulu
+    // (langsung dari data lokal, lalu sekali lagi sesudah pull —
+    // shift kemarin bisa juga datang dari device lain).
+    unawaited(CashShiftService.instance.autoCloseStaleShifts());
     // Tarik semua data gerai ini (penjualan + pengeluaran + stok +
     // shift) — bisa dibuka/dicatat di device lain. refreshShifts
     // Batch C9 = alias refreshSales (pull lengkap).
-    unawaited(SyncService.instance.refreshShifts());
+    unawaited(SyncService.instance.refreshShifts().then(
+      (_) => CashShiftService.instance.autoCloseStaleShifts(),
+    ));
   }
 
   /// Tarik ulang semua data gerai ini dari server SEKARANG (Batch
@@ -245,7 +251,12 @@ class _LaporanPageState extends State<LaporanPage> {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
+    // v39 (B6): Scaffold sendiri — halaman ini juga di-push dari
+    // Dashboard Owner ("Ringkasan hari ini"), dan halaman tanpa
+    // Scaffold tampil hitam (bg + teks default rute) di rute push.
+    return Scaffold(
+      backgroundColor: SukaTeaColors.leafBg,
+      body: ListenableBuilder(
       // + CashShiftService + ExpenseService (Batch C7): angka live
       // shift (tunai masuk / expected sejauh ini) berubah saat ada
       // penjualan atau pengeluaran baru.
@@ -485,6 +496,7 @@ class _LaporanPageState extends State<LaporanPage> {
           ],
         );
       },
+    ),
     );
   }
 
@@ -641,9 +653,40 @@ class _LaporanPageState extends State<LaporanPage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                when,
-                style: const TextStyle(fontWeight: FontWeight.w600),
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        when,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    // v39: badge shift yang ditutup otomatis kemarin.
+                    if (s.isAutoClosed) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: SukaTeaColors.tint,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: const Text(
+                          'Auto close',
+                          style: TextStyle(
+                            color: SukaTeaColors.emeraldDark,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
               Text(
                 formatRupiah(diff),

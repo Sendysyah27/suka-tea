@@ -44,18 +44,27 @@ class _KeuanganPageState extends State<KeuanganPage> {
   @override
   Widget build(BuildContext context) {
     if (!widget.role.canViewProfit) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'Hanya Owner yang bisa melihat laba/HPP.\n'
-            'Pembatasan ini ditegakkan oleh RLS Supabase, bukan hanya tampilan.',
-            textAlign: TextAlign.center,
+      // v39 (B6): Scaffold sendiri — halaman ini juga di-push dari
+      // Dashboard Owner, dan halaman tanpa Scaffold tampil hitam
+      // (bg + teks default rute) di rute push.
+      return const Scaffold(
+        backgroundColor: SukaTeaColors.leafBg,
+        body: Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'Hanya Owner yang bisa melihat laba/HPP.\n'
+              'Pembatasan ini ditegakkan oleh RLS Supabase, bukan hanya tampilan.',
+              textAlign: TextAlign.center,
+            ),
           ),
         ),
       );
     }
-    return ListenableBuilder(
+    // v39 (B6): Scaffold sendiri — lihat komentar di atas.
+    return Scaffold(
+      backgroundColor: SukaTeaColors.leafBg,
+      body: ListenableBuilder(
       // Dengarkan juga StockService: harga bahan yang diubah Owner di
       // tab Stok langsung mengubah HPP/laba di halaman ini.
       // + ExpenseService (Batch C7): pengeluaran hari ini langsung
@@ -338,6 +347,7 @@ class _KeuanganPageState extends State<KeuanganPage> {
           ],
         );
       },
+    ),
     );
   }
 

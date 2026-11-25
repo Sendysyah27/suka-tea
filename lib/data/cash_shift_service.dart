@@ -11,6 +11,11 @@ import 'outlet_service.dart';
 import 'sale_history.dart';
 import 'sync_payload.dart';
 
+/// Penanda shift yang ditutup otomatis (v39 — auto-close shift
+/// kemarin): disimpan di [CashShift.note] supaya badge "Auto close"
+/// bisa tampil tanpa migrasi skema.
+const String autoCloseNote = 'Auto close — shift kemarin belum ditutup';
+
 /// Satu shift kas (Batch C7).
 class CashShift {
   const CashShift({
@@ -73,6 +78,10 @@ class CashShift {
 
   bool get isOpen => status == 'open';
   bool get isClosed => status == 'closed';
+
+  /// true = shift ini ditutup otomatis oleh sistem (v39), bukan
+  /// dihitung manual oleh kasir/Owner.
+  bool get isAutoClosed => isClosed && note.startsWith('Auto close');
 
   CashShift copyWith({
     String? cashierId,
@@ -185,6 +194,10 @@ class CashShiftService extends ChangeNotifier {
     }
     _initialized = true;
     notifyListeners();
+    // v39: shift kemarin yang masih terbuka langsung auto-close
+    // (SaleHistory + Expense sudah init duluan di main.dart, jadi
+    // hitungan expected lokal punya data lengkap).
+    await autoCloseStaleShifts();
   }
 
   /// Buka shift baru di gerai aktif. null = masih ada shift open di
@@ -321,6 +334,51 @@ class CashShiftService extends ChangeNotifier {
       debugPrint('Shift tutup gagal antre outbox (lokal tetap): $e');
     }
     return closed;
+  }
+
+  /// Tutup otomatis (v39) semua shift yang masih terbuka dari hari
+  /// kalender sebelumnya: counted = expected lokal (selisih 0),
+  /// note [autoCloseNote], penutup kosong (sistem, bukan orang).
+  /// Dipanggil saat app start (akhir [init]), saat Laporan dibuka,
+  /// dan sebelum gate buka shift baru — supaya shift kemarin tidak
+  /// menghalangi buka shift hari ini. Mengembalikan shift yang
+  /// di-auto-close (kosong bila tidak ada). Tidak pernah throw.
+  Future<List<CashShift>> autoCloseStaleShifts({DateTime? now}) async {
+    if (!_initialized) return const [];
+    try {
+      final at = now ?? DateTime.now();
+      final closed = <CashShift>[];
+      for (final s in List<CashShift>.of(_shifts)) {
+        if (!s.isOpen) continue;
+        if (!isPreviousCalendarDay(s.openedAt, at)) continue;
+        final expected = expectedCash(
+          openingFloat: s.openingFloat,
+          cashIn: cashInWindow(
+            SaleHistoryService.instance.sales,
+            outletId: s.outletId,
+            from: s.openedAt,
+            to: at,
+          ),
+          cashExpenses: cashExpensesInWindow(
+            ExpenseService.instance.expenses,
+            outletId: s.outletId,
+            from: s.openedAt,
+            to: at,
+          ),
+        );
+        final result = await closeShift(
+          s,
+          countedCash: expected,
+          expectedOverride: expected,
+          note: autoCloseNote,
+        );
+        if (result != null) closed.add(result);
+      }
+      return closed;
+    } catch (e) {
+      debugPrint('Auto-close shift gagal: $e');
+      return const [];
+    }
   }
 
   Map<String, Object?> _shiftPayload(CashShift s) => {

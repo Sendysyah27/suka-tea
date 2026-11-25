@@ -78,6 +78,10 @@ Future<CashShift?> openShiftFlow(
   bool isOwner = false,
   String? outletId,
 }) async {
+  // v39: shift kemarin yang masih terbuka ditutup otomatis dulu,
+  // supaya gate C7 tidak menolak buka shift hari ini.
+  await CashShiftService.instance.autoCloseStaleShifts();
+  if (!context.mounted) return null;
   final openerName = resolveShiftOpenerName(
     cashierId: cashierId,
     cashierName: cashierName,
